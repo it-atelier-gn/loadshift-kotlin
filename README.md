@@ -2,7 +2,7 @@
 
 ⚠️ **Project under development**
 
-A Kotlin-based durable execution engine with Camunda 7 and Camunda 8 implementations.
+A Kotlin-based durable execution framework with Camunda 7 and Camunda 8 implementations.
 
 ## 📦 Modules
 
