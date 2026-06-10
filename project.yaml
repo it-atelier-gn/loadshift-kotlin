@@ -1,5 +1,6 @@
 modules:
   - ./loadshift-demo
   - ./loadshift-core
+  - ./loadshift-local
   - ./loadshift-camunda-7
   - ./loadshift-camunda-8
