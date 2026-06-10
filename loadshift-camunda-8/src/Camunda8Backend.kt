@@ -1,0 +1,300 @@
+package loadshift.camunda8
+
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.datetime.Clock
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import loadshift.core.Backend
+import loadshift.core.BpmnCompiler
+import loadshift.core.Conditional
+import loadshift.core.Execute
+import loadshift.core.FanOut
+import loadshift.core.Loop
+import loadshift.core.Parallel
+import loadshift.core.Progress
+import loadshift.core.RunConfig
+import loadshift.core.RunHandle
+import loadshift.core.RunResult
+import loadshift.core.Sequence
+import loadshift.core.Start
+import loadshift.core.Step
+import loadshift.core.SubFlow
+import loadshift.core.Task
+import loadshift.core.WorkItemBase
+import loadshift.core.Workflow
+import org.camunda.bpm.model.bpmn.Bpmn
+import java.io.ByteArrayOutputStream
+import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
+
+private typealias Factory = (MutableMap<String, Any?>) -> WorkItemBase
+
+class Camunda8Backend(
+    base: String = "http://localhost:8080",
+    token: String? = null,
+    private val client: Camunda8Client = Camunda8Client(base, token),
+) : Backend {
+
+    override suspend fun <W : WorkItemBase> run(workflow: Workflow<W>, config: RunConfig): RunHandle {
+        val processes = BpmnCompiler.compile(workflow)
+        val resources = processes.map { p ->
+            Camunda8Dialect.decorate(p.model, p.serviceTasks)
+            val out = ByteArrayOutputStream()
+            Bpmn.writeModelToStream(out, p.model)
+            "${p.key}.bpmn" to out.toByteArray()
+        }
+        client.deploy(resources)
+
+        val registry = buildRegistry(workflow)
+        return Camunda8Run(workflow, config, client, registry, processes.map { it.key }).also { it.begin() }
+    }
+}
+
+internal class TaskHandler(val task: Task<WorkItemBase>, val factory: Factory)
+internal class DecisionHandler(val id: String, val predicate: (WorkItemBase) -> Boolean, val factory: Factory)
+internal class ExpandHandler(
+    val id: String,
+    val expand: suspend (WorkItemBase) -> Flow<WorkItemBase>,
+    val factory: Factory,
+)
+
+internal class Registry {
+    val taskHandlers = mutableMapOf<String, TaskHandler>()
+    val decisionHandlers = mutableMapOf<String, DecisionHandler>()
+    val expandHandlers = mutableMapOf<String, ExpandHandler>()
+    val topics: List<String>
+        get() = (taskHandlers.keys + decisionHandlers.keys + expandHandlers.keys).toList()
+}
+
+@Suppress("UNCHECKED_CAST")
+private fun buildRegistry(workflow: Workflow<*>): Registry {
+    val registry = Registry()
+    val levels = mutableListOf<SubFlow<*>>()
+    gather(workflow.root, levels)
+    for (level in levels) {
+        val factory = level.factory as Factory
+        for ((topic, predicate) in level.decisions) {
+            val id = topic.removePrefix("decision_")
+            registry.decisionHandlers[topic] = DecisionHandler(id, predicate as (WorkItemBase) -> Boolean, factory)
+        }
+        collectFromStep(level.step, factory, registry)
+    }
+    return registry
+}
+
+@Suppress("UNCHECKED_CAST")
+private fun collectFromStep(step: Step<*>, factory: Factory, registry: Registry) {
+    when (step) {
+        is Sequence -> step.steps.forEach { collectFromStep(it, factory, registry) }
+        is Execute<*> -> {
+            val task = step.task as Task<WorkItemBase>
+            registry.taskHandlers[task.topic] = TaskHandler(task, factory)
+        }
+        is Conditional -> {
+            collectFromStep(step.onTrue, factory, registry)
+            step.onFalse?.let { collectFromStep(it, factory, registry) }
+        }
+        is Loop -> collectFromStep(step.body, factory, registry)
+        is Parallel -> step.branches.forEach { collectFromStep(it, factory, registry) }
+        is FanOut<*, *> -> {
+            val fanOut = step as FanOut<WorkItemBase, WorkItemBase>
+            registry.expandHandlers["expand_${fanOut.id}"] = ExpandHandler(fanOut.id, fanOut.expand, factory)
+        }
+    }
+}
+
+private fun gather(sub: SubFlow<*>, acc: MutableList<SubFlow<*>>) {
+    acc += sub
+    walkFanOuts(sub.step) { gather(it.body, acc) }
+}
+
+private fun walkFanOuts(step: Step<*>, action: (FanOut<*, *>) -> Unit) {
+    when (step) {
+        is Sequence -> step.steps.forEach { walkFanOuts(it, action) }
+        is Conditional -> {
+            walkFanOuts(step.onTrue, action)
+            step.onFalse?.let { walkFanOuts(it, action) }
+        }
+        is Loop -> walkFanOuts(step.body, action)
+        is Parallel -> step.branches.forEach { walkFanOuts(it, action) }
+        is FanOut<*, *> -> action(step)
+        is Execute -> {}
+    }
+}
+
+internal class Camunda8Run(
+    private val workflow: Workflow<*>,
+    private val config: RunConfig,
+    private val client: Camunda8Client,
+    private val registry: Registry,
+    private val levelKeys: List<String>,
+) : RunHandle {
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val workerId = "loadshift-${UUID.randomUUID()}"
+    private val startSignal = CompletableDeferred<Unit>()
+    private val completion = CompletableDeferred<RunResult>()
+
+    private val done = AtomicLong()
+    private val failed = AtomicLong()
+    private val seeded = AtomicLong()
+
+    @Volatile private var running = true
+
+    fun begin() {
+        registry.topics.forEach { topic -> scope.launch { workerLoop(topic) } }
+        scope.launch {
+            try {
+                when (val s = config.start) {
+                    is Start.Manual -> startSignal.await()
+                    is Start.At -> {
+                        val waitMs = s.time.toEpochMilliseconds() - Clock.System.now().toEpochMilliseconds()
+                        if (waitMs > 0) delay(waitMs)
+                    }
+                    else -> {}
+                }
+                startRootInstances()
+                awaitDrain()
+                running = false
+                completion.complete(RunResult(done.get(), failed.get(), 0, emptyList()))
+            } catch (e: CancellationException) {
+                completion.complete(RunResult(done.get(), failed.get(), 0, emptyList()))
+            } catch (e: Throwable) {
+                completion.completeExceptionally(e)
+            } finally {
+                running = false
+            }
+        }
+    }
+
+    override suspend fun start() {
+        startSignal.complete(Unit)
+    }
+
+    override fun progress(): Progress = Progress(seeded.get(), 0, done.get(), failed.get(), 0)
+
+    override suspend fun pause() {
+        running = false
+    }
+
+    override suspend fun cancel() {
+        running = false
+        scope.cancel()
+        if (!completion.isCompleted) completion.complete(RunResult(done.get(), failed.get(), 0, emptyList()))
+    }
+
+    override suspend fun await(): RunResult = completion.await()
+
+    private suspend fun startRootInstances() {
+        val semaphore = Semaphore(config.maxConcurrency)
+        coroutineScope {
+            workflow.seed().toList().forEach { item ->
+                seeded.incrementAndGet()
+                semaphore.acquire()
+                launch {
+                    try {
+                        client.createInstance(workflow.root.key, C8Variables.toJson(item.toMap()))
+                    } finally {
+                        semaphore.release()
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun awaitDrain() {
+        var emptyPolls = 0
+        while (running) {
+            delay(500)
+            val total = levelKeys.sumOf { client.instanceCount(it) }
+            if (total == 0L) {
+                if (++emptyPolls >= 3) return
+            } else {
+                emptyPolls = 0
+            }
+        }
+    }
+
+    private suspend fun workerLoop(topic: String) {
+        var idle = 200L
+        while (running) {
+            val jobs = try {
+                client.activateJobs(
+                    ActivateJobsRequest(
+                        type = topic,
+                        worker = workerId,
+                        timeout = config.lockDuration.inWholeMilliseconds,
+                        maxJobsToActivate = 10,
+                    ),
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                delay(1000)
+                continue
+            }
+            if (jobs.isEmpty()) {
+                delay(idle)
+                idle = (idle * 2).coerceAtMost(2000)
+                continue
+            }
+            idle = 200L
+            for (job in jobs) process(topic, job)
+        }
+    }
+
+    private suspend fun process(topic: String, job: ActivatedJob) {
+        try {
+            val variables = C8Variables.fromJson(job.variables)
+            val result = dispatch(topic, variables)
+            client.completeJob(job.jobKey, CompleteJobRequest(result))
+            done.incrementAndGet()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            failed.incrementAndGet()
+            runCatching {
+                client.failJob(
+                    job.jobKey,
+                    FailJobRequest(
+                        retries = (config.retry.maxAttempts - 1).coerceAtLeast(0),
+                        errorMessage = e.message ?: "job failed",
+                        retryBackOff = config.retry.baseDelay.inWholeMilliseconds,
+                    ),
+                )
+            }
+        }
+    }
+
+    private suspend fun dispatch(topic: String, variables: MutableMap<String, Any?>): JsonObject {
+        registry.taskHandlers[topic]?.let { handler ->
+            val item = handler.factory(variables)
+            handler.task.execute(item)
+            return C8Variables.toJson(item.toMap())
+        }
+        registry.decisionHandlers[topic]?.let { handler ->
+            val item = handler.factory(variables)
+            val result = handler.predicate(item)
+            return buildJsonObject { put("${handler.id}_result", C8Variables.encode(result)) }
+        }
+        registry.expandHandlers[topic]?.let { handler ->
+            val item = handler.factory(variables)
+            val children = handler.expand(item).toList()
+            val array = JsonArray(children.map { C8Variables.toJson(it.toMap()) })
+            return buildJsonObject { put("${handler.id}_items", array) }
+        }
+        error("no handler for topic '$topic'")
+    }
+}
