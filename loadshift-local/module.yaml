@@ -1,0 +1,9 @@
+product: jvm/lib
+
+dependencies:
+  - ../loadshift-core
+  - $libs.kotlinx.coroutines.core
+  - $libs.kotlinx.datetime
+
+test-dependencies:
+  - $libs.kotlinx.coroutines.test

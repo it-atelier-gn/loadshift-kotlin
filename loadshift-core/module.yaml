@@ -1,1 +1,12 @@
 product: jvm/lib
+
+dependencies:
+  - $libs.kotlinx.coroutines.core:
+      exported: true
+  - $libs.kotlinx.datetime:
+      exported: true
+  - org.camunda.bpm.model:camunda-bpmn-model:7.24.0:
+      exported: true
+
+test-dependencies:
+  - $libs.kotlinx.coroutines.test

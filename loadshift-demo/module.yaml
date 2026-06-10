@@ -1,1 +1,7 @@
 product: jvm/app
+
+dependencies:
+  - ../loadshift-core
+  - ../loadshift-local
+  - ../loadshift-camunda-7
+  - ../loadshift-camunda-8
