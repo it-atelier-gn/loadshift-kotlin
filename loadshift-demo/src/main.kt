@@ -9,13 +9,15 @@ import loadshift.local.LocalBackend
 import kotlinx.coroutines.runBlocking
 import kotlin.time.Duration.Companion.milliseconds
 
-class Customer : WorkItemBase() {
+class User : WorkItemBase() {
     var id: String by required()
+    override val key get() = id
 }
 
 class Contact : WorkItemBase() {
     var id: String by required()
     var email: String? by optional()
+    override val key get() = id
 }
 
 private fun contact(id: String, email: String?) = Contact().apply {
@@ -30,10 +32,9 @@ private fun fetchContacts(customerId: String): List<Contact> = listOf(
 )
 
 fun main() = runBlocking<Unit> {
-    val customers = (1..3).map { n -> Customer().apply { id = "cust-$n" } }
+    val customers = (1..3).map { n -> User().apply { id = "cust-$n" } }
 
-    val cleanup = workflow<Customer>("contact-cleanup") {
-        key { it.id }
+    val cleanup = workflow<User>("contact-cleanup") {
         items(customers)
         forEach<Contact>(expand = { fetchContacts(it.id) }, concurrency = 4) {
             ifThen({ it.email == null }) {

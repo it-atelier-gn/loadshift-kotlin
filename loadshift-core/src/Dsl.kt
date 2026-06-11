@@ -176,7 +176,6 @@ class WorkflowSpec<W : WorkItemBase> @PublishedApi internal constructor(
     private val wfName: String,
 ) : FlowSpec<W>(factory, sanitizeId(wfName), IdGen()) {
     private var seed: Seed<W> = { emptyFlow() }
-    private var itemKey: ((W) -> String)? = null
 
     fun items(list: List<W>) {
         seed = { flow { for (w in list) emit(w) } }
@@ -192,10 +191,6 @@ class WorkflowSpec<W : WorkItemBase> @PublishedApi internal constructor(
         seed = { paginated.asFlow(Unit) }
     }
 
-    fun key(of: (W) -> String) {
-        itemKey = of
-    }
-
     @PublishedApi
     internal fun build(): Workflow<W> {
         val key = sanitizeId(wfName)
@@ -204,7 +199,6 @@ class WorkflowSpec<W : WorkItemBase> @PublishedApi internal constructor(
             name = wfName,
             seed = seed,
             root = SubFlow(key, toStep(), factory, tasks.toMap(), decisions.toMap()),
-            itemKey = itemKey,
         )
     }
 }
