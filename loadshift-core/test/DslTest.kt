@@ -5,16 +5,18 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
-private class Item(vars: MutableMap<String, Any?> = mutableMapOf()) : WorkItemBase(vars) {
-    var n: Int by required(variables)
+private class Item : WorkItemBase() {
+    var n: Int by required()
 }
 
-private class Child(vars: MutableMap<String, Any?> = mutableMapOf()) : WorkItemBase(vars) {
-    var v: Int by required(variables)
+private class Child : WorkItemBase() {
+    var v: Int by required()
 }
+
+private fun item(n: Int) = Item().apply { this.n = n }
 
 private fun richWorkflow(): Workflow<Item> = workflow("wf") {
-    items(listOf(Item(mutableMapOf("n" to 1))))
+    items(item(1))
     key { it.n.toString() }
     task("a") { }
     ifThen({ it.n > 0 }) { task("b") { } } elseThen { task("c") { } }
@@ -23,7 +25,7 @@ private fun richWorkflow(): Workflow<Item> = workflow("wf") {
         branch { task("e") { } }
         branch { task("f") { } }
     }
-    forEach<Child>(expand = { listOf(Child(mutableMapOf("v" to 0))) }) {
+    forEach<Child>(expand = { listOf(Child().apply { v = 0 }) }) {
         task("g") { }
     }
 }
@@ -54,7 +56,7 @@ class DslTest {
         val seq = wf.root.step as Sequence<Item>
         val cond = seq.steps[1] as Conditional<Item>
         assertTrue(cond.onFalse != null)
-        assertTrue(cond.predicate(Item(mutableMapOf("n" to 5))))
+        assertTrue(cond.predicate(item(5)))
     }
 
     @Test

@@ -7,9 +7,7 @@ import loadshift.core.ErrorPolicy
 import loadshift.core.RetryPolicy
 import loadshift.core.RunConfig
 import loadshift.core.Start
-import loadshift.core.TaskOptions
 import loadshift.core.WorkItemBase
-import loadshift.core.required
 import loadshift.core.workflow
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
@@ -20,16 +18,21 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
-private class Cust(vars: MutableMap<String, Any?> = mutableMapOf()) : WorkItemBase(vars) {
-    var id: String by required(variables)
-    var n: Int by required(variables)
+private class Cust : WorkItemBase() {
+    var id: String by required()
+    var n: Int by required()
 }
 
-private class Kid(vars: MutableMap<String, Any?> = mutableMapOf()) : WorkItemBase(vars) {
-    var label: String by required(variables)
+private class Kid : WorkItemBase() {
+    var label: String by required()
 }
 
-private fun cust(id: String, n: Int = 0) = Cust(mutableMapOf("id" to id, "n" to n))
+private fun cust(id: String, n: Int = 0) = Cust().apply {
+    this.id = id
+    this.n = n
+}
+
+private fun kid(label: String) = Kid().apply { this.label = label }
 
 class LocalBackendTest {
 
@@ -38,7 +41,7 @@ class LocalBackendTest {
         val seen = Collections.synchronizedList(mutableListOf<String>())
         val wf = workflow<Cust>("nested") {
             items(listOf(cust("a"), cust("b")))
-            forEach<Kid>(expand = { c -> listOf(Kid(mutableMapOf("label" to "${c.id}-1")), Kid(mutableMapOf("label" to "${c.id}-2"))) }) {
+            forEach<Kid>(expand = { c -> listOf(kid("${c.id}-1"), kid("${c.id}-2")) }) {
                 task("touch") { k -> seen += k.label }
             }
         }
@@ -113,7 +116,7 @@ class LocalBackendTest {
         val attempts = AtomicInteger()
         val wf = workflow<Cust>("retry") {
             items(listOf(cust("x")))
-            task("flaky", TaskOptions(retry = RetryPolicy(maxAttempts = 3, baseDelay = 1.milliseconds, jitter = false))) {
+            task("flaky", retry = RetryPolicy(maxAttempts = 3, baseDelay = 1.milliseconds, jitter = false)) {
                 attempts.incrementAndGet()
                 throw RuntimeException("boom")
             }

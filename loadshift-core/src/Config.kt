@@ -37,7 +37,6 @@ class TaskOptions(
     val retry: RetryPolicy? = null,
     val timeout: Duration? = null,
     val rateLimit: Rate? = null,
-    val idempotencyKey: ((WorkItemBase) -> String)? = null,
 )
 
 data class RunConfig(

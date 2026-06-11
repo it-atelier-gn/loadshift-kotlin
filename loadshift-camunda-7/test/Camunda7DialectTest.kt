@@ -2,14 +2,13 @@ package loadshift.camunda7
 
 import loadshift.core.BpmnCompiler
 import loadshift.core.WorkItemBase
-import loadshift.core.required
 import loadshift.core.workflow
 import org.camunda.bpm.model.bpmn.Bpmn
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
-private class Job(vars: MutableMap<String, Any?> = mutableMapOf()) : WorkItemBase(vars) {
-    var id: String by required(variables)
+private class Job : WorkItemBase() {
+    var id: String by required()
 }
 
 class Camunda7DialectTest {

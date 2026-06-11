@@ -5,12 +5,12 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-private class Order(vars: MutableMap<String, Any?> = mutableMapOf()) : WorkItemBase(vars) {
-    var paid: Boolean by required(variables)
+private class Order : WorkItemBase() {
+    var paid: Boolean by required()
 }
 
-private class Line(vars: MutableMap<String, Any?> = mutableMapOf()) : WorkItemBase(vars) {
-    var sku: String by required(variables)
+private class Line : WorkItemBase() {
+    var sku: String by required()
 }
 
 class BpmnCompilerTest {
