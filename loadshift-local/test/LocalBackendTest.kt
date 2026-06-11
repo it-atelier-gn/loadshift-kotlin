@@ -21,10 +21,12 @@ import kotlin.time.Duration.Companion.milliseconds
 private class Cust : WorkItemBase() {
     var id: String by required()
     var n: Int by required()
+    override val key get() = id
 }
 
 private class Kid : WorkItemBase() {
     var label: String by required()
+    override val key get() = label
 }
 
 private fun cust(id: String, n: Int = 0) = Cust().apply {
@@ -126,6 +128,20 @@ class LocalBackendTest {
         assertEquals(1, result.failed)
         assertEquals(1, result.deadLetters.size)
         assertEquals("flaky", result.deadLetters[0].topic)
+        assertEquals("x", result.deadLetters[0].key)
+    }
+
+    @Test
+    fun childDeadLetterCarriesItemKey() = runTest {
+        val wf = workflow<Cust>("child-dlq") {
+            items(listOf(cust("p")))
+            forEach<Kid>(expand = { listOf(kid("p-1")) }) {
+                task("explode", retry = RetryPolicy(maxAttempts = 1)) { throw RuntimeException("boom") }
+            }
+        }
+        val result = LocalBackend().run(wf, RunConfig(onError = ErrorPolicy.DeadLetter)).await()
+        assertEquals(1, result.deadLetters.size)
+        assertEquals("p-1", result.deadLetters[0].key)
     }
 
     @Test

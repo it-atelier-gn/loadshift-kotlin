@@ -157,13 +157,11 @@ private class LocalRun<W : WorkItemBase>(
     }
 
     private suspend fun runTopItem(item: W) {
-        @Suppress("UNCHECKED_CAST")
-        val key = (workflow.itemKey as ((WorkItemBase) -> String)?)?.invoke(item)
         try {
             interpret(workflow.root.step, item)
             done.incrementAndGet()
         } catch (e: DeadLetterSignal) {
-            deadLetters += DeadLetter(key, e.topic, e.reason)
+            deadLetters += DeadLetter(item.key, e.topic, e.reason)
             failed.incrementAndGet()
         } catch (e: SkipSignal) {
             skipped.incrementAndGet()
@@ -222,7 +220,7 @@ private class LocalRun<W : WorkItemBase>(
         try {
             interpret(step, child)
         } catch (e: DeadLetterSignal) {
-            deadLetters += DeadLetter(null, e.topic, e.reason)
+            deadLetters += DeadLetter(child.key, e.topic, e.reason)
             failed.incrementAndGet()
         } catch (e: SkipSignal) {
             skipped.incrementAndGet()

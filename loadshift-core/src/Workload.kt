@@ -5,7 +5,6 @@ class Workflow<W : WorkItemBase>(
     val name: String,
     val seed: Seed<W>,
     val root: SubFlow<W>,
-    val itemKey: ((W) -> String)? = null,
 )
 
 interface Backend {

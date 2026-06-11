@@ -7,6 +7,7 @@ import kotlin.test.assertTrue
 
 private class Item : WorkItemBase() {
     var n: Int by required()
+    override val key get() = n.toString()
 }
 
 private class Child : WorkItemBase() {
@@ -17,7 +18,6 @@ private fun item(n: Int) = Item().apply { this.n = n }
 
 private fun richWorkflow(): Workflow<Item> = workflow("wf") {
     items(item(1))
-    key { it.n.toString() }
     task("a") { }
     ifThen({ it.n > 0 }) { task("b") { } } elseThen { task("c") { } }
     whileLoop({ it.n < 3 }) { task("d") { } }

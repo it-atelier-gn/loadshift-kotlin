@@ -109,16 +109,19 @@ done=3 failed=3 deadLetters=3
   <code>WorkItemBase</code> and declare typed variables with the
   <code>required()</code> / <code>optional()</code> delegates — the values live in a
   variable map underneath, which is what makes them portable to Camunda process
-  variables.</p>
+  variables. Override <code>key</code> to give items a stable identity for tracing
+  and dead letters.</p>
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>WorkItems.kt</span><button class="copy" type="button">COPY</button></div>
 <pre><code class="lang-kotlin">class Customer : WorkItemBase() {
     var id: String by required()
+    override val key get() = id
 }
 
 class Contact : WorkItemBase() {
     var id: String by required()
     var email: String? by optional()
+    override val key get() = id
 }
 
 val vip = Customer().apply { id = "cust-1" }</code></pre>
@@ -130,13 +133,11 @@ val vip = Customer().apply { id = "cust-1" }</code></pre>
 <section id="workflows" class="block">
   <h2><span class="num">02</span>Workflows &amp; tasks</h2>
   <p>A workflow is a named sequence of steps over one work-item type.
-  <code>items(...)</code> seeds it with a fixed list, <code>key {}</code> gives each
-  item a stable identity for tracing and dead letters, and <code>task</code> declares
+  <code>items(...)</code> seeds it with a fixed list and <code>task</code> declares
   a unit of work under a topic name.</p>
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>Basics.kt</span><button class="copy" type="button">COPY</button></div>
 <pre><code class="lang-kotlin">val onboarding = workflow&lt;Customer&gt;("onboarding") {
-    key { it.id }
     items(customers)
 
     task("validate") { println("validating ${it.id}") }
@@ -184,7 +185,6 @@ parallel {
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>FanOut.kt</span><button class="copy" type="button">COPY</button></div>
 <pre><code class="lang-kotlin">val cleanup = workflow&lt;Customer&gt;("contact-cleanup") {
-    key { it.id }
     items(customers)
 
     forEach&lt;Contact&gt;(expand = { fetchContacts(it.id) }, concurrency = 4) {
@@ -211,7 +211,6 @@ parallel {
 }
 
 val sync = workflow&lt;Customer&gt;("sync-all") {
-    key { it.id }
     source(allCustomers)
     task("sync") { push(it) }
 }</code></pre>

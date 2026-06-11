@@ -3,6 +3,8 @@ package loadshift.core
 import kotlin.reflect.KProperty
 
 abstract class WorkItemBase {
+    open val key: String? = null
+
     private val variables: MutableMap<String, Any?> = mutableMapOf()
 
     fun toMap(): Map<String, Any?> = variables.toMap()
