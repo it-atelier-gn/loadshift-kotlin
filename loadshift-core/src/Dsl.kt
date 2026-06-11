@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
 import kotlin.reflect.KClass
+import kotlin.time.Duration
 
 @DslMarker
 annotation class LoadshiftDsl
@@ -18,8 +19,9 @@ internal fun sanitizeId(s: String): String =
 
 @PublishedApi
 internal fun <C : WorkItemBase> childFactoryFor(klass: KClass<C>): (MutableMap<String, Any?>) -> C {
-    val ctor = klass.java.getConstructor(MutableMap::class.java)
-    return { map -> ctor.newInstance(map) }
+    val ctor = klass.java.getDeclaredConstructor()
+    ctor.isAccessible = true
+    return { map -> ctor.newInstance().also { it.hydrate(map) } }
 }
 
 @LoadshiftDsl
@@ -32,20 +34,36 @@ open class FlowSpec<W : WorkItemBase> internal constructor(
     internal val tasks = mutableMapOf<String, Task<W>>()
     internal val decisions = mutableMapOf<String, (W) -> Boolean>()
 
-    fun task(t: Task<W>, options: TaskOptions = TaskOptions()) {
+    fun task(
+        t: Task<W>,
+        retry: RetryPolicy? = null,
+        timeout: Duration? = null,
+        rateLimit: Rate? = null,
+    ) {
         tasks[t.topic] = t
-        steps += Execute(t, options)
+        steps += Execute(t, TaskOptions(retry, timeout, rateLimit))
     }
 
-    fun task(topic: String, options: TaskOptions = TaskOptions(), body: suspend (W) -> Unit) {
+    fun task(
+        topic: String,
+        retry: RetryPolicy? = null,
+        timeout: Duration? = null,
+        rateLimit: Rate? = null,
+        body: suspend (W) -> Unit,
+    ) {
         val t = object : Task<W>(topic) {
             override suspend fun execute(item: W) = body(item)
         }
-        task(t, options)
+        task(t, retry, timeout, rateLimit)
     }
 
-    fun task(topic: Topic<W>, options: TaskOptions = TaskOptions(), body: suspend (W) -> Unit) =
-        task(topic.name, options, body)
+    fun task(
+        topic: Topic<W>,
+        retry: RetryPolicy? = null,
+        timeout: Duration? = null,
+        rateLimit: Rate? = null,
+        body: suspend (W) -> Unit,
+    ) = task(topic.name, retry, timeout, rateLimit, body)
 
     fun ifThen(predicate: (W) -> Boolean, then: FlowSpec<W>.() -> Unit): ElseHandle<W> {
         val id = idgen.next("c")
@@ -163,6 +181,8 @@ class WorkflowSpec<W : WorkItemBase> @PublishedApi internal constructor(
     fun items(list: List<W>) {
         seed = { flow { for (w in list) emit(w) } }
     }
+
+    fun items(vararg items: W) = items(items.toList())
 
     fun source(seed: suspend () -> Flow<W>) {
         this.seed = seed

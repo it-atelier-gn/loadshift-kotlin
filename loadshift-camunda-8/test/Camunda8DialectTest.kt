@@ -2,19 +2,18 @@ package loadshift.camunda8
 
 import loadshift.core.BpmnCompiler
 import loadshift.core.WorkItemBase
-import loadshift.core.required
 import loadshift.core.workflow
 import org.camunda.bpm.model.bpmn.Bpmn
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-private class Job(vars: MutableMap<String, Any?> = mutableMapOf()) : WorkItemBase(vars) {
-    var id: String by required(variables)
+private class Job : WorkItemBase() {
+    var id: String by required()
 }
 
-private class Line(vars: MutableMap<String, Any?> = mutableMapOf()) : WorkItemBase(vars) {
-    var sku: String by required(variables)
+private class Line : WorkItemBase() {
+    var sku: String by required()
 }
 
 class Camunda8DialectTest {

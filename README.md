@@ -1,34 +1,15 @@
 # loadshift-kotlin
 
-A Kotlin DSL for durable execution. You describe flow and run
-in locally or durably on Camunda 7 / Camunda 8.
+[![CI](https://github.com/it-atelier-gn/loadshift-kotlin/actions/workflows/ci.yml/badge.svg)](https://github.com/it-atelier-gn/loadshift-kotlin/actions)
+[![Kotlin](https://img.shields.io/badge/kotlin-2.x-blueviolet?logo=kotlin)](https://kotlinlang.org/)
+[![Amper](https://img.shields.io/badge/build-amper-blue)](https://github.com/JetBrains/amper)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## Example
+A Kotlin DSL for durable execution.
 
-```kotlin
-class Customer(v: MutableMap<String, Any?> = mutableMapOf()) : WorkItemBase(v) {
-    var id: String by required(variables)
-}
-class Contact(v: MutableMap<String, Any?> = mutableMapOf()) : WorkItemBase(v) {
-    var id: String by required(variables)
-    var email: String? by optional(variables)
-}
+Full examples and reference: **[it-atelier-gn.github.io/loadshift-kotlin](https://it-atelier-gn.github.io/loadshift-kotlin/)**
 
-val cleanup = workflow<Customer>("contact-cleanup") {
-    key { it.id }
-    items(customers)                                         // or source { Flow } for millions
-    forEach<Contact>(expand = { fetchContacts(it.id) }, concurrency = 4) {
-        ifThen({ it.email == null }) {
-            task("flag-missing") { flag(it) }
-        } elseThen {
-            task("cleanup", TaskOptions(retry = RetryPolicy(maxAttempts = 3))) { clean(it) }
-        }
-    }
-}
-
-LocalBackend().run(cleanup).await()                          // in-process, no infrastructure
-Camunda7Backend("http://localhost:8080/engine-rest").run(cleanup).await()
-```
+---
 
 ## Modules
 
@@ -40,19 +21,40 @@ Camunda7Backend("http://localhost:8080/engine-rest").run(cleanup).await()
 | `loadshift-camunda-8` | `Camunda8Backend`. Camunda 8 REST API with `zeebe:` BPMN extensions. |
 | `loadshift-demo` | Runnable example on `LocalBackend`. |
 
-## Build and test
+---
 
-```bash
+## Quick Start
+
+### Prerequisites
+
+- JDK 21+ (the bundled [Amper](https://github.com/JetBrains/amper) wrapper handles everything else)
+
+### Build & Run
+
+```sh
+git clone https://github.com/it-atelier-gn/loadshift-kotlin.git
+cd loadshift-kotlin
 ./amper build
 ./amper test
-```
 
-## Run the demo
-
-```bash
+# run the demo workflow
 ./amper run -m loadshift-demo
 ```
 
+---
+
+## Documentation
+
+The docs site lives in [docs/](docs/) and is deployed to GitHub Pages by [pages.yml](.github/workflows/pages.yml) on every push to `main` that touches `docs/`.
+
+---
+
+## Contributing
+
+Contributions are welcome. For substantial changes, open an issue first to discuss the approach.
+
+---
+
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT © 2026 Georg Nelles

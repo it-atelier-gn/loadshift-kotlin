@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>loadshift — a Kotlin DSL for durable execution</title>
+<meta name="description" content="loadshift-kotlin: describe a workflow once, run it in-process or durably on Camunda 7 / Camunda 8. Examples and reference.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230a0b0d'/><path d='M6 6h6v14h14v6H6z' fill='%23ffb000'/></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="#top">
+    <span class="brand-mark"></span>
+    <span class="brand-name">LOADSHIFT</span>
+    <span class="brand-lang">/KOTLIN</span>
+  </a>
+  <nav class="topnav">
+    <a href="#examples">Examples</a>
+    <a href="#backends">Backends</a>
+    <a href="#modules">Modules</a>
+    <a class="gh" href="https://github.com/it-atelier-gn/loadshift-kotlin">GitHub ↗</a>
+  </nav>
+</header>
+
+<main id="top">
+
+<section class="hero">
+  <div class="hero-grid"></div>
+  <div class="hero-inner">
+    <p class="hero-kicker reveal"><span class="tick"></span>DURABLE EXECUTION · UNIT 01</p>
+    <h1 class="reveal">SHIFT HEAVY<br>WORK<span class="accent">LOADS.</span></h1>
+    <p class="hero-sub reveal">A Kotlin DSL for durable execution. Describe the flow once —
+    fan-out, retries, rate limits, dead letters — then run it in-process for tests
+    or compile it to BPMN and run it durably on Camunda&nbsp;7 / Camunda&nbsp;8.</p>
+    <div class="hero-actions reveal">
+      <a class="btn btn-amber" href="#examples">Read the examples</a>
+      <a class="btn btn-ghost" href="https://github.com/it-atelier-gn/loadshift-kotlin">Source ↗</a>
+    </div>
+
+    <div class="schematic reveal" aria-hidden="true">
+      <div class="sch-row">
+        <div class="sch-node">SEED<small>flow&lt;W&gt;</small></div>
+        <div class="sch-pipe"></div>
+        <div class="sch-node sch-hot">FAN-OUT<small>×N children</small></div>
+        <div class="sch-pipe"></div>
+        <div class="sch-split">
+          <div class="sch-node sch-small">TASK<small>retry ×3</small></div>
+          <div class="sch-node sch-small">TASK<small>rate 50/s</small></div>
+        </div>
+        <div class="sch-pipe"></div>
+        <div class="sch-node sch-dlq">DLQ<small>dead letters</small></div>
+      </div>
+      <div class="sch-caption">FIG. 01 — ONE WORKFLOW DEFINITION, ANY BACKEND</div>
+    </div>
+  </div>
+  <div class="hazard"></div>
+</section>
+
+<div class="layout">
+
+<aside class="sidenav">
+  <p class="sidenav-title">MANIFEST</p>
+  <a href="#install"><b>00</b> Install &amp; run</a>
+  <a href="#work-items"><b>01</b> Work items</a>
+  <a href="#workflows"><b>02</b> Workflows &amp; tasks</a>
+  <a href="#branching"><b>03</b> Branching &amp; loops</a>
+  <a href="#fan-out"><b>04</b> Fan-out</a>
+  <a href="#sources"><b>05</b> Streaming sources</a>
+  <a href="#reliability"><b>06</b> Reliability</a>
+  <a href="#backends"><b>07</b> Backends</a>
+  <a href="#run-control"><b>08</b> Run control</a>
+  <a href="#modules"><b>09</b> Modules</a>
+</aside>
+
+<div class="content" id="examples">
+
+<section id="install" class="block">
+  <h2><span class="num">00</span>Install &amp; run</h2>
+  <p>loadshift is built with <a href="https://github.com/JetBrains/amper">Amper</a>.
+  Clone it, build it, run the demo workflow on the in-process backend.</p>
+  <div class="codecard" data-lang="shell">
+    <div class="codecard-head"><span>terminal</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-shell">git clone https://github.com/it-atelier-gn/loadshift-kotlin.git
+cd loadshift-kotlin
+./amper test
+./amper run -m loadshift-demo</code></pre>
+  </div>
+  <div class="codecard" data-lang="output">
+    <div class="codecard-head"><span>demo output</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-output">== Dry run plan ==
+  cleanup
+  flag-missing
+== Execute on LocalBackend ==
+  flag-missing cust-1-b
+  cleanup cust-1-a &lt;cust-1@example.com&gt;
+done=3 failed=3 deadLetters=3
+  DLQ topic=cleanup error=invalid email for cust-1-c</code></pre>
+  </div>
+</section>
+
+<section id="work-items" class="block">
+  <h2><span class="num">01</span>Work items</h2>
+  <p>A work item is the unit that travels through a workflow. Extend
+  <code>WorkItemBase</code> and declare typed variables with the
+  <code>required()</code> / <code>optional()</code> delegates — the values live in a
+  variable map underneath, which is what makes them portable to Camunda process
+  variables.</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>WorkItems.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">class Customer : WorkItemBase() {
+    var id: String by required()
+}
+
+class Contact : WorkItemBase() {
+    var id: String by required()
+    var email: String? by optional()
+}
+
+val vip = Customer().apply { id = "cust-1" }</code></pre>
+  </div>
+  <p class="note">Reading a <code>required()</code> variable that was never set fails fast
+  with <code>Missing required variable 'id'</code>.</p>
+</section>
+
+<section id="workflows" class="block">
+  <h2><span class="num">02</span>Workflows &amp; tasks</h2>
+  <p>A workflow is a named sequence of steps over one work-item type.
+  <code>items(...)</code> seeds it with a fixed list, <code>key {}</code> gives each
+  item a stable identity for tracing and dead letters, and <code>task</code> declares
+  a unit of work under a topic name.</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>Basics.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">val onboarding = workflow&lt;Customer&gt;("onboarding") {
+    key { it.id }
+    items(customers)
+
+    task("validate") { println("validating ${it.id}") }
+    task("provision") { provision(it) }
+    task("welcome-mail") { sendWelcome(it) }
+}</code></pre>
+  </div>
+  <p class="note">Topic names become BPMN external-task topics on Camunda, and trace
+  entries on the local backend — keep them short and stable.</p>
+</section>
+
+<section id="branching" class="block">
+  <h2><span class="num">03</span>Branching &amp; loops</h2>
+  <p>Control flow is part of the definition, not buried in task bodies — so it
+  compiles to real BPMN gateways. <code>ifThen / elseThen</code> branches,
+  <code>whileLoop</code> repeats while a guard holds, <code>parallel</code> runs
+  branches concurrently.</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>Branching.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">ifThen({ it.email == null }) {
+    task("flag-missing") { flag(it) }
+} elseThen {
+    task("cleanup") { clean(it) }
+}
+
+whileLoop({ it.attempts &lt; 3 }) {
+    task("poll-status") { it.attempts = it.attempts + 1 }
+}
+
+parallel {
+    branch { task("index") { index(it) } }
+    branch { task("notify") { notify(it) } }
+}</code></pre>
+  </div>
+  <p class="note">Runaway loops are cut off by <code>RunConfig(maxLoopIterations = …)</code>
+  and turned into dead letters.</p>
+</section>
+
+<section id="fan-out" class="block">
+  <h2><span class="num">04</span>Fan-out</h2>
+  <p>The core move: expand one parent item into many children and process them with
+  bounded concurrency. The child block is a full workflow scope — tasks, branching,
+  even nested fan-out. On Camunda each fan-out level becomes its own process,
+  invoked as a call activity.</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>FanOut.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">val cleanup = workflow&lt;Customer&gt;("contact-cleanup") {
+    key { it.id }
+    items(customers)
+
+    forEach&lt;Contact&gt;(expand = { fetchContacts(it.id) }, concurrency = 4) {
+        ifThen({ it.email == null }) {
+            task("flag-missing") { flag(it) }
+        } elseThen {
+            task("scrub") { scrub(it) }
+        }
+    }
+}</code></pre>
+  </div>
+</section>
+
+<section id="sources" class="block">
+  <h2><span class="num">05</span>Streaming sources</h2>
+  <p>For workloads too big for a list, seed from a <code>Flow</code> or from a paginated
+  API. <code>paginate</code> walks a cursor until it returns <code>null</code>; items
+  stream through the workflow without ever materializing the full set.</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>Sources.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">val allCustomers = paginate { cursor -&gt;
+    val page = crm.customers(after = cursor)
+    Page(page.items, page.nextCursor)
+}
+
+val sync = workflow&lt;Customer&gt;("sync-all") {
+    key { it.id }
+    source(allCustomers)
+    task("sync") { push(it) }
+}</code></pre>
+  </div>
+  <p>Fan-out can paginate per parent too, with <code>paginateWith</code>:</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>PaginatedFanOut.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">forEach&lt;Contact&gt;(
+    paginateWith { customer, cursor -&gt; crm.contacts(customer.id, cursor) },
+    concurrency = 8,
+) {
+    task("scrub") { scrub(it) }
+}</code></pre>
+  </div>
+</section>
+
+<section id="reliability" class="block">
+  <h2><span class="num">06</span>Reliability</h2>
+  <p>Every task takes <code>retry</code>, <code>timeout</code> and <code>rateLimit</code>
+  directly. Retries back off exponentially with jitter; rate limits are enforced
+  per topic.</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>Reliability.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">task(
+    "enrich",
+    retry = RetryPolicy(maxAttempts = 5, baseDelay = 200.milliseconds),
+    timeout = 10.seconds,
+    rateLimit = perSecond(50),
+) { enrich(it) }</code></pre>
+  </div>
+  <p>What happens when a task still fails is a run-level decision.
+  <code>ErrorPolicy.DeadLetter</code> records the failure and keeps going,
+  <code>Fail</code> aborts the run, <code>Skip</code> counts and continues.</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>ErrorPolicy.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">val result = LocalBackend().run(
+    cleanup,
+    RunConfig(
+        maxConcurrency = 32,
+        retry = RetryPolicy(maxAttempts = 3),
+        onError = ErrorPolicy.DeadLetter,
+    ),
+).await()
+
+result.deadLetters.forEach { println("${it.topic}: ${it.error}") }</code></pre>
+  </div>
+</section>
+
+<section id="backends" class="block">
+  <h2><span class="num">07</span>Backends</h2>
+  <p>The definition is backend-agnostic. <code>LocalBackend</code> interprets it
+  in-process — ideal for tests and development. The Camunda backends compile the
+  same definition to BPMN, deploy it, seed instances, and work the external-task
+  topics with your Kotlin task bodies.</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>Backends.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">LocalBackend().dryRun(cleanup).forEach(::println)
+
+LocalBackend().run(cleanup).await()
+
+Camunda7Backend("http://localhost:8080/engine-rest").run(cleanup).await()
+
+Camunda8Backend("http://localhost:8080", token = zeebeToken).run(cleanup).await()</code></pre>
+  </div>
+  <p class="note"><code>dryRun</code> walks the plan without executing task bodies and
+  returns the topics in visit order — cheap workflow shape tests.</p>
+</section>
+
+<section id="run-control" class="block">
+  <h2><span class="num">08</span>Run control</h2>
+  <p><code>run()</code> returns a <code>RunHandle</code>: live progress counters, pause,
+  cancel, and an awaitable result. Starts can be immediate, manual, or scheduled.</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>RunControl.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">val handle = LocalBackend().run(sync, RunConfig(start = Start.Manual))
+
+handle.start()
+println(handle.progress())
+
+handle.pause()
+handle.cancel()
+
+val result = handle.await()
+println("done=${result.done} failed=${result.failed} skipped=${result.skipped}")</code></pre>
+  </div>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>ScheduledStart.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">LocalBackend().run(sync, RunConfig(start = Start.At(Clock.System.now() + 5.minutes)))</code></pre>
+  </div>
+</section>
+
+<section id="modules" class="block">
+  <h2><span class="num">09</span>Modules</h2>
+  <table class="modtable">
+    <thead><tr><th>MODULE</th><th>CONTENTS</th></tr></thead>
+    <tbody>
+      <tr><td><code>loadshift-core</code></td><td>Flow IR, the DSL, the <code>Backend</code> SPI, and the BPMN compiler.</td></tr>
+      <tr><td><code>loadshift-local</code></td><td>In-process interpreter (<code>LocalBackend</code>) for tests and development.</td></tr>
+      <tr><td><code>loadshift-camunda-7</code></td><td><code>Camunda7Backend</code>. BPMN + external tasks, driven over REST.</td></tr>
+      <tr><td><code>loadshift-camunda-8</code></td><td><code>Camunda8Backend</code>. Camunda 8 REST API with <code>zeebe:</code> extensions.</td></tr>
+      <tr><td><code>loadshift-demo</code></td><td>Runnable example on <code>LocalBackend</code>.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+</div>
+</div>
+
+<footer class="footer">
+  <div class="hazard"></div>
+  <div class="footer-inner">
+    <span class="brand-mark"></span>
+    <p>LOADSHIFT/KOTLIN — MIT licensed.
+    <a href="https://github.com/it-atelier-gn/loadshift-kotlin">github.com/it-atelier-gn/loadshift-kotlin</a></p>
+  </div>
+</footer>
+
+</main>
+<script src="app.js"></script>
+</body>
+</html>
