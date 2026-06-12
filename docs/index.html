@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>loadshift — a Kotlin DSL for durable execution</title>
+<title>loadshift: a Kotlin DSL for durable execution</title>
 <meta name="description" content="loadshift-kotlin: describe a workflow once, run it in-process or durably on Camunda 7 / Camunda 8. Examples and reference.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -36,8 +36,8 @@
   <div class="hero-inner">
     <p class="hero-kicker reveal"><span class="tick"></span>DURABLE EXECUTION · UNIT 01</p>
     <h1 class="reveal">SHIFT HEAVY<br>WORK<span class="accent">LOADS.</span></h1>
-    <p class="hero-sub reveal">A Kotlin DSL for durable execution. Describe the flow once —
-    fan-out, retries, rate limits, dead letters — then run it in-process for tests
+    <p class="hero-sub reveal">A Kotlin DSL for durable execution. Describe the flow once
+    (fan-out, retries, rate limits, dead letters), then run it in-process for tests
     or compile it to BPMN and run it durably on Camunda&nbsp;7 / Camunda&nbsp;8.</p>
     <div class="hero-actions reveal">
       <a class="btn btn-amber" href="#examples">Read the examples</a>
@@ -57,7 +57,7 @@
         <div class="sch-pipe"></div>
         <div class="sch-node sch-dlq">DLQ<small>dead letters</small></div>
       </div>
-      <div class="sch-caption">FIG. 01 — ONE WORKFLOW DEFINITION, ANY BACKEND</div>
+      <div class="sch-caption">FIG. 01: ONE WORKFLOW DEFINITION, ANY BACKEND</div>
     </div>
   </div>
   <div class="hazard"></div>
@@ -109,7 +109,7 @@ done=3 failed=3 deadLetters=3
   <h2><span class="num">01</span>Work items</h2>
   <p>A work item is the unit that travels through a workflow. Extend
   <code>WorkItemBase</code> and declare typed variables with the
-  <code>required()</code> / <code>optional()</code> delegates — the values live in a
+  <code>required()</code> / <code>optional()</code> delegates. The values live in a
   variable map underneath, which is what makes them portable to Camunda process
   variables. Override <code>key</code> to give items a stable identity for tracing
   and dead letters.</p>
@@ -148,12 +148,12 @@ val vip = Customer().apply { id = "cust-1" }</code></pre>
 }</code></pre>
   </div>
   <p class="note">Topic names become BPMN external-task topics on Camunda, and trace
-  entries on the local backend — keep them short and stable.</p>
+  entries on the local backend, so keep them short and stable.</p>
 </section>
 
 <section id="branching" class="block">
   <h2><span class="num">03</span>Branching &amp; loops</h2>
-  <p>Control flow is part of the definition, not buried in task bodies — so it
+  <p>Control flow is part of the definition, not buried in task bodies, so it
   compiles to real BPMN gateways. <code>ifThen / elseThen</code> branches,
   <code>whileLoop</code> repeats while a guard holds, <code>parallel</code> runs
   branches concurrently.</p>
@@ -181,7 +181,7 @@ parallel {
 <section id="fan-out" class="block">
   <h2><span class="num">04</span>Fan-out</h2>
   <p>The core move: expand one parent item into many children and process them with
-  bounded concurrency. The child block is a full workflow scope — tasks, branching,
+  bounded concurrency. The child block is a full workflow scope: tasks, branching,
   even nested fan-out. On Camunda each fan-out level becomes its own process,
   invoked as a call activity.</p>
   <div class="codecard" data-lang="kotlin">
@@ -264,7 +264,7 @@ result.deadLetters.forEach { println("${it.topic}: ${it.error}") }</code></pre>
 <section id="backends" class="block">
   <h2><span class="num">07</span>Backends</h2>
   <p>The definition is backend-agnostic. <code>LocalBackend</code> interprets it
-  in-process — ideal for tests and development. The Camunda backends compile the
+  in-process, ideal for tests and development. The Camunda backends compile the
   same definition to BPMN, deploy it, seed instances, and work the external-task
   topics with your Kotlin task bodies.</p>
   <div class="codecard" data-lang="kotlin">
@@ -278,7 +278,7 @@ Camunda7Backend("http://localhost:8080/engine-rest").run(cleanup).await()
 Camunda8Backend("http://localhost:8080", token = zeebeToken).run(cleanup).await()</code></pre>
   </div>
   <p class="note"><code>dryRun</code> walks the plan without executing task bodies and
-  returns the topics in visit order — cheap workflow shape tests.</p>
+  returns the topics in visit order: cheap workflow shape tests.</p>
 </section>
 
 <section id="run-control" class="block">
@@ -325,7 +325,7 @@ println("done=${result.done} failed=${result.failed} skipped=${result.skipped}")
   <div class="hazard"></div>
   <div class="footer-inner">
     <span class="brand-mark"></span>
-    <p>LOADSHIFT/KOTLIN — MIT licensed.
+    <p>LOADSHIFT/KOTLIN, MIT licensed.
     <a href="https://github.com/it-atelier-gn/loadshift-kotlin">github.com/it-atelier-gn/loadshift-kotlin</a></p>
   </div>
 </footer>
