@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/it-atelier-gn/loadshift-kotlin/actions/workflows/ci.yml/badge.svg)](https://github.com/it-atelier-gn/loadshift-kotlin/actions)
 [![Kotlin](https://img.shields.io/badge/kotlin-2.x-blueviolet?logo=kotlin)](https://kotlinlang.org/)
-[![Amper](https://img.shields.io/badge/build-amper-blue)](https://github.com/JetBrains/amper)
+[![Kotlin Toolchain](https://img.shields.io/badge/build-kotlin--toolchain-blue)](https://github.com/JetBrains/kotlin-toolchain)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A Kotlin DSL for durable execution.
@@ -28,21 +28,21 @@ Full examples and reference: **[it-atelier-gn.github.io/loadshift-kotlin](https:
 
 ### Prerequisites
 
-- JDK 21+ (the bundled [Amper](https://github.com/JetBrains/amper) wrapper handles everything else)
+- JDK 21+ (the bundled [Kotlin Toolchain](https://github.com/JetBrains/kotlin-toolchain) wrapper handles everything else)
 
 ### Build & Run
 
 ```sh
 git clone https://github.com/it-atelier-gn/loadshift-kotlin.git
 cd loadshift-kotlin
-./amper build
-./amper test
+./kotlin build
+./kotlin test
 
 # run the demo workflow
-./amper run -m loadshift-demo
+./kotlin run -m loadshift-demo
 
 # run the demo with the web console at http://127.0.0.1:8571
-./amper run -m loadshift-demo -- --ui
+./kotlin run -m loadshift-demo -- --ui
 ```
 
 ---
@@ -54,13 +54,13 @@ The Camunda modules contain full-loop e2e tests (`Camunda7E2eTest`, `Camunda8E2e
 - Camunda 7: `camunda/camunda-bpm-platform:run-7.24.0`
 - Camunda 8: `camunda/camunda:8.9.8` with H2 secondary storage and the unprotected API (no Elasticsearch needed)
 
-`./amper test` runs them whenever Docker is available; without Docker they skip. To reuse an already-running engine instead, set `LOADSHIFT_C7_BASE` (e.g. `http://localhost:8080/engine-rest`) or `LOADSHIFT_C8_BASE` (e.g. `http://localhost:8080`).
+`./kotlin test` runs them whenever Docker is available; without Docker they skip. To reuse an already-running engine instead, set `LOADSHIFT_C7_BASE` (e.g. `http://localhost:8080/engine-rest`) or `LOADSHIFT_C8_BASE` (e.g. `http://localhost:8080`).
 
 ---
 
 ## Local dev engine
 
-To develop and test workflows against a real engine, start an empty one with a single script (Docker required):
+To develop and test workflows against a real engine, start an empty one with a single Kotlin script (Docker and the Kotlin 2.4 CLI required):
 
 ```sh
 ./scripts/engine.sh c7              # Camunda 7 Run on :8080 — engine-rest + Cockpit (demo/demo)
@@ -68,10 +68,10 @@ To develop and test workflows against a real engine, start an empty one with a s
 ./scripts/engine.sh c8 logs         # follow logs
 ./scripts/engine.sh c8 stop
 ./scripts/engine.sh c7 start 9090   # custom port
-# Windows: powershell -File scripts\engine.ps1 c8 [stop|logs] [-Port 9090]
+# Windows: powershell -File scripts\engine.ps1 c8 [stop|logs] [port]
 ```
 
-The script waits until the REST API answers and prints the matching backend constructor, e.g. `Camunda7Backend("http://localhost:8080/engine-rest")`.
+The wrappers launch `scripts/engine.main.kts`; the script waits until the REST API answers and prints the matching backend constructor, e.g. `Camunda7Backend("http://localhost:8080/engine-rest")`.
 
 ---
 
@@ -79,7 +79,7 @@ The script waits until the REST API answers and prints the matching backend cons
 
 `scripts/examples.main.kts` compiles a set of example workflows with both Camunda dialects, verifies the BPMN structurally (service task topics, gateways, call activities, FEEL conditions, complete diagram interchange), and generates [docs/examples.html](https://it-atelier-gn.github.io/loadshift-kotlin/examples.html) — DSL source on the left, the rendered BPMN diagram (bpmn-js) on the right.
 
-Requires the [Kotlin 2.4 command-line compiler](https://kotlinlang.org/docs/command-line.html) and a prior `./amper build`:
+Requires the [Kotlin 2.4 command-line compiler](https://kotlinlang.org/docs/command-line.html) and a prior `./kotlin build`:
 
 ```sh
 ./scripts/examples.sh           # verify + regenerate docs/examples.html
@@ -108,7 +108,7 @@ Endpoints: `/` (dashboard), `/api/backend`, `/api/runs`, `/api/runs/{id}`. The C
 The library modules publish under the group `io.github.it-atelier-gn`. For local consumption:
 
 ```sh
-./amper publish mavenLocal
+./kotlin publish mavenLocal
 ```
 
 Maven Central releases are staged from mavenLocal and uploaded with JReleaser by a separate publishing project.
