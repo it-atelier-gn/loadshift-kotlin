@@ -276,7 +276,7 @@ internal class Camunda8Run(
 
     private suspend fun process(topic: String, job: ActivatedJob) {
         try {
-            val variables = C8Variables.fromJson(job.variables)
+            val variables = unwrapItemVariables(C8Variables.fromJson(job.variables))
             val result = dispatch(topic, variables)
             client.completeJob(job.jobKey, CompleteJobRequest(result))
             done.incrementAndGet()
@@ -315,5 +315,17 @@ internal class Camunda8Run(
             return buildJsonObject { put("${handler.id}_items", array) }
         }
         error("no handler for topic '$topic'")
+    }
+
+    private fun unwrapItemVariables(variables: MutableMap<String, Any?>): MutableMap<String, Any?> {
+        for ((key, value) in variables.toList()) {
+            if (key.endsWith("_item") && value is Map<*, *>) {
+                for ((k, v) in value) {
+                    val name = k as? String ?: continue
+                    if (name !in variables) variables[name] = v
+                }
+            }
+        }
+        return variables
     }
 }
