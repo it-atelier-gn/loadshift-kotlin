@@ -1,0 +1,31 @@
+product: jvm/lib
+
+repositories:
+  - id: mavenLocal
+    url: mavenLocal
+    resolve: false
+    publish: true
+
+dependencies:
+  - ../loadshift-core
+  - $libs.kotlinx.coroutines.core
+  - $libs.kotlinx.serialization.json
+  - $libs.kotlinx.datetime
+  - $libs.ktor.server.core
+  - $libs.ktor.server.cio
+  - $libs.ktor.server.content.negotiation
+  - $libs.ktor.serialization.kotlinx.json
+
+settings:
+  kotlin:
+    serialization: json
+  publishing:
+    enabled: true
+    group: io.github.it-atelier-gn
+    version: 0.1.0
+
+test-dependencies:
+  - ../loadshift-local
+  - $libs.kotlinx.coroutines.test
+  - $libs.ktor.client.cio
+  - $libs.ktor.client.content.negotiation

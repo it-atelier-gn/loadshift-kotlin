@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>loadshift console</title>
+<style>
+:root {
+  --bg: #0b0e0c;
+  --panel: #11161200;
+  --ink: #d8e6d2;
+  --dim: #6d7f6a;
+  --line: #243126;
+  --amber: #ffb454;
+  --green: #7ce38b;
+  --red: #ff6b6b;
+  --blue: #6cb6ff;
+  --gray: #8b949e;
+  --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, "SF Mono", monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { background: var(--bg); }
+body {
+  font-family: var(--mono);
+  color: var(--ink);
+  min-height: 100vh;
+  background:
+    repeating-linear-gradient(0deg, transparent 0 2px, rgba(0,0,0,.18) 2px 4px),
+    radial-gradient(1200px 600px at 70% -10%, rgba(124,227,139,.06), transparent 60%),
+    radial-gradient(900px 500px at 0% 110%, rgba(255,180,84,.05), transparent 60%),
+    var(--bg);
+  padding: 0 0 4rem;
+}
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 1.25rem;
+  padding: 1.4rem 2rem 1.1rem;
+  border-bottom: 1px solid var(--line);
+}
+.wordmark {
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: .35em;
+  text-transform: uppercase;
+  color: var(--amber);
+  text-shadow: 0 0 18px rgba(255,180,84,.35);
+}
+.wordmark::before { content: "▞▞ "; color: var(--dim); text-shadow: none; }
+.backend {
+  color: var(--dim);
+  font-size: .8rem;
+  letter-spacing: .12em;
+}
+.backend b { color: var(--green); font-weight: 600; }
+.spacer { flex: 1; }
+.pulse {
+  font-size: .72rem;
+  color: var(--dim);
+  letter-spacing: .15em;
+  text-transform: uppercase;
+}
+.pulse .dot {
+  display: inline-block;
+  width: .55em; height: .55em;
+  border-radius: 50%;
+  background: var(--green);
+  margin-right: .5em;
+  box-shadow: 0 0 8px var(--green);
+  animation: blink 1s steps(2, start) infinite;
+}
+.pulse.stale .dot { background: var(--red); box-shadow: 0 0 8px var(--red); animation: none; }
+@keyframes blink { 50% { opacity: .25; } }
+main { padding: 1.6rem 2rem; display: grid; gap: 1.2rem; max-width: 1100px; }
+.empty {
+  border: 1px dashed var(--line);
+  color: var(--dim);
+  padding: 3rem 1rem;
+  text-align: center;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  font-size: .8rem;
+}
+.run {
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(124,227,139,.03), transparent 40%);
+  padding: 1.1rem 1.3rem 1.2rem;
+  position: relative;
+}
+.run::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--gray);
+}
+.run[data-state="Running"]::before { background: var(--green); box-shadow: 0 0 10px rgba(124,227,139,.6); }
+.run[data-state="Failed"]::before { background: var(--red); }
+.run[data-state="Cancelled"]::before { background: var(--red); }
+.run[data-state="Paused"]::before { background: var(--amber); }
+.run[data-state="Scheduled"]::before { background: var(--blue); }
+.run-head { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+.run-id { color: var(--dim); font-size: .75rem; letter-spacing: .1em; }
+.run-name { font-size: 1.05rem; font-weight: 700; letter-spacing: .04em; }
+.badge {
+  font-size: .68rem;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  padding: .2em .7em;
+  border: 1px solid currentColor;
+}
+.badge.Running { color: var(--green); animation: blink 1.4s steps(2, start) infinite; }
+.badge.Completed { color: var(--gray); }
+.badge.Failed, .badge.Cancelled { color: var(--red); }
+.badge.Paused { color: var(--amber); }
+.badge.Scheduled { color: var(--blue); }
+.started { margin-left: auto; color: var(--dim); font-size: .72rem; }
+.bar {
+  margin: .9rem 0 .55rem;
+  height: 14px;
+  border: 1px solid var(--line);
+  display: flex;
+  overflow: hidden;
+  background:
+    repeating-linear-gradient(90deg, transparent 0 6px, rgba(109,127,106,.12) 6px 7px);
+}
+.bar i { display: block; height: 100%; transition: width .6s ease; }
+.bar .done { background: var(--green); }
+.bar .failed { background: var(--red); }
+.bar .skipped { background: var(--amber); }
+.counters {
+  display: flex;
+  gap: 1.4rem;
+  flex-wrap: wrap;
+  font-size: .78rem;
+  color: var(--dim);
+}
+.counters b { color: var(--ink); font-weight: 600; margin-left: .35em; }
+.counters .k-done b { color: var(--green); }
+.counters .k-failed b { color: var(--red); }
+.counters .k-skipped b { color: var(--amber); }
+.counters .k-active b { color: var(--blue); }
+details { margin-top: .9rem; }
+summary {
+  cursor: pointer;
+  font-size: .72rem;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--dim);
+  user-select: none;
+}
+summary:hover { color: var(--amber); }
+.tree { margin: .6rem 0 0 .35rem; padding-left: .6rem; border-left: 1px solid var(--line); }
+.node { padding: .12rem 0 .12rem .4rem; font-size: .8rem; }
+.node .t { color: var(--dim); font-size: .7rem; letter-spacing: .1em; text-transform: uppercase; margin-right: .6em; }
+.node.task .t { color: var(--green); }
+.node.fanOut .t { color: var(--amber); }
+.node.if .t, .node.loop .t, .node.parallel .t { color: var(--blue); }
+.dlq { margin: .6rem 0 0; list-style: none; }
+.dlq li {
+  font-size: .78rem;
+  padding: .35rem .6rem;
+  border: 1px solid rgba(255,107,107,.35);
+  border-left: 3px solid var(--red);
+  margin-top: .35rem;
+  color: var(--ink);
+  background: rgba(255,107,107,.05);
+}
+.dlq .key { color: var(--amber); }
+.dlq .topic { color: var(--dim); margin: 0 .6em; }
+.dlq .err { color: var(--red); }
+footer {
+  padding: 1.5rem 2rem 0;
+  color: var(--dim);
+  font-size: .7rem;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+}
+</style>
+</head>
+<body>
+<header>
+  <span class="wordmark">loadshift</span>
+  <span class="backend">backend <b id="backend-type">—</b></span>
+  <span class="spacer"></span>
+  <span class="pulse" id="pulse"><span class="dot"></span><span id="pulse-text">live</span></span>
+</header>
+<main id="runs"><div class="empty">awaiting runs</div></main>
+<footer>introspection console · polls /api/runs every 1s</footer>
+<script>
+const structures = new Map();
+const openTrees = new Set();
+const openDlqs = new Set();
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function renderTree(node) {
+  const label = node.label ? esc(node.label) : "";
+  const kids = node.children.map(renderTree).join("");
+  return `<div class="node ${esc(node.type)}"><span class="t">${esc(node.type)}</span>${label}` +
+    (kids ? `<div class="tree">${kids}</div>` : "") + `</div>`;
+}
+
+function renderBar(p) {
+  const total = Math.max(p.seeded + p.expanded, p.done + p.failed + p.skipped, 1);
+  const w = n => (100 * n / total).toFixed(2) + "%";
+  return `<div class="bar">` +
+    `<i class="done" style="width:${w(p.done)}"></i>` +
+    `<i class="failed" style="width:${w(p.failed)}"></i>` +
+    `<i class="skipped" style="width:${w(p.skipped)}"></i></div>`;
+}
+
+function renderRun(run) {
+  const p = run.progress;
+  const active = run.engineActive == null ? "" :
+    `<span class="k-active">engine-active<b>${run.engineActive}</b></span>`;
+  const dlq = run.deadLetters.length ? `
+    <details class="dlq-box" ${openDlqs.has(run.id) ? "open" : ""} data-run="${esc(run.id)}">
+      <summary>dead letters · ${run.deadLetters.length}</summary>
+      <ul class="dlq">${run.deadLetters.map(d =>
+        `<li><span class="key">${esc(d.key ?? "?")}</span><span class="topic">${esc(d.topic)}</span><span class="err">${esc(d.error)}</span></li>`).join("")}
+      </ul>
+    </details>` : "";
+  const tree = structures.get(run.id);
+  const flow = `
+    <details class="tree-box" ${openTrees.has(run.id) ? "open" : ""} data-run="${esc(run.id)}">
+      <summary>flow structure</summary>
+      <div class="tree">${tree ? renderTree(tree) : "loading…"}</div>
+    </details>`;
+  return `<section class="run" data-state="${esc(run.state)}">
+    <div class="run-head">
+      <span class="run-id">${esc(run.id)}</span>
+      <span class="run-name">${esc(run.workflowName)}</span>
+      <span class="badge ${esc(run.state)}">${esc(run.state)}</span>
+      <span class="started">since ${esc(run.startedAt.replace("T", " ").slice(0, 19))}Z</span>
+    </div>
+    ${renderBar(p)}
+    <div class="counters">
+      <span>seeded<b>${p.seeded}</b></span>
+      <span>expanded<b>${p.expanded}</b></span>
+      <span class="k-done">done<b>${p.done}</b></span>
+      <span class="k-failed">failed<b>${p.failed}</b></span>
+      <span class="k-skipped">skipped<b>${p.skipped}</b></span>
+      ${active}
+    </div>
+    ${flow}${dlq}
+  </section>`;
+}
+
+async function loadStructure(id) {
+  if (structures.has(id)) return;
+  structures.set(id, null);
+  try {
+    const detail = await (await fetch(`api/runs/${id}`)).json();
+    if (detail.structure) structures.set(id, detail.structure);
+  } catch { structures.delete(id); }
+}
+
+function rememberToggles() {
+  document.querySelectorAll(".tree-box").forEach(d => {
+    if (d.open) openTrees.add(d.dataset.run); else openTrees.delete(d.dataset.run);
+  });
+  document.querySelectorAll(".dlq-box").forEach(d => {
+    if (d.open) openDlqs.add(d.dataset.run); else openDlqs.delete(d.dataset.run);
+  });
+}
+
+async function tick() {
+  const pulse = document.getElementById("pulse");
+  try {
+    const [backend, runs] = await Promise.all([
+      (await fetch("api/backend")).json(),
+      (await fetch("api/runs")).json(),
+    ]);
+    document.getElementById("backend-type").textContent = backend.type;
+    await Promise.all(runs.map(r => loadStructure(r.id)));
+    rememberToggles();
+    const main = document.getElementById("runs");
+    main.innerHTML = runs.length
+      ? runs.slice().reverse().map(renderRun).join("")
+      : `<div class="empty">awaiting runs</div>`;
+    pulse.classList.remove("stale");
+    document.getElementById("pulse-text").textContent = "live";
+  } catch {
+    pulse.classList.add("stale");
+    document.getElementById("pulse-text").textContent = "disconnected";
+  }
+}
+
+tick();
+setInterval(tick, 1000);
+</script>
+</body>
+</html>

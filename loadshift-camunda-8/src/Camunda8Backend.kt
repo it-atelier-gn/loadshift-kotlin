@@ -16,17 +16,20 @@ import kotlinx.datetime.Clock
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
-import loadshift.core.Backend
 import loadshift.core.BpmnCompiler
 import loadshift.core.Conditional
 import loadshift.core.Execute
 import loadshift.core.FanOut
+import loadshift.core.IntrospectableBackend
 import loadshift.core.Loop
 import loadshift.core.Parallel
 import loadshift.core.Progress
 import loadshift.core.RunConfig
 import loadshift.core.RunHandle
+import loadshift.core.RunInspector
 import loadshift.core.RunResult
+import loadshift.core.RunState
+import loadshift.core.RunTracker
 import loadshift.core.Sequence
 import loadshift.core.Start
 import loadshift.core.Step
@@ -45,7 +48,9 @@ class Camunda8Backend(
     base: String = "http://localhost:8080",
     token: String? = null,
     private val client: Camunda8Client = Camunda8Client(base, token),
-) : Backend {
+) : IntrospectableBackend {
+
+    override val introspection = RunTracker("camunda8")
 
     override suspend fun <W : WorkItemBase> run(workflow: Workflow<W>, config: RunConfig): RunHandle {
         val processes = BpmnCompiler.compile(workflow)
@@ -58,7 +63,9 @@ class Camunda8Backend(
         client.deploy(resources)
 
         val registry = buildRegistry(workflow)
-        return Camunda8Run(workflow, config, client, registry, processes.map { it.key }).also { it.begin() }
+        val run = Camunda8Run(workflow, config, client, registry, processes.map { it.key }).also { it.begin() }
+        introspection.track(workflow, run)
+        return run
     }
 }
 
@@ -140,7 +147,7 @@ internal class Camunda8Run(
     private val client: Camunda8Client,
     private val registry: Registry,
     private val levelKeys: List<String>,
-) : RunHandle {
+) : RunHandle, RunInspector {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val workerId = "loadshift-${UUID.randomUUID()}"
@@ -152,6 +159,7 @@ internal class Camunda8Run(
     private val seeded = AtomicLong()
 
     @Volatile private var running = true
+    @Volatile private var runState = if (config.start is Start.Now) RunState.Running else RunState.Scheduled
 
     fun begin() {
         registry.topics.forEach { topic -> scope.launch { workerLoop(topic) } }
@@ -165,13 +173,17 @@ internal class Camunda8Run(
                     }
                     else -> {}
                 }
+                runState = RunState.Running
                 startRootInstances()
                 awaitDrain()
                 running = false
+                runState = RunState.Completed
                 completion.complete(RunResult(done.get(), failed.get(), 0, emptyList()))
             } catch (e: CancellationException) {
+                runState = RunState.Cancelled
                 completion.complete(RunResult(done.get(), failed.get(), 0, emptyList()))
             } catch (e: Throwable) {
+                runState = RunState.Failed
                 completion.completeExceptionally(e)
             } finally {
                 running = false
@@ -187,15 +199,22 @@ internal class Camunda8Run(
 
     override suspend fun pause() {
         running = false
+        if (runState == RunState.Running) runState = RunState.Paused
     }
 
     override suspend fun cancel() {
         running = false
+        runState = RunState.Cancelled
         scope.cancel()
         if (!completion.isCompleted) completion.complete(RunResult(done.get(), failed.get(), 0, emptyList()))
     }
 
     override suspend fun await(): RunResult = completion.await()
+
+    override fun state(): RunState = runState
+
+    override suspend fun engineActive(): Long? =
+        runCatching { levelKeys.sumOf { client.instanceCount(it) } }.getOrNull()
 
     private suspend fun startRootInstances() {
         val semaphore = Semaphore(config.maxConcurrency)
