@@ -284,10 +284,8 @@ internal class Camunda7Run(
 
     private suspend fun process(task: ExternalTaskDto) {
         val variables = unwrapItemVariables(CamundaVariables.fromCamunda(task.variables))
-        try {
-            val completionVars = dispatch(task.topicName, variables)
-            client.complete(task.id, CompleteRequest(workerId, completionVars))
-            done.incrementAndGet()
+        val completionVars = try {
+            dispatch(task.topicName, variables)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -303,6 +301,37 @@ internal class Camunda7Run(
                         retryTimeout = config.retry.baseDelay.inWholeMilliseconds,
                     ),
                 )
+            }
+            return
+        }
+        completeWithRetry(task.id, completionVars)
+    }
+
+    private suspend fun completeWithRetry(taskId: String, variables: Map<String, CamundaValue>) {
+        var attempt = 0
+        while (true) {
+            try {
+                client.complete(taskId, CompleteRequest(workerId, variables))
+                done.incrementAndGet()
+                return
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                if (++attempt >= 5) {
+                    runCatching {
+                        client.failure(
+                            taskId,
+                            FailureRequest(
+                                workerId = workerId,
+                                errorMessage = e.message ?: "completion failed",
+                                retries = 1,
+                                retryTimeout = 500,
+                            ),
+                        )
+                    }
+                    return
+                }
+                delay(150L * attempt)
             }
         }
     }

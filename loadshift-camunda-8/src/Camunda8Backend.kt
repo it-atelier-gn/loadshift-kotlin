@@ -275,11 +275,9 @@ internal class Camunda8Run(
     }
 
     private suspend fun process(topic: String, job: ActivatedJob) {
-        try {
+        val result = try {
             val variables = unwrapItemVariables(C8Variables.fromJson(job.variables))
-            val result = dispatch(topic, variables)
-            client.completeJob(job.jobKey, CompleteJobRequest(result))
-            done.incrementAndGet()
+            dispatch(topic, variables)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -293,6 +291,32 @@ internal class Camunda8Run(
                         retryBackOff = config.retry.baseDelay.inWholeMilliseconds,
                     ),
                 )
+            }
+            return
+        }
+        completeWithRetry(job.jobKey, result)
+    }
+
+    private suspend fun completeWithRetry(jobKey: String, result: JsonObject) {
+        var attempt = 0
+        while (true) {
+            try {
+                client.completeJob(jobKey, CompleteJobRequest(result))
+                done.incrementAndGet()
+                return
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                if (++attempt >= 5) {
+                    runCatching {
+                        client.failJob(
+                            jobKey,
+                            FailJobRequest(retries = 1, errorMessage = e.message ?: "completion failed", retryBackOff = 500),
+                        )
+                    }
+                    return
+                }
+                delay(150L * attempt)
             }
         }
     }
