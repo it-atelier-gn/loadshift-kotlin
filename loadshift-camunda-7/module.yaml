@@ -1,5 +1,11 @@
 product: jvm/lib
 
+repositories:
+  - id: mavenLocal
+    url: mavenLocal
+    resolve: false
+    publish: true
+
 dependencies:
   - ../loadshift-core
   - $libs.kotlinx.coroutines.core
@@ -12,6 +18,10 @@ dependencies:
 settings:
   kotlin:
     serialization: json
+  publishing:
+    enabled: true
+    group: io.github.it-atelier-gn
+    version: 0.1.0
 
 test-dependencies:
   - $libs.kotlinx.coroutines.test

@@ -1,5 +1,17 @@
 product: jvm/lib
 
+settings:
+  publishing:
+    enabled: true
+    group: io.github.it-atelier-gn
+    version: 0.1.0
+
+repositories:
+  - id: mavenLocal
+    url: mavenLocal
+    resolve: false
+    publish: true
+
 dependencies:
   - $libs.kotlinx.coroutines.core:
       exported: true

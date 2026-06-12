@@ -86,6 +86,18 @@ Endpoints: `/` (dashboard), `/api/backend`, `/api/runs`, `/api/runs/{id}`. The C
 
 ---
 
+## Publishing
+
+The library modules publish under the group `io.github.it-atelier-gn`. For local consumption:
+
+```sh
+./amper publish mavenLocal
+```
+
+Maven Central releases are staged from mavenLocal and uploaded with JReleaser by a separate publishing project.
+
+---
+
 ## Documentation
 
 The docs site lives in [docs/](docs/) and is deployed to GitHub Pages by [pages.yml](.github/workflows/pages.yml) on every push to `main` that touches `docs/`.
