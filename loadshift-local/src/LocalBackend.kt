@@ -16,12 +16,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withTimeout
 import kotlinx.datetime.Clock
-import loadshift.core.Backend
 import loadshift.core.Conditional
 import loadshift.core.DeadLetter
 import loadshift.core.ErrorPolicy
 import loadshift.core.Execute
 import loadshift.core.FanOut
+import loadshift.core.IntrospectableBackend
 import loadshift.core.Loop
 import loadshift.core.Parallel
 import loadshift.core.Progress
@@ -29,7 +29,10 @@ import loadshift.core.Rate
 import loadshift.core.RetryPolicy
 import loadshift.core.RunConfig
 import loadshift.core.RunHandle
+import loadshift.core.RunInspector
 import loadshift.core.RunResult
+import loadshift.core.RunState
+import loadshift.core.RunTracker
 import loadshift.core.Sequence
 import loadshift.core.Start
 import loadshift.core.Step
@@ -43,9 +46,14 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.random.Random
 import kotlin.time.Duration
 
-class LocalBackend : Backend {
-    override suspend fun <W : WorkItemBase> run(workflow: Workflow<W>, config: RunConfig): RunHandle =
-        LocalRun(workflow, config)
+class LocalBackend : IntrospectableBackend {
+    override val introspection = RunTracker("local")
+
+    override suspend fun <W : WorkItemBase> run(workflow: Workflow<W>, config: RunConfig): RunHandle {
+        val run = LocalRun(workflow, config)
+        introspection.track(workflow, run)
+        return run
+    }
 
     suspend fun <W : WorkItemBase> dryRun(workflow: Workflow<W>): List<String> {
         val run = LocalRun(workflow, RunConfig(dryRun = true, maxConcurrency = 1))
@@ -77,7 +85,7 @@ private class SkipSignal(topic: String) : UnitSignal(topic, "skipped")
 private class LocalRun<W : WorkItemBase>(
     private val workflow: Workflow<W>,
     private val config: RunConfig,
-) : RunHandle {
+) : RunHandle, RunInspector {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val startSignal = CompletableDeferred<Unit>()
     private val completion = CompletableDeferred<RunResult>()
@@ -94,6 +102,7 @@ private class LocalRun<W : WorkItemBase>(
     private val taskLimiters = ConcurrentHashMap<String, RateLimiter>()
 
     @Volatile private var paused = false
+    @Volatile private var runState = if (config.start is Start.Now) RunState.Running else RunState.Scheduled
 
     init {
         scope.launch {
@@ -106,11 +115,15 @@ private class LocalRun<W : WorkItemBase>(
                     }
                     else -> {}
                 }
+                runState = RunState.Running
                 execute()
+                runState = RunState.Completed
                 completion.complete(snapshotResult())
             } catch (e: CancellationException) {
+                runState = RunState.Cancelled
                 completion.complete(snapshotResult())
             } catch (e: Throwable) {
+                runState = RunState.Failed
                 completion.completeExceptionally(e)
             }
         }
@@ -125,14 +138,20 @@ private class LocalRun<W : WorkItemBase>(
 
     override suspend fun pause() {
         paused = true
+        if (runState == RunState.Running) runState = RunState.Paused
     }
 
     override suspend fun cancel() {
+        runState = RunState.Cancelled
         scope.cancel()
         if (!completion.isCompleted) completion.complete(snapshotResult())
     }
 
     override suspend fun await(): RunResult = completion.await()
+
+    override fun state(): RunState = runState
+
+    override fun deadLetters(): List<DeadLetter> = synchronized(deadLetters) { deadLetters.toList() }
 
     fun trace(): List<String> = synchronized(traceTopics) { traceTopics.toList() }
 

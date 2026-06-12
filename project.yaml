@@ -4,3 +4,4 @@ modules:
   - ./loadshift-local
   - ./loadshift-camunda-7
   - ./loadshift-camunda-8
+  - ./loadshift-web

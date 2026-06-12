@@ -1,0 +1,108 @@
+package loadshift.core
+
+import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
+
+enum class RunState { Scheduled, Running, Paused, Completed, Failed, Cancelled }
+
+data class FlowNode(
+    val type: String,
+    val label: String,
+    val children: List<FlowNode> = emptyList(),
+)
+
+data class RunSnapshot(
+    val id: String,
+    val workflowKey: String,
+    val workflowName: String,
+    val state: RunState,
+    val startedAt: Instant,
+    val progress: Progress,
+    val deadLetters: List<DeadLetter>,
+    val engineActive: Long?,
+)
+
+interface RunInspector {
+    fun state(): RunState
+    fun progress(): Progress
+    fun deadLetters(): List<DeadLetter> = emptyList()
+    suspend fun engineActive(): Long? = null
+}
+
+interface Introspection {
+    val backendType: String
+    suspend fun runs(): List<RunSnapshot>
+    suspend fun run(id: String): RunSnapshot?
+    fun structure(id: String): FlowNode?
+}
+
+interface IntrospectableBackend : Backend {
+    val introspection: Introspection
+}
+
+class RunTracker(override val backendType: String) : Introspection {
+
+    private class Entry(
+        val id: String,
+        val workflowKey: String,
+        val workflowName: String,
+        val startedAt: Instant,
+        val structure: FlowNode,
+        val inspector: RunInspector,
+    )
+
+    private val counter = AtomicLong()
+    private val entries = ConcurrentHashMap<String, Entry>()
+
+    fun track(workflow: Workflow<*>, inspector: RunInspector): String {
+        val id = "run-${counter.incrementAndGet()}"
+        entries[id] = Entry(
+            id = id,
+            workflowKey = workflow.key,
+            workflowName = workflow.name,
+            startedAt = Clock.System.now(),
+            structure = describeFlow(workflow),
+            inspector = inspector,
+        )
+        return id
+    }
+
+    override suspend fun runs(): List<RunSnapshot> =
+        entries.values.sortedBy { it.startedAt }.map { snapshot(it) }
+
+    override suspend fun run(id: String): RunSnapshot? = entries[id]?.let { snapshot(it) }
+
+    override fun structure(id: String): FlowNode? = entries[id]?.structure
+
+    private suspend fun snapshot(e: Entry): RunSnapshot = RunSnapshot(
+        id = e.id,
+        workflowKey = e.workflowKey,
+        workflowName = e.workflowName,
+        state = e.inspector.state(),
+        startedAt = e.startedAt,
+        progress = e.inspector.progress(),
+        deadLetters = e.inspector.deadLetters(),
+        engineActive = e.inspector.engineActive(),
+    )
+}
+
+fun describeFlow(workflow: Workflow<*>): FlowNode =
+    FlowNode("workflow", workflow.name, listOf(describeStep(workflow.root.step)))
+
+private fun describeStep(step: Step<*>): FlowNode = when (step) {
+    is Sequence<*> -> FlowNode("sequence", "", step.steps.map { describeStep(it) })
+    is Execute<*> -> FlowNode("task", step.task.topic)
+    is Conditional<*> -> FlowNode(
+        "if",
+        step.id,
+        listOfNotNull(
+            FlowNode("then", "", listOf(describeStep(step.onTrue))),
+            step.onFalse?.let { FlowNode("else", "", listOf(describeStep(it))) },
+        ),
+    )
+    is Loop<*> -> FlowNode("loop", step.id, listOf(describeStep(step.body)))
+    is Parallel<*> -> FlowNode("parallel", "", step.branches.map { describeStep(it) })
+    is FanOut<*, *> -> FlowNode("fanOut", step.id, listOf(describeStep(step.body.step)))
+}

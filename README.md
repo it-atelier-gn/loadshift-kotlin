@@ -19,6 +19,7 @@ Full examples and reference: **[it-atelier-gn.github.io/loadshift-kotlin](https:
 | `loadshift-local` | In-process interpreter (`LocalBackend`) for tests and development. |
 | `loadshift-camunda-7` | `Camunda7Backend`. Compiles to BPMN and external tasks, driven over REST. |
 | `loadshift-camunda-8` | `Camunda8Backend`. Camunda 8 REST API with `zeebe:` BPMN extensions. |
+| `loadshift-web` | `IntrospectionServer`. Embedded web console showing live runs of any backend. |
 | `loadshift-demo` | Runnable example on `LocalBackend`. |
 
 ---
@@ -39,7 +40,24 @@ cd loadshift-kotlin
 
 # run the demo workflow
 ./amper run -m loadshift-demo
+
+# run the demo with the web console at http://127.0.0.1:8571
+./amper run -m loadshift-demo -- --ui
 ```
+
+---
+
+## Web Console
+
+Every backend implements the introspection API (`IntrospectableBackend` in `loadshift-core`): run state, progress counters, dead letters, and the flow structure. `loadshift-web` serves it as JSON plus an HTML dashboard:
+
+```kotlin
+val backend = LocalBackend()
+IntrospectionServer(backend, port = 8571).start()
+backend.run(workflow).await()
+```
+
+Endpoints: `/` (dashboard), `/api/backend`, `/api/runs`, `/api/runs/{id}`. The Camunda backends additionally report the engine's live instance count per run.
 
 ---
 

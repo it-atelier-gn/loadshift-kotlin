@@ -6,6 +6,9 @@ import loadshift.core.RunConfig
 import loadshift.core.WorkItemBase
 import loadshift.core.workflow
 import loadshift.local.LocalBackend
+import loadshift.web.IntrospectionServer
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -31,7 +34,12 @@ private fun fetchContacts(customerId: String): List<Contact> = listOf(
     contact("$customerId-c", "bad"),
 )
 
-fun main() = runBlocking<Unit> {
+fun main(args: Array<String>) = runBlocking<Unit> {
+    if (args.contains("--ui")) {
+        uiDemo()
+        return@runBlocking
+    }
+
     val customers = (1..3).map { n -> User().apply { id = "cust-$n" } }
 
     val cleanup = workflow<User>("contact-cleanup") {
@@ -58,4 +66,33 @@ fun main() = runBlocking<Unit> {
 
     println("done=${result.done} failed=${result.failed} deadLetters=${result.deadLetters.size}")
     result.deadLetters.forEach { println("  DLQ topic=${it.topic} error=${it.error}") }
+}
+
+private suspend fun uiDemo() {
+    val backend = LocalBackend()
+    val server = IntrospectionServer(backend, port = 8571).start()
+    println("loadshift console: http://127.0.0.1:8571")
+
+    val customers = (1..6).map { n -> User().apply { id = "cust-$n" } }
+    val cleanup = workflow<User>("contact-cleanup") {
+        items(customers)
+        forEach<Contact>(expand = { fetchContacts(it.id) }, concurrency = 2) {
+            ifThen({ it.email == null }) {
+                task("flag-missing") { delay(800) }
+            } elseThen {
+                task("cleanup", retry = RetryPolicy(maxAttempts = 2, baseDelay = 100.milliseconds, jitter = false)) {
+                    delay(800)
+                    if (it.email == "bad") throw IllegalStateException("invalid email for ${it.id}")
+                }
+            }
+        }
+    }
+
+    val result = backend.run(cleanup, RunConfig(maxConcurrency = 4, onError = ErrorPolicy.DeadLetter)).await()
+    println("run finished: done=${result.done} failed=${result.failed}; console stays up, Ctrl+C to exit")
+    try {
+        awaitCancellation()
+    } finally {
+        server.stop()
+    }
 }
