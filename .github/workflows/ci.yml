@@ -16,5 +16,5 @@ jobs:
           java-version: '21'
       - name: Run tests
         run: |
-          chmod +x ./amper
-          ./amper test
+          chmod +x ./kotlin
+          ./kotlin test
