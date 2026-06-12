@@ -36,6 +36,40 @@ class Camunda8DialectTest {
     }
 
     @Test
+    fun injectsZeebeLoopCharacteristics() {
+        val wf = workflow<Job>("c8-fanout") {
+            items(emptyList())
+            forEach<Line>(expand = { emptyList() }) {
+                task("price") { }
+            }
+        }
+        val root = BpmnCompiler.compile(wf).first()
+        Camunda8Dialect.decorate(root.model, root.serviceTasks)
+        val xml = Bpmn.convertToString(root.model)
+        assertTrue("loopCharacteristics" in xml, xml)
+        assertTrue("inputCollection=\"=f1_items\"" in xml, xml)
+        assertTrue("inputElement=\"f1_item\"" in xml, xml)
+    }
+
+    @Test
+    fun rewritesConditionsToFeel() {
+        val wf = workflow<Job>("c8-cond") {
+            items(emptyList())
+            ifThen({ true }) {
+                task("yes") { }
+            } elseThen {
+                task("no") { }
+            }
+        }
+        val root = BpmnCompiler.compile(wf).first()
+        Camunda8Dialect.decorate(root.model, root.serviceTasks)
+        val xml = Bpmn.convertToString(root.model)
+        assertTrue(">=c1_result<" in xml, xml)
+        assertTrue(">=not(c1_result)<" in xml, xml)
+        assertTrue("\${" !in xml, xml)
+    }
+
+    @Test
     fun encodesVariablesAsPlainJson() {
         val map = mapOf("s" to "x", "i" to 7, "b" to true)
         val back = C8Variables.fromJson(C8Variables.toJson(map))

@@ -21,6 +21,7 @@
   </a>
   <nav class="topnav">
     <a href="#examples">Examples</a>
+    <a href="examples.html">DSL→BPMN</a>
     <a href="#backends">Backends</a>
     <a href="#modules">Modules</a>
     <a class="gh" href="https://github.com/it-atelier-gn/loadshift-kotlin">GitHub ↗</a>
@@ -31,6 +32,7 @@
 
 <section class="hero">
   <div class="hero-grid"></div>
+  <canvas id="voxel-bg" class="voxel-bg" aria-hidden="true"></canvas>
   <div class="hero-inner">
     <p class="hero-kicker reveal"><span class="tick"></span>DURABLE EXECUTION · UNIT 01</p>
     <h1 class="reveal">SHIFT HEAVY<br>WORK<span class="accent">LOADS.</span></h1>
@@ -330,5 +332,6 @@ println("done=${result.done} failed=${result.failed} skipped=${result.skipped}")
 
 </main>
 <script src="app.js"></script>
+<script type="module" src="voxel.js"></script>
 </body>
 </html>

@@ -14,9 +14,6 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.datetime.Clock
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
 import loadshift.core.BpmnCompiler
 import loadshift.core.Execute
 import loadshift.core.FanOut
@@ -148,10 +145,6 @@ private fun walkFanOuts(step: Step<*>, action: (FanOut<*, *>) -> Unit) {
         is FanOut<*, *> -> action(step)
         is Execute -> {}
     }
-}
-
-private fun mapToJson(map: Map<String, Any?>): JsonObject = buildJsonObject {
-    for ((k, v) in map) put(k, CamundaVariables.encode(v).value)
 }
 
 internal class Camunda7Run(
@@ -290,7 +283,7 @@ internal class Camunda7Run(
     }
 
     private suspend fun process(task: ExternalTaskDto) {
-        val variables = CamundaVariables.fromCamunda(task.variables)
+        val variables = unwrapItemVariables(CamundaVariables.fromCamunda(task.variables))
         try {
             val completionVars = dispatch(task.topicName, variables)
             client.complete(task.id, CompleteRequest(workerId, completionVars))
@@ -328,9 +321,20 @@ internal class Camunda7Run(
         registry.expandHandlers[topic]?.let { handler ->
             val item = handler.factory(variables)
             val children = handler.expand(item).toList()
-            val array = JsonArray(children.map { mapToJson(it.toMap()) })
-            return mapOf("${handler.id}_items" to CamundaValue(array, "json"))
+            return mapOf("${handler.id}_items" to CamundaVariables.encode(children.map { it.toMap() }))
         }
         error("no handler for topic '$topic'")
+    }
+
+    private fun unwrapItemVariables(variables: MutableMap<String, Any?>): MutableMap<String, Any?> {
+        for ((key, value) in variables.toList()) {
+            if (key.endsWith("_item") && value is Map<*, *>) {
+                for ((k, v) in value) {
+                    val name = k as? String ?: continue
+                    if (name !in variables) variables[name] = v
+                }
+            }
+        }
+        return variables
     }
 }

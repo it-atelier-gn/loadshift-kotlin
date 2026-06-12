@@ -40,11 +40,11 @@ class Camunda7Client(
                         append("deploy-changed-only", "true")
                         for ((fileName, bytes) in resources) {
                             append(
-                                "data",
+                                fileName,
                                 bytes,
                                 Headers.build {
                                     append(HttpHeaders.ContentType, ContentType.Application.OctetStream.toString())
-                                    append(HttpHeaders.ContentDisposition, "form-data; name=\"data\"; filename=\"$fileName\"")
+                                    append(HttpHeaders.ContentDisposition, "filename=\"$fileName\"")
                                 },
                             )
                         }

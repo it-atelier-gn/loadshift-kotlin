@@ -135,6 +135,16 @@ code {
   mask-image: radial-gradient(ellipse 90% 80% at 50% 0%, black 30%, transparent 75%);
 }
 
+.voxel-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.5;
+  pointer-events: none;
+  mask-image: radial-gradient(ellipse 95% 90% at 50% 35%, black 40%, transparent 80%);
+}
+
 .hero-inner {
   position: relative;
   max-width: 1060px;

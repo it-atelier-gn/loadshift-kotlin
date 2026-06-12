@@ -50,7 +50,7 @@ class Camunda8Client(
                                 bytes,
                                 Headers.build {
                                     append(HttpHeaders.ContentType, ContentType.Application.OctetStream.toString())
-                                    append(HttpHeaders.ContentDisposition, "form-data; name=\"resources\"; filename=\"$fileName\"")
+                                    append(HttpHeaders.ContentDisposition, "filename=\"$fileName\"")
                                 },
                             )
                         }
@@ -102,7 +102,7 @@ class Camunda8Client(
         val response = http.post("$v2/process-instances/search") {
             auth()
             contentType(ContentType.Application.Json)
-            setBody(SearchRequest(SearchFilter(processDefinitionId)))
+            setBody(SearchRequest(SearchFilter(processDefinitionId, state = "ACTIVE")))
         }
         if (!response.status.isSuccess()) return 0
         return response.body<SearchResponse>().page.totalItems

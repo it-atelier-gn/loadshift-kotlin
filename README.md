@@ -47,6 +47,31 @@ cd loadshift-kotlin
 
 ---
 
+## End-to-end tests
+
+The Camunda modules contain full-loop e2e tests (`Camunda7E2eTest`, `Camunda8E2eTest`) that deploy a compiled workflow to a real engine, work the external tasks/jobs, and assert the run result. They use [Testcontainers](https://testcontainers.com/) to start minimal engines automatically:
+
+- Camunda 7: `camunda/camunda-bpm-platform:run-7.24.0`
+- Camunda 8: `camunda/camunda:8.9.8` with H2 secondary storage and the unprotected API (no Elasticsearch needed)
+
+`./amper test` runs them whenever Docker is available; without Docker they skip. To reuse an already-running engine instead, set `LOADSHIFT_C7_BASE` (e.g. `http://localhost:8080/engine-rest`) or `LOADSHIFT_C8_BASE` (e.g. `http://localhost:8080`).
+
+---
+
+## Examples: DSL → BPMN
+
+`scripts/examples.main.kts` compiles a set of example workflows with both Camunda dialects, verifies the BPMN structurally (service task topics, gateways, call activities, FEEL conditions, complete diagram interchange), and generates [docs/examples.html](https://it-atelier-gn.github.io/loadshift-kotlin/examples.html) — DSL source on the left, the rendered BPMN diagram (bpmn-js) on the right.
+
+Requires the [Kotlin 2.4 command-line compiler](https://kotlinlang.org/docs/command-line.html) and a prior `./amper build`:
+
+```sh
+./scripts/examples.sh           # verify + regenerate docs/examples.html
+./scripts/examples.sh verify    # structural checks only
+# Windows: powershell -File scripts\examples.ps1 [verify]
+```
+
+---
+
 ## Web Console
 
 Every backend implements the introspection API (`IntrospectableBackend` in `loadshift-core`): run state, progress counters, dead letters, and the flow structure. `loadshift-web` serves it as JSON plus an HTML dashboard:

@@ -39,7 +39,7 @@ data class FailJobRequest(
 )
 
 @Serializable
-data class SearchFilter(val processDefinitionId: String)
+data class SearchFilter(val processDefinitionId: String, val state: String? = null)
 
 @Serializable
 data class SearchRequest(val filter: SearchFilter)
