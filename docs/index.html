@@ -103,6 +103,52 @@ cd loadshift-kotlin
 done=3 failed=3 deadLetters=3
   DLQ topic=cleanup error=invalid email for cust-1-c</code></pre>
   </div>
+
+  <p>Or pull it into an existing project from Maven Central
+  (<code>io.github.it-atelier-gn</code>, version <code>0.1.0</code>):</p>
+  <div class="codecard">
+    <div class="codecard-head">
+      <div class="tabs">
+        <button class="tab active" data-tab="kts" type="button">Gradle (kts)</button>
+        <button class="tab" data-tab="groovy" type="button">Gradle</button>
+        <button class="tab" data-tab="maven" type="button">Maven</button>
+      </div>
+      <button class="copy" type="button">COPY</button>
+    </div>
+    <pre class="tab-panel active" data-tab="kts"><code class="lang-kotlin">dependencies {
+    implementation("io.github.it-atelier-gn:loadshift-core:0.1.0")
+    implementation("io.github.it-atelier-gn:loadshift-local:0.1.0")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-7:0.1.0")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-8:0.1.0")
+}</code></pre>
+    <pre class="tab-panel" data-tab="groovy"><code class="lang-groovy">dependencies {
+    implementation 'io.github.it-atelier-gn:loadshift-core:0.1.0'
+    implementation 'io.github.it-atelier-gn:loadshift-local:0.1.0'
+    implementation 'io.github.it-atelier-gn:loadshift-camunda-7:0.1.0'
+    implementation 'io.github.it-atelier-gn:loadshift-camunda-8:0.1.0'
+}</code></pre>
+    <pre class="tab-panel" data-tab="maven"><code class="lang-xml">&lt;dependency&gt;
+    &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
+    &lt;artifactId&gt;loadshift-core&lt;/artifactId&gt;
+    &lt;version&gt;0.1.0&lt;/version&gt;
+&lt;/dependency&gt;
+&lt;dependency&gt;
+    &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
+    &lt;artifactId&gt;loadshift-local&lt;/artifactId&gt;
+    &lt;version&gt;0.1.0&lt;/version&gt;
+&lt;/dependency&gt;
+&lt;dependency&gt;
+    &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
+    &lt;artifactId&gt;loadshift-camunda-7&lt;/artifactId&gt;
+    &lt;version&gt;0.1.0&lt;/version&gt;
+&lt;/dependency&gt;
+&lt;dependency&gt;
+    &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
+    &lt;artifactId&gt;loadshift-camunda-8&lt;/artifactId&gt;
+    &lt;version&gt;0.1.0&lt;/version&gt;
+&lt;/dependency&gt;</code></pre>
+  </div>
+  <p class="note">Pick the modules you need — see <a href="#modules">Modules</a> for what each one contains.</p>
 </section>
 
 <section id="work-items" class="block">

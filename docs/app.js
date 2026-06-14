@@ -44,9 +44,22 @@
     }).join('\n');
   });
 
+  document.querySelectorAll('.tabs .tab').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var card = btn.closest('.codecard');
+      card.querySelectorAll('.tab').forEach(function (t) {
+        t.classList.toggle('active', t === btn);
+      });
+      card.querySelectorAll('.tab-panel').forEach(function (p) {
+        p.classList.toggle('active', p.dataset.tab === btn.dataset.tab);
+      });
+    });
+  });
+
   document.querySelectorAll('.copy').forEach(function (btn) {
     btn.addEventListener('click', function () {
-      var code = btn.closest('.codecard').querySelector('code');
+      var card = btn.closest('.codecard');
+      var code = (card.querySelector('.tab-panel.active code') || card.querySelector('code'));
       var text = code.textContent.replace(/^\$ /gm, '');
       navigator.clipboard.writeText(text).then(function () {
         btn.textContent = 'COPIED';
