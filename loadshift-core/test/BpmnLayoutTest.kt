@@ -86,6 +86,21 @@ class BpmnLayoutTest {
     }
 
     @Test
+    fun whileLoopHasNoRedundantGatewayAndAStraightSpine() {
+        val wf = workflow<LayoutItem>("loop") {
+            items(emptyList())
+            whileLoop({ it.n < 3 }) { task("retry") { } }
+        }
+        val process = BpmnCompiler.compile(wf)[0]
+        assertEquals(1, process.model.getModelElementsByType(Gateway::class.java).size, "loop should emit a single split gateway")
+        val shapes = shapes(process)
+        fun center(match: String) = shapes.values.first { it.bpmnElement.id.contains(match) }.bounds.let { it.y + it.height / 2 }
+        val spine = listOf("start", "decision", "gw", "end").map { center(it) }
+        assertTrue(spine.max() - spine.min() < 1.0, "start, guard, gateway and end should share one row")
+        assertTrue(kotlin.math.abs(center("retry") - center("start")) > 50.0, "loop body should sit off the spine")
+    }
+
+    @Test
     fun decisionExpandAndGatewayNamesAreReadable() {
         val wf = workflow<LayoutItem>("names") {
             items(emptyList())

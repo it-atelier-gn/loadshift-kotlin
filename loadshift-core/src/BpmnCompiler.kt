@@ -114,7 +114,6 @@ object BpmnCompiler {
                 val decisionId = "decision_${step.id}"
                 refs += ServiceTaskRef(decisionId, "decision_${step.id}")
                 val split = gw.next("gw")
-                val exit = gw.next("gw")
                 val resultExpr = "\${${step.id}_result}"
 
                 b.serviceTask(decisionId).name("loop guard").exclusiveGateway(split)
@@ -122,7 +121,7 @@ object BpmnCompiler {
                 bodyB = compileStep(step.body, bodyB, refs, gw)
                 bodyB.connectTo(decisionId)
 
-                b.moveToNode(split).condition("done", "\${!(${step.id}_result)}").exclusiveGateway(exit)
+                b.moveToNode(split).condition("done", "\${!(${step.id}_result)}")
             }
 
             is Parallel -> {
