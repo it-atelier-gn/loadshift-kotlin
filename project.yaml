@@ -5,3 +5,5 @@ modules:
   - ./loadshift-demo
   - ./loadshift-local
   - ./loadshift-web
+  - ./scripts/engine
+  - ./scripts/examples

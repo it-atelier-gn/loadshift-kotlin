@@ -60,31 +60,27 @@ The Camunda modules contain full-loop e2e tests (`Camunda7E2eTest`, `Camunda8E2e
 
 ## Local dev engine
 
-To develop and test workflows against a real engine, start an empty one with a single Kotlin script (Docker and the Kotlin 2.4 CLI required):
+To develop and test workflows against a real engine, start an empty one with a single command (Docker and the Kotlin 2.4 CLI required):
 
 ```sh
-./scripts/engine.sh c7              # Camunda 7 Run on :8080 — engine-rest + Cockpit (demo/demo)
-./scripts/engine.sh c8              # Camunda 8.9 on :8080 — REST v2 + Operate (demo/demo), H2 storage
-./scripts/engine.sh c8 logs         # follow logs
-./scripts/engine.sh c8 stop
-./scripts/engine.sh c7 start 9090   # custom port
-# Windows: powershell -File scripts\engine.ps1 c8 [stop|logs] [port]
+.\kotlin run -m engine c7              # Camunda 7 Run on :8080 — engine-rest + Cockpit (demo/demo)
+.\kotlin run -m engine c8              # Camunda 8.9 on :8080 — REST v2 + Operate (demo/demo), H2 storage
+.\kotlin run -m engine c8 logs         # follow logs
+.\kotlin run -m engine c8 stop         # stop
+.\kotlin run -m engine c7 start 9090   # custom port
 ```
-
-The wrappers launch `scripts/engine.main.kts`; the script waits until the REST API answers and prints the matching backend constructor, e.g. `Camunda7Backend("http://localhost:8080/engine-rest")`.
 
 ---
 
 ## Examples: DSL → BPMN
 
-`scripts/examples.main.kts` compiles a set of example workflows with both Camunda dialects, verifies the BPMN structurally (service task topics, gateways, call activities, FEEL conditions, complete diagram interchange), and generates [docs/examples.html](https://it-atelier-gn.github.io/loadshift-kotlin/examples.html) — DSL source on the left, the rendered BPMN diagram (bpmn-js) on the right.
+`scripts/examples` compiles a set of example workflows with both Camunda dialects, verifies the BPMN structurally (service task topics, gateways, call activities, FEEL conditions, complete diagram interchange), and generates [docs/examples.html](https://it-atelier-gn.github.io/loadshift-kotlin/examples.html) — DSL source on the left, the rendered BPMN diagram (bpmn-js) on the right.
 
-Requires the [Kotlin 2.4 command-line compiler](https://kotlinlang.org/docs/command-line.html) and a prior `./kotlin build`:
+Requires the [Kotlin 2.4 command-line compiler](https://kotlinlang.org/docs/command-line.html):
 
 ```sh
-./scripts/examples.sh           # verify + regenerate docs/examples.html
-./scripts/examples.sh verify    # structural checks only
-# Windows: powershell -File scripts\examples.ps1 [verify]
+.\kotlin run -m examples           # verify + regenerate docs/examples.html
+.\kotlin run -m examples verify    # structural checks only
 ```
 
 ---
