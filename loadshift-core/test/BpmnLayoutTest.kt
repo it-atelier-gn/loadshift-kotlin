@@ -29,7 +29,7 @@ class BpmnLayoutTest {
     @Test
     fun sequenceLaysOutOnAStraightBackbone() {
         val wf = workflow<LayoutItem>("seq") {
-            items(emptyList())
+            input(emptyList())
             task("a") { }
             task("b") { }
             task("c") { }
@@ -45,13 +45,13 @@ class BpmnLayoutTest {
     @Test
     fun noTwoShapesOverlap() {
         val wf = workflow<LayoutItem>("mix") {
-            items(emptyList())
-            ifThen({ it.n > 0 }) { task("hi") { } } elseThen { task("lo") { } }
+            input(emptyList())
+            condition({ it.n > 0 }) { task("hi") { } } otherwise { task("lo") { } }
             parallel {
                 branch { task("p1") { } }
                 branch { task("p2") { } }
             }
-            whileLoop({ it.n < 3 }) { task("again") { } }
+            loop({ it.n < 3 }) { task("again") { } }
         }
         val shapes = shapes(BpmnCompiler.compile(wf)[0]).values.toList()
         for (i in shapes.indices) for (j in i + 1 until shapes.size) {
@@ -62,8 +62,8 @@ class BpmnLayoutTest {
     @Test
     fun branchesAreSeparatedVertically() {
         val wf = workflow<LayoutItem>("branch") {
-            items(emptyList())
-            ifThen({ it.n > 0 }) { task("hi") { } } elseThen { task("lo") { } }
+            input(emptyList())
+            condition({ it.n > 0 }) { task("hi") { } } otherwise { task("lo") { } }
         }
         val shapes = shapes(BpmnCompiler.compile(wf)[0])
         val hi = shapes.values.first { it.bpmnElement.id.contains("hi") }.bounds
@@ -74,8 +74,8 @@ class BpmnLayoutTest {
     @Test
     fun loopBackEdgeIsRoutedBelowTheNodes() {
         val wf = workflow<LayoutItem>("loop") {
-            items(emptyList())
-            whileLoop({ it.n < 3 }) { task("retry") { } }
+            input(emptyList())
+            loop({ it.n < 3 }) { task("retry") { } }
         }
         val process = BpmnCompiler.compile(wf)[0]
         val bottom = shapes(process).values.maxOf { it.bounds.y + it.bounds.height }
@@ -86,10 +86,10 @@ class BpmnLayoutTest {
     }
 
     @Test
-    fun whileLoopHasNoRedundantGatewayAndAStraightSpine() {
+    fun loopHasNoRedundantGatewayAndAStraightSpine() {
         val wf = workflow<LayoutItem>("loop") {
-            items(emptyList())
-            whileLoop({ it.n < 3 }) { task("retry") { } }
+            input(emptyList())
+            loop({ it.n < 3 }) { task("retry") { } }
         }
         val process = BpmnCompiler.compile(wf)[0]
         assertEquals(1, process.model.getModelElementsByType(Gateway::class.java).size, "loop should emit a single split gateway")
@@ -103,10 +103,10 @@ class BpmnLayoutTest {
     @Test
     fun decisionExpandAndGatewayNamesAreReadable() {
         val wf = workflow<LayoutItem>("names") {
-            items(emptyList())
-            ifThen({ it.n > 0 }) { task("hi") { } } elseThen { task("lo") { } }
-            whileLoop({ it.n < 3 }) { task("again") { } }
-            forEach<LayoutItem>(expand = { emptyList() }) { task("leaf") { } }
+            input(emptyList())
+            condition({ it.n > 0 }) { task("hi") { } } otherwise { task("lo") { } }
+            loop({ it.n < 3 }) { task("again") { } }
+            fanOut<LayoutItem>(expand = { emptyList() }) { task("leaf") { } }
         }
         val root = BpmnCompiler.compile(wf)[0]
         val taskNames = root.model.getModelElementsByType(ServiceTask::class.java).map { it.name }.toSet()

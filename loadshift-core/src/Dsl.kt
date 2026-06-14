@@ -65,7 +65,7 @@ open class FlowSpec<W : WorkItemBase> internal constructor(
         body: suspend (W) -> Unit,
     ) = task(topic.name, retry, timeout, rateLimit, body)
 
-    fun ifThen(predicate: (W) -> Boolean, then: FlowSpec<W>.() -> Unit): ElseHandle<W> {
+    fun condition(predicate: (W) -> Boolean, then: FlowSpec<W>.() -> Unit): ElseHandle<W> {
         val id = idgen.next("c")
         decisions["decision_$id"] = predicate
         val thenSpec = child().apply(then)
@@ -75,7 +75,7 @@ open class FlowSpec<W : WorkItemBase> internal constructor(
         return ElseHandle(this, index, id, predicate, thenSpec.toStep())
     }
 
-    fun whileLoop(predicate: (W) -> Boolean, body: FlowSpec<W>.() -> Unit) {
+    fun loop(predicate: (W) -> Boolean, body: FlowSpec<W>.() -> Unit) {
         val id = idgen.next("l")
         decisions["decision_$id"] = predicate
         val bodySpec = child().apply(body)
@@ -88,25 +88,25 @@ open class FlowSpec<W : WorkItemBase> internal constructor(
         steps += Parallel(ps.branchSteps.toList())
     }
 
-    inline fun <reified C : WorkItemBase> forEach(
+    inline fun <reified C : WorkItemBase> fanOut(
         noinline expand: suspend (W) -> List<C>,
         concurrency: Int? = null,
         noinline body: FlowSpec<C>.() -> Unit,
-    ) = forEachInternal(
+    ) = fanOutInternal(
         childFactoryFor(C::class),
         { w -> kotlinx.coroutines.flow.flow { for (c in expand(w)) emit(c) } },
         concurrency,
         body,
     )
 
-    inline fun <reified C : WorkItemBase> forEach(
+    inline fun <reified C : WorkItemBase> fanOut(
         paginated: Paginated<W, C>,
         concurrency: Int? = null,
         noinline body: FlowSpec<C>.() -> Unit,
-    ) = forEachInternal(childFactoryFor(C::class), { w -> paginated.asFlow(w) }, concurrency, body)
+    ) = fanOutInternal(childFactoryFor(C::class), { w -> paginated.asFlow(w) }, concurrency, body)
 
     @PublishedApi
-    internal fun <C : WorkItemBase> forEachInternal(
+    internal fun <C : WorkItemBase> fanOutInternal(
         childFactory: (MutableMap<String, Any?>) -> C,
         expand: suspend (W) -> Flow<C>,
         concurrency: Int?,
@@ -154,7 +154,7 @@ class ElseHandle<W : WorkItemBase> internal constructor(
     private val predicate: (W) -> Boolean,
     private val thenStep: Step<W>,
 ) {
-    infix fun elseThen(block: FlowSpec<W>.() -> Unit) {
+    infix fun otherwise(block: FlowSpec<W>.() -> Unit) {
         parent.setElse(index, id, predicate, thenStep, block)
     }
 }
@@ -177,17 +177,17 @@ class WorkflowSpec<W : WorkItemBase> @PublishedApi internal constructor(
 ) : FlowSpec<W>(factory, sanitizeId(wfName), IdGen()) {
     private var seed: Seed<W> = { emptyFlow() }
 
-    fun items(list: List<W>) {
+    fun input(list: List<W>) {
         seed = { flow { for (w in list) emit(w) } }
     }
 
-    fun items(vararg items: W) = items(items.toList())
+    fun input(vararg items: W) = input(items.toList())
 
-    fun source(seed: suspend () -> Flow<W>) {
+    fun input(seed: suspend () -> Flow<W>) {
         this.seed = seed
     }
 
-    fun source(paginated: Paginated<Unit, W>) {
+    fun input(paginated: Paginated<Unit, W>) {
         seed = { paginated.asFlow(Unit) }
     }
 

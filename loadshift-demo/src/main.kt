@@ -43,11 +43,11 @@ fun main(args: Array<String>) = runBlocking<Unit> {
     val customers = (1..3).map { n -> User().apply { id = "cust-$n" } }
 
     val cleanup = workflow<User>("contact-cleanup") {
-        items(customers)
-        forEach<Contact>(expand = { fetchContacts(it.id) }, concurrency = 4) {
-            ifThen({ it.email == null }) {
+        input(customers)
+        fanOut<Contact>(expand = { fetchContacts(it.id) }, concurrency = 4) {
+            condition({ it.email == null }) {
                 task("flag-missing") { println("  flag-missing ${it.id}") }
-            } elseThen {
+            } otherwise {
                 task("cleanup", retry = RetryPolicy(maxAttempts = 3, baseDelay = 5.milliseconds, jitter = false)) {
                     if (it.email == "bad") throw IllegalStateException("invalid email for ${it.id}")
                     println("  cleanup ${it.id} <${it.email}>")
@@ -75,11 +75,11 @@ private suspend fun uiDemo() {
 
     val customers = (1..6).map { n -> User().apply { id = "cust-$n" } }
     val cleanup = workflow<User>("contact-cleanup") {
-        items(customers)
-        forEach<Contact>(expand = { fetchContacts(it.id) }, concurrency = 2) {
-            ifThen({ it.email == null }) {
+        input(customers)
+        fanOut<Contact>(expand = { fetchContacts(it.id) }, concurrency = 2) {
+            condition({ it.email == null }) {
                 task("flag-missing") { delay(800) }
-            } elseThen {
+            } otherwise {
                 task("cleanup", retry = RetryPolicy(maxAttempts = 2, baseDelay = 100.milliseconds, jitter = false)) {
                     delay(800)
                     if (it.email == "bad") throw IllegalStateException("invalid email for ${it.id}")

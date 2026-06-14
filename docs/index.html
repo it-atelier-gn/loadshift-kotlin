@@ -105,7 +105,7 @@ done=3 failed=3 deadLetters=3
   </div>
 
   <p>Or pull it into an existing project from Maven Central
-  (<code>io.github.it-atelier-gn</code>, version <code>0.1.0</code>):</p>
+  (<code>io.github.it-atelier-gn</code>, version <code>0.2.0</code>):</p>
   <div class="codecard">
     <div class="codecard-head">
       <div class="tabs">
@@ -116,36 +116,36 @@ done=3 failed=3 deadLetters=3
       <button class="copy" type="button">COPY</button>
     </div>
     <pre class="tab-panel active" data-tab="kts"><code class="lang-kotlin">dependencies {
-    implementation("io.github.it-atelier-gn:loadshift-core:0.1.0")
-    implementation("io.github.it-atelier-gn:loadshift-local:0.1.0")
-    implementation("io.github.it-atelier-gn:loadshift-camunda-7:0.1.0")
-    implementation("io.github.it-atelier-gn:loadshift-camunda-8:0.1.0")
+    implementation("io.github.it-atelier-gn:loadshift-core:0.2.0")
+    implementation("io.github.it-atelier-gn:loadshift-local:0.2.0")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-7:0.2.0")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-8:0.2.0")
 }</code></pre>
     <pre class="tab-panel" data-tab="groovy"><code class="lang-groovy">dependencies {
-    implementation 'io.github.it-atelier-gn:loadshift-core:0.1.0'
-    implementation 'io.github.it-atelier-gn:loadshift-local:0.1.0'
-    implementation 'io.github.it-atelier-gn:loadshift-camunda-7:0.1.0'
-    implementation 'io.github.it-atelier-gn:loadshift-camunda-8:0.1.0'
+    implementation 'io.github.it-atelier-gn:loadshift-core:0.2.0'
+    implementation 'io.github.it-atelier-gn:loadshift-local:0.2.0'
+    implementation 'io.github.it-atelier-gn:loadshift-camunda-7:0.2.0'
+    implementation 'io.github.it-atelier-gn:loadshift-camunda-8:0.2.0'
 }</code></pre>
     <pre class="tab-panel" data-tab="maven"><code class="lang-xml">&lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-core&lt;/artifactId&gt;
-    &lt;version&gt;0.1.0&lt;/version&gt;
+    &lt;version&gt;0.2.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-local&lt;/artifactId&gt;
-    &lt;version&gt;0.1.0&lt;/version&gt;
+    &lt;version&gt;0.2.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-camunda-7&lt;/artifactId&gt;
-    &lt;version&gt;0.1.0&lt;/version&gt;
+    &lt;version&gt;0.2.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-camunda-8&lt;/artifactId&gt;
-    &lt;version&gt;0.1.0&lt;/version&gt;
+    &lt;version&gt;0.2.0&lt;/version&gt;
 &lt;/dependency&gt;</code></pre>
   </div>
   <p class="note">Pick the modules you need — see <a href="#modules">Modules</a> for what each one contains.</p>
@@ -181,12 +181,12 @@ val vip = Customer().apply { id = "cust-1" }</code></pre>
 <section id="workflows" class="block">
   <h2><span class="num">02</span>Workflows &amp; tasks</h2>
   <p>A workflow is a named sequence of steps over one work-item type.
-  <code>items(...)</code> seeds it with a fixed list and <code>task</code> declares
+  <code>input(...)</code> seeds it with a fixed list and <code>task</code> declares
   a unit of work under a topic name.</p>
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>Basics.kt</span><button class="copy" type="button">COPY</button></div>
 <pre><code class="lang-kotlin">val onboarding = workflow&lt;Customer&gt;("onboarding") {
-    items(customers)
+    input(customers)
 
     task("validate") { println("validating ${it.id}") }
     task("provision") { provision(it) }
@@ -200,18 +200,18 @@ val vip = Customer().apply { id = "cust-1" }</code></pre>
 <section id="branching" class="block">
   <h2><span class="num">03</span>Branching &amp; loops</h2>
   <p>Control flow is part of the definition, not buried in task bodies, so it
-  compiles to real BPMN gateways. <code>ifThen / elseThen</code> branches,
-  <code>whileLoop</code> repeats while a guard holds, <code>parallel</code> runs
+  compiles to real BPMN gateways. <code>condition / otherwise</code> branches,
+  <code>loop</code> repeats while a guard holds, <code>parallel</code> runs
   branches concurrently.</p>
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>Branching.kt</span><button class="copy" type="button">COPY</button></div>
-<pre><code class="lang-kotlin">ifThen({ it.email == null }) {
+<pre><code class="lang-kotlin">condition({ it.email == null }) {
     task("flag-missing") { flag(it) }
-} elseThen {
+} otherwise {
     task("cleanup") { clean(it) }
 }
 
-whileLoop({ it.attempts &lt; 3 }) {
+loop({ it.attempts &lt; 3 }) {
     task("poll-status") { it.attempts = it.attempts + 1 }
 }
 
@@ -233,12 +233,12 @@ parallel {
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>FanOut.kt</span><button class="copy" type="button">COPY</button></div>
 <pre><code class="lang-kotlin">val cleanup = workflow&lt;Customer&gt;("contact-cleanup") {
-    items(customers)
+    input(customers)
 
-    forEach&lt;Contact&gt;(expand = { fetchContacts(it.id) }, concurrency = 4) {
-        ifThen({ it.email == null }) {
+    fanOut&lt;Contact&gt;(expand = { fetchContacts(it.id) }, concurrency = 4) {
+        condition({ it.email == null }) {
             task("flag-missing") { flag(it) }
-        } elseThen {
+        } otherwise {
             task("scrub") { scrub(it) }
         }
     }
@@ -259,14 +259,14 @@ parallel {
 }
 
 val sync = workflow&lt;Customer&gt;("sync-all") {
-    source(allCustomers)
+    input(allCustomers)
     task("sync") { push(it) }
 }</code></pre>
   </div>
   <p>Fan-out can paginate per parent too, with <code>paginateWith</code>:</p>
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>PaginatedFanOut.kt</span><button class="copy" type="button">COPY</button></div>
-<pre><code class="lang-kotlin">forEach&lt;Contact&gt;(
+<pre><code class="lang-kotlin">fanOut&lt;Contact&gt;(
     paginateWith { customer, cursor -&gt; crm.contacts(customer.id, cursor) },
     concurrency = 8,
 ) {

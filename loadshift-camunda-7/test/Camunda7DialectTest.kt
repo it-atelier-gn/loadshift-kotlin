@@ -19,7 +19,7 @@ class Camunda7DialectTest {
     @Test
     fun decoratesServiceTasksAsExternalWithTopic() {
         val wf = workflow<Job>("dialect-test") {
-            items(emptyList())
+            input(emptyList())
             task("cleanup") { }
         }
         val process = BpmnCompiler.compile(wf).first()
@@ -32,8 +32,8 @@ class Camunda7DialectTest {
     @Test
     fun fanOutIteratesSpinElementsAndMapsItemIntoChild() {
         val wf = workflow<Job>("dialect-fanout") {
-            items(emptyList())
-            forEach<Line>(expand = { emptyList() }) {
+            input(emptyList())
+            fanOut<Line>(expand = { emptyList() }) {
                 task("price") { }
             }
         }

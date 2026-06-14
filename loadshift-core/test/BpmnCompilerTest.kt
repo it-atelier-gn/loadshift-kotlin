@@ -15,13 +15,13 @@ private class Line : WorkItemBase() {
 
 class BpmnCompilerTest {
     private fun workflowWithEverything(): Workflow<Order> = workflow("order-job") {
-        items(emptyList())
-        ifThen({ it.paid }) { task("receipt") { } } elseThen { task("dunning") { } }
+        input(emptyList())
+        condition({ it.paid }) { task("receipt") { } } otherwise { task("dunning") { } }
         parallel {
             branch { task("index") { } }
             branch { task("notify") { } }
         }
-        forEach<Line>(expand = { emptyList() }) {
+        fanOut<Line>(expand = { emptyList() }) {
             task("price-line") { }
         }
     }

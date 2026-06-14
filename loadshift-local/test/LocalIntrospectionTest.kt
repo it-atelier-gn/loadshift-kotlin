@@ -24,7 +24,7 @@ class LocalIntrospectionTest {
     fun completedRunIsVisibleThroughIntrospection() = runTest {
         val backend = LocalBackend()
         val wf = workflow<Doc>("intro-ok") {
-            items(listOf(doc("a"), doc("b")))
+            input(listOf(doc("a"), doc("b")))
             task("noop") {}
         }
         backend.run(wf).await()
@@ -46,7 +46,7 @@ class LocalIntrospectionTest {
     fun deadLettersShowUpInSnapshot() = runTest {
         val backend = LocalBackend()
         val wf = workflow<Doc>("intro-dlq") {
-            items(listOf(doc("bad")))
+            input(listOf(doc("bad")))
             task("explode", retry = RetryPolicy.None) { error("kaboom") }
         }
         backend.run(wf, RunConfig(onError = ErrorPolicy.DeadLetter)).await()
@@ -62,7 +62,7 @@ class LocalIntrospectionTest {
     fun eachRunGetsItsOwnSnapshot() = runTest {
         val backend = LocalBackend()
         val wf = workflow<Doc>("intro-multi") {
-            items(listOf(doc("x")))
+            input(listOf(doc("x")))
             task("noop") {}
         }
         backend.run(wf).await()

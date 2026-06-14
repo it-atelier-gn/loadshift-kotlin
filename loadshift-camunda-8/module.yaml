@@ -21,7 +21,7 @@ settings:
   publishing:
     enabled: true
     group: io.github.it-atelier-gn
-    version: 0.1.0
+    version: 0.2.0
 
 test-dependencies:
   - $libs.kotlinx.coroutines.test
