@@ -33,12 +33,16 @@ fun main(args: Array<String>) {
     val action = args.getOrNull(1) ?: "start"
     val port = args.getOrNull(2)?.toIntOrNull() ?: 8080
 
-    if (engine !in setOf("c7", "c8") || action !in setOf("start", "stop", "logs")) {
-        System.err.println("usage: kotlin run -m engine c7|c8 [start|stop|logs] [port]")
+    if (engine !in setOf("c7", "c8", "cib7") || action !in setOf("start", "stop", "logs")) {
+        System.err.println("usage: kotlin run -m engine c7|c8|cib7 [start|stop|logs] [port]")
         exitProcess(1)
     }
 
-    val name = if (engine == "c7") "loadshift-dev-camunda7" else "loadshift-dev-camunda8"
+    val name = when (engine) {
+        "c7" -> "loadshift-dev-camunda7"
+        "cib7" -> "loadshift-dev-cibseven"
+        else -> "loadshift-dev-camunda8"
+    }
 
     when (action) {
         "stop" -> {
@@ -53,6 +57,8 @@ fun main(args: Array<String>) {
 
     val (runCode, runOutput) = if (engine == "c7") {
         container("run", "-d", "--name", name, "-p", "$port:8080", "camunda/camunda-bpm-platform:run-7.24.0")
+    } else if (engine == "cib7") {
+        container("run", "-d", "--name", name, "-p", "$port:8080", "cibseven/cibseven:run-latest")
     } else {
         val config = Paths.get("scripts/engine/c8-application.yaml").toAbsolutePath()
         if (!Files.exists(config)) {
@@ -72,7 +78,7 @@ fun main(args: Array<String>) {
         exitProcess(runCode)
     }
 
-    val probe = if (engine == "c7") "http://localhost:$port/engine-rest/version" else "http://localhost:$port/v2/topology"
+    val probe = if (engine == "c8") "http://localhost:$port/v2/topology" else "http://localhost:$port/engine-rest/version"
     val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build()
 
     println("waiting for $name ...")
@@ -99,6 +105,12 @@ fun main(args: Array<String>) {
         println("Camunda 7 ready.")
         println("  REST     http://localhost:$port/engine-rest")
         println("  Cockpit  http://localhost:$port/camunda  (demo/demo)")
+        println()
+        println("  val backend = Camunda7Backend(\"http://localhost:$port/engine-rest\")")
+    } else if (engine == "cib7") {
+        println("CIB seven ready.")
+        println("  REST     http://localhost:$port/engine-rest")
+        println("  Cockpit  http://localhost:$port/camunda/app/  (demo/demo)")
         println()
         println("  val backend = Camunda7Backend(\"http://localhost:$port/engine-rest\")")
     } else {

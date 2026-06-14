@@ -24,6 +24,65 @@ Full examples and reference: **[it-atelier-gn.github.io/loadshift-kotlin](https:
 
 ---
 
+## Add as a dependency
+
+Published to Maven Central under group `io.github.it-atelier-gn`, version `0.1.0`. Pick the modules you need (see [Modules](#modules)).
+
+<details>
+<summary>Gradle (Kotlin DSL)</summary>
+
+```kotlin
+dependencies {
+    implementation("io.github.it-atelier-gn:loadshift-core:0.1.0")
+    implementation("io.github.it-atelier-gn:loadshift-local:0.1.0")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-7:0.1.0")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-8:0.1.0")
+}
+```
+</details>
+
+<details>
+<summary>Gradle (Groovy DSL)</summary>
+
+```groovy
+dependencies {
+    implementation 'io.github.it-atelier-gn:loadshift-core:0.1.0'
+    implementation 'io.github.it-atelier-gn:loadshift-local:0.1.0'
+    implementation 'io.github.it-atelier-gn:loadshift-camunda-7:0.1.0'
+    implementation 'io.github.it-atelier-gn:loadshift-camunda-8:0.1.0'
+}
+```
+</details>
+
+<details>
+<summary>Maven</summary>
+
+```xml
+<dependency>
+    <groupId>io.github.it-atelier-gn</groupId>
+    <artifactId>loadshift-core</artifactId>
+    <version>0.1.0</version>
+</dependency>
+<dependency>
+    <groupId>io.github.it-atelier-gn</groupId>
+    <artifactId>loadshift-local</artifactId>
+    <version>0.1.0</version>
+</dependency>
+<dependency>
+    <groupId>io.github.it-atelier-gn</groupId>
+    <artifactId>loadshift-camunda-7</artifactId>
+    <version>0.1.0</version>
+</dependency>
+<dependency>
+    <groupId>io.github.it-atelier-gn</groupId>
+    <artifactId>loadshift-camunda-8</artifactId>
+    <version>0.1.0</version>
+</dependency>
+```
+</details>
+
+---
+
 ## Quick Start
 
 ### Prerequisites
@@ -64,6 +123,7 @@ To develop and test workflows against a real engine, start an empty one with a s
 
 ```sh
 .\kotlin run -m engine c7              # Camunda 7 Run on :8080 — engine-rest + Cockpit (demo/demo)
+.\kotlin run -m engine cib7            # CIB seven (Camunda 7 fork) on :8080 — engine-rest + Cockpit (demo/demo)
 .\kotlin run -m engine c8              # Camunda 8.9 on :8080 — REST v2 + Operate (demo/demo), H2 storage
 .\kotlin run -m engine c8 logs         # follow logs
 .\kotlin run -m engine c8 stop         # stop

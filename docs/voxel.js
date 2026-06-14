@@ -20,7 +20,7 @@ function codeShape() {
   const cells = [];
   rows.forEach((row, y) => {
     for (const [start, len, c] of row) {
-      for (let x = start; x < start + len; x++) cells.push({ x: x, y: y * 1.6, c });
+      for (let x = start; x < start + len; x++) cells.push({ x: x, y: y * 1.85, c });
     }
   });
   return cells;
@@ -92,7 +92,7 @@ function ease(t) {
 
 export function startVoxels(canvas) {
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const code = center(codeShape(), 1.05);
+  const code = center(codeShape(), 0.95).map((cell) => ({ ...cell, x: cell.x + 4.5 }));
   const bpmn = center(bpmnShape(), 1.25);
   const count = Math.max(code.length, bpmn.length);
 
@@ -115,8 +115,15 @@ export function startVoxels(canvas) {
   );
   const group = new THREE.Group();
   group.add(mesh);
-  group.rotation.x = -0.18;
   scene.add(group);
+
+  const pointer = { x: 0, y: 0 };
+  if (!reduced) {
+    addEventListener('pointermove', (e) => {
+      pointer.x = (e.clientX / innerWidth) * 2 - 1;
+      pointer.y = (e.clientY / innerHeight) * 2 - 1;
+    });
+  }
 
   const pairs = [];
   for (let i = 0; i < count; i++) {
@@ -143,7 +150,8 @@ export function startVoxels(canvas) {
   function frame(now) {
     const p = reduced ? 1 : phase(now);
     const wobble = reduced ? 0 : Math.sin(now / 4200) * 0.12;
-    group.rotation.y = wobble;
+    group.rotation.y = wobble + pointer.x * 0.3;
+    group.rotation.x = -0.18 + pointer.y * 0.15;
     for (let i = 0; i < count; i++) {
       const pair = pairs[i];
       const local = Math.min(1, Math.max(0, (p - pair.delay) / (1 - 0.35)));
