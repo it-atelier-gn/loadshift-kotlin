@@ -20,9 +20,9 @@ class Camunda8DialectTest {
     @Test
     fun injectsZeebeTaskDefinitionAndCalledElement() {
         val wf = workflow<Job>("c8-test") {
-            items(emptyList())
+            input(emptyList())
             task("cleanup") { }
-            forEach<Line>(expand = { emptyList() }) {
+            fanOut<Line>(expand = { emptyList() }) {
                 task("price") { }
             }
         }
@@ -38,8 +38,8 @@ class Camunda8DialectTest {
     @Test
     fun injectsZeebeLoopCharacteristics() {
         val wf = workflow<Job>("c8-fanout") {
-            items(emptyList())
-            forEach<Line>(expand = { emptyList() }) {
+            input(emptyList())
+            fanOut<Line>(expand = { emptyList() }) {
                 task("price") { }
             }
         }
@@ -54,10 +54,10 @@ class Camunda8DialectTest {
     @Test
     fun rewritesConditionsToFeel() {
         val wf = workflow<Job>("c8-cond") {
-            items(emptyList())
-            ifThen({ true }) {
+            input(emptyList())
+            condition({ true }) {
                 task("yes") { }
-            } elseThen {
+            } otherwise {
                 task("no") { }
             }
         }

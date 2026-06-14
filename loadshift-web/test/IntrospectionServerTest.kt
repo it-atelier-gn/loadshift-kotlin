@@ -29,7 +29,7 @@ class IntrospectionServerTest {
     fun servesApiAndUi() = runBlocking {
         val backend = LocalBackend()
         val wf = workflow<Doc>("web-flow") {
-            items(listOf(doc("a"), doc("b")))
+            input(listOf(doc("a"), doc("b")))
             task("noop") {}
         }
         backend.run(wf).await()

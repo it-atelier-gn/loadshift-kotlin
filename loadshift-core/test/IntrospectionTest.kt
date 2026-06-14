@@ -20,13 +20,13 @@ private class IntroChild : WorkItemBase() {
 class IntrospectionTest {
 
     private fun sample() = workflow<IntroItem>("intro") {
-        items(emptyList())
-        ifThen({ true }) {
+        input(emptyList())
+        condition({ true }) {
             task("yes") {}
-        } elseThen {
+        } otherwise {
             task("no") {}
         }
-        forEach<IntroChild>(expand = { emptyList() }) {
+        fanOut<IntroChild>(expand = { emptyList() }) {
             task("child") {}
         }
     }

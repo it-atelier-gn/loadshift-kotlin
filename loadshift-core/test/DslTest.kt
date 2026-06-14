@@ -17,15 +17,15 @@ private class Child : WorkItemBase() {
 private fun item(n: Int) = Item().apply { this.n = n }
 
 private fun richWorkflow(): Workflow<Item> = workflow("wf") {
-    items(item(1))
+    input(item(1))
     task("a") { }
-    ifThen({ it.n > 0 }) { task("b") { } } elseThen { task("c") { } }
-    whileLoop({ it.n < 3 }) { task("d") { } }
+    condition({ it.n > 0 }) { task("b") { } } otherwise { task("c") { } }
+    loop({ it.n < 3 }) { task("d") { } }
     parallel {
         branch { task("e") { } }
         branch { task("f") { } }
     }
-    forEach<Child>(expand = { listOf(Child().apply { v = 0 }) }) {
+    fanOut<Child>(expand = { listOf(Child().apply { v = 0 }) }) {
         task("g") { }
     }
 }

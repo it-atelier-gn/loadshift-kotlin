@@ -48,14 +48,14 @@ val examples = listOf(
         blurb = "Tasks run one after another for every seeded item. Each task becomes an external service task.",
         dsl = """
             workflow<Order>("billing-pipeline") {
-                items(orders)
+                input(orders)
                 task("validate") { it.attempts = 0 }
                 task("charge") { charge(it) }
                 task("receipt") { sendReceipt(it) }
             }
         """.trimIndent(),
         flow = workflow<Order>("billing-pipeline") {
-            items(emptyList())
+            input(emptyList())
             task("validate") { }
             task("charge") { }
             task("receipt") { }
@@ -64,22 +64,22 @@ val examples = listOf(
     Example(
         id = "branching",
         title = "Conditional branch",
-        blurb = "ifThen/elseThen compiles to a decision service task plus an exclusive gateway pair.",
+        blurb = "condition/otherwise compiles to a decision service task plus an exclusive gateway pair.",
         dsl = """
             workflow<Order>("order-triage") {
-                items(orders)
-                ifThen({ it.total > 100 }) {
+                input(orders)
+                condition({ it.total > 100 }) {
                     task("manual-review") { review(it) }
-                } elseThen {
+                } otherwise {
                     task("auto-approve") { approve(it) }
                 }
             }
         """.trimIndent(),
         flow = workflow<Order>("order-triage") {
-            items(emptyList())
-            ifThen({ it.total > 100 }) {
+            input(emptyList())
+            condition({ it.total > 100 }) {
                 task("manual-review") { }
-            } elseThen {
+            } otherwise {
                 task("auto-approve") { }
             }
         },
@@ -87,18 +87,18 @@ val examples = listOf(
     Example(
         id = "loop",
         title = "While loop",
-        blurb = "whileLoop compiles to a decision service task with a gateway looping back while the predicate holds.",
+        blurb = "loop compiles to a decision service task with a gateway looping back while the predicate holds.",
         dsl = """
             workflow<Order>("retry-charge") {
-                items(orders)
-                whileLoop({ it.attempts < 3 }) {
+                input(orders)
+                loop({ it.attempts < 3 }) {
                     task("try-charge") { it.attempts = it.attempts + 1 }
                 }
             }
         """.trimIndent(),
         flow = workflow<Order>("retry-charge") {
-            items(emptyList())
-            whileLoop({ it.attempts < 3 }) {
+            input(emptyList())
+            loop({ it.attempts < 3 }) {
                 task("try-charge") { it.attempts = it.attempts + 1 }
             }
         },
@@ -109,7 +109,7 @@ val examples = listOf(
         blurb = "parallel branches compile to a parallel gateway fork/join.",
         dsl = """
             workflow<Order>("fulfilment") {
-                items(orders)
+                input(orders)
                 parallel {
                     branch { task("reserve-stock") { reserve(it) } }
                     branch { task("notify-customer") { notify(it) } }
@@ -118,7 +118,7 @@ val examples = listOf(
             }
         """.trimIndent(),
         flow = workflow<Order>("fulfilment") {
-            items(emptyList())
+            input(emptyList())
             parallel {
                 branch { task("reserve-stock") { } }
                 branch { task("notify-customer") { } }
@@ -129,27 +129,27 @@ val examples = listOf(
     Example(
         id = "fanout",
         title = "Fan-out to child items",
-        blurb = "forEach expands every item into children. It compiles to an expand service task plus a parallel multi-instance call activity invoking a child process.",
+        blurb = "fanOut expands every item into children. It compiles to an expand service task plus a parallel multi-instance call activity invoking a child process.",
         dsl = """
             workflow<Order>("order-lines") {
-                items(orders)
+                input(orders)
                 task("load") { load(it) }
-                forEach<Line>(expand = { fetchLines(it.id) }, concurrency = 4) {
-                    ifThen({ it.qty > 10 }) {
+                fanOut<Line>(expand = { fetchLines(it.id) }, concurrency = 4) {
+                    condition({ it.qty > 10 }) {
                         task("bulk-price") { bulk(it) }
-                    } elseThen {
+                    } otherwise {
                         task("unit-price") { unit(it) }
                     }
                 }
             }
         """.trimIndent(),
         flow = workflow<Order>("order-lines") {
-            items(emptyList())
+            input(emptyList())
             task("load") { }
-            forEach<Line>(expand = { emptyList() }, concurrency = 4) {
-                ifThen({ it.qty > 10 }) {
+            fanOut<Line>(expand = { emptyList() }, concurrency = 4) {
+                condition({ it.qty > 10 }) {
                     task("bulk-price") { }
-                } elseThen {
+                } otherwise {
                     task("unit-price") { }
                 }
             }

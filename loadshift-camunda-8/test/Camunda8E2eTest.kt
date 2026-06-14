@@ -108,12 +108,12 @@ class Camunda8E2eTest {
         val seen = Collections.synchronizedList(mutableListOf<String>())
         val key = "e2e8x${System.currentTimeMillis()}"
         val wf = workflow<EUser>(key) {
-            items(listOf(user("a"), user("b")))
+            input(listOf(user("a"), user("b")))
             task("stamp") { it.note = "ok:${it.id}" }
-            forEach<EContact>(expand = { u -> listOf(contact("${u.id}-1"), contact("${u.id}-2")) }) {
-                ifThen({ it.label.endsWith("1") }) {
+            fanOut<EContact>(expand = { u -> listOf(contact("${u.id}-1"), contact("${u.id}-2")) }) {
+                condition({ it.label.endsWith("1") }) {
                     task("first") { c -> seen += "first:${c.label}" }
-                } elseThen {
+                } otherwise {
                     task("second") { c -> seen += "second:${c.label}" }
                 }
             }

@@ -42,8 +42,8 @@ class LocalBackendTest {
     fun nestedFanOutVisitsEveryChild() = runTest {
         val seen = Collections.synchronizedList(mutableListOf<String>())
         val wf = workflow<Cust>("nested") {
-            items(listOf(cust("a"), cust("b")))
-            forEach<Kid>(expand = { c -> listOf(kid("${c.id}-1"), kid("${c.id}-2")) }) {
+            input(listOf(cust("a"), cust("b")))
+            fanOut<Kid>(expand = { c -> listOf(kid("${c.id}-1"), kid("${c.id}-2")) }) {
                 task("touch") { k -> seen += k.label }
             }
         }
@@ -58,10 +58,10 @@ class LocalBackendTest {
     fun conditionalPicksBranch() = runTest {
         val results = Collections.synchronizedList(mutableListOf<String>())
         val wf = workflow<Cust>("cond") {
-            items(listOf(cust("yes", 5), cust("no", -1)))
-            ifThen({ it.n > 0 }) {
+            input(listOf(cust("yes", 5), cust("no", -1)))
+            condition({ it.n > 0 }) {
                 task("pos") { results += "pos:${it.id}" }
-            } elseThen {
+            } otherwise {
                 task("neg") { results += "neg:${it.id}" }
             }
         }
@@ -70,11 +70,11 @@ class LocalBackendTest {
     }
 
     @Test
-    fun whileLoopRunsUntilGuardFalse() = runTest {
+    fun loopRunsUntilGuardFalse() = runTest {
         val item = cust("x", 0)
         val wf = workflow<Cust>("loop") {
-            items(listOf(item))
-            whileLoop({ it.n < 3 }) {
+            input(listOf(item))
+            loop({ it.n < 3 }) {
                 task("inc") { it.n = it.n + 1 }
             }
         }
@@ -86,7 +86,7 @@ class LocalBackendTest {
     fun parallelRunsAllBranches() = runTest {
         val hits = Collections.synchronizedList(mutableListOf<String>())
         val wf = workflow<Cust>("par") {
-            items(listOf(cust("x")))
+            input(listOf(cust("x")))
             parallel {
                 branch { task("e") { hits += "e" } }
                 branch { task("f") { hits += "f" } }
@@ -101,7 +101,7 @@ class LocalBackendTest {
         val current = AtomicInteger()
         val max = AtomicInteger()
         val wf = workflow<Cust>("cap") {
-            items((1..12).map { cust("$it") })
+            input((1..12).map { cust("$it") })
             task("work") {
                 val c = current.incrementAndGet()
                 max.updateAndGet { m -> maxOf(m, c) }
@@ -117,7 +117,7 @@ class LocalBackendTest {
     fun retriesThenDeadLetters() = runTest {
         val attempts = AtomicInteger()
         val wf = workflow<Cust>("retry") {
-            items(listOf(cust("x")))
+            input(listOf(cust("x")))
             task("flaky", retry = RetryPolicy(maxAttempts = 3, baseDelay = 1.milliseconds, jitter = false)) {
                 attempts.incrementAndGet()
                 throw RuntimeException("boom")
@@ -134,8 +134,8 @@ class LocalBackendTest {
     @Test
     fun childDeadLetterCarriesItemKey() = runTest {
         val wf = workflow<Cust>("child-dlq") {
-            items(listOf(cust("p")))
-            forEach<Kid>(expand = { listOf(kid("p-1")) }) {
+            input(listOf(cust("p")))
+            fanOut<Kid>(expand = { listOf(kid("p-1")) }) {
                 task("explode", retry = RetryPolicy(maxAttempts = 1)) { throw RuntimeException("boom") }
             }
         }
@@ -147,9 +147,9 @@ class LocalBackendTest {
     @Test
     fun dryRunRecordsTopicsWithoutExecuting() = runTest {
         val wf = workflow<Cust>("dry") {
-            items(listOf(cust("x", 1)))
+            input(listOf(cust("x", 1)))
             task("a") { error("should not run") }
-            ifThen({ it.n > 0 }) {
+            condition({ it.n > 0 }) {
                 task("b") { error("should not run") }
             }
         }
@@ -160,7 +160,7 @@ class LocalBackendTest {
     fun manualStartWaitsForTrigger() = runTest {
         val ran = AtomicBoolean(false)
         val wf = workflow<Cust>("manual") {
-            items(listOf(cust("x")))
+            input(listOf(cust("x")))
             task("t") { ran.set(true) }
         }
         val handle = LocalBackend().run(wf, RunConfig(start = Start.Manual))
@@ -175,7 +175,7 @@ class LocalBackendTest {
     fun scheduledStartDelaysExecution() = runTest {
         val ran = AtomicBoolean(false)
         val wf = workflow<Cust>("sched") {
-            items(listOf(cust("x")))
+            input(listOf(cust("x")))
             task("t") { ran.set(true) }
         }
         val handle = LocalBackend().run(wf, RunConfig(start = Start.At(Clock.System.now() + 80.milliseconds)))
