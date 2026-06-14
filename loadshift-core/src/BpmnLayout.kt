@@ -59,6 +59,19 @@ object BpmnLayout {
             }
         }
 
+        val backSources = backEdges.map { it.first }.toSet()
+        val sinks = ids.filter { fOut.getValue(it).isEmpty() && it !in backSources }.toHashSet()
+        val canReach = HashSet(sinks)
+        var grew = true
+        while (grew) {
+            grew = false
+            for (u in ids) if (u !in canReach && fOut.getValue(u).any { it in canReach }) {
+                canReach.add(u)
+                grew = true
+            }
+        }
+        val satellites = ids.filterNot { it in canReach }.toHashSet()
+
         val layers = sortedMapOf<Int, MutableList<String>>()
         for (id in discovery) layers.getOrPut(rank.getValue(id)) { mutableListOf() }.add(id)
         val rankList = layers.keys.toList()
@@ -93,19 +106,31 @@ object BpmnLayout {
             lst.forEachIndexed { i, id -> cy[id] = (i - (k - 1) / 2.0) * ROW }
         }
         repeat(8) { sweep ->
-            val seq = if (sweep % 2 == 0) rankList else rankList.reversed()
-            for (r in seq) {
+            val downward = sweep % 2 == 0
+            fun desired(id: String): Double {
+                val neigh = (if (downward) inc.getValue(id).filter { forward(it, id) }
+                else out.getValue(id).filter { forward(id, it) }).filter { it !in satellites }
+                val ys = neigh.mapNotNull { cy[it] }
+                return if (ys.isEmpty()) cy.getValue(id) else ys.average()
+            }
+            for (r in if (downward) rankList else rankList.reversed()) {
                 val lst = layers.getValue(r)
-                val desired = lst.map { id ->
-                    val neigh = if (sweep % 2 == 0) inc.getValue(id).filter { forward(it, id) }
-                    else out.getValue(id).filter { forward(id, it) }
-                    val ys = neigh.mapNotNull { cy[it] }
-                    if (ys.isEmpty()) cy.getValue(id) else ys.average()
+                val mains = lst.filter { it !in satellites }
+                if (mains.isNotEmpty()) {
+                    val want = mains.map { desired(it) }
+                    val ys = DoubleArray(mains.size)
+                    for (i in mains.indices) ys[i] = if (i == 0) want[i] else max(want[i], ys[i - 1] + ROW)
+                    val shift = want.average() - ys.average()
+                    for (i in mains.indices) cy[mains[i]] = ys[i] + shift
                 }
-                val ys = DoubleArray(lst.size)
-                for (i in lst.indices) ys[i] = if (i == 0) desired[i] else max(desired[i], ys[i - 1] + ROW)
-                val shift = desired.average() - ys.average()
-                for (i in lst.indices) cy[lst[i]] = ys[i] + shift
+                var base = if (mains.isNotEmpty()) mains.maxOf { cy.getValue(it) } + ROW else Double.NEGATIVE_INFINITY
+                for (t in lst.filter { it in satellites }) {
+                    val want = inc.getValue(t).filter { forward(it, t) }.mapNotNull { cy[it] }
+                    val target = if (want.isEmpty()) cy.getValue(t) else want.average()
+                    val y = if (base == Double.NEGATIVE_INFINITY) target else max(target, base)
+                    cy[t] = y
+                    base = y + ROW
+                }
             }
         }
 
