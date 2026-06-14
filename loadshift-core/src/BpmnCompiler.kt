@@ -3,6 +3,7 @@ package loadshift.core
 import org.camunda.bpm.model.bpmn.Bpmn
 import org.camunda.bpm.model.bpmn.BpmnModelInstance
 import org.camunda.bpm.model.bpmn.builder.AbstractFlowNodeBuilder
+import org.camunda.bpm.model.bpmn.instance.Gateway
 
 class ServiceTaskRef(val id: String, val topic: String)
 
@@ -49,6 +50,8 @@ object BpmnCompiler {
 
         builder = compileStep(sub.step, builder, refs, gateways)
         val model = builder.endEvent("end").name("End").done()
+        for (gateway in model.getModelElementsByType(Gateway::class.java)) gateway.name = null
+        BpmnLayout.apply(model, sub.key)
         return CompiledProcess(sub.key, sub.key, model, refs)
     }
 
@@ -76,8 +79,9 @@ object BpmnCompiler {
                 refs += ServiceTaskRef(expandId, "expand_${step.id}")
                 val collection = "${step.id}_items"
                 val element = "${step.id}_item"
-                b.serviceTask(expandId).name(expandId)
+                b.serviceTask(expandId).name("expand children")
                     .callActivity("call_${step.id}")
+                    .name("for each child")
                     .calledElement(step.childKey)
                     .multiInstance()
                     .parallel()
@@ -93,13 +97,13 @@ object BpmnCompiler {
                 val join = gw.next("gw")
                 val resultExpr = "\${${step.id}_result}"
 
-                var trueB: AbstractFlowNodeBuilder<*, *> = b.serviceTask(decisionId).name(decisionId)
+                var trueB: AbstractFlowNodeBuilder<*, *> = b.serviceTask(decisionId).name("evaluate condition")
                     .exclusiveGateway(split)
-                    .condition("true", resultExpr)
+                    .condition("yes", resultExpr)
                 trueB = compileStep(step.onTrue, trueB, refs, gw)
                 trueB.exclusiveGateway(join)
 
-                val falseB = b.moveToNode(split).condition("false", "\${!(${step.id}_result)}")
+                val falseB = b.moveToNode(split).condition("no", "\${!(${step.id}_result)}")
                 val falseExit = step.onFalse?.let { compileStep(it, falseB, refs, gw) } ?: falseB
                 falseExit.connectTo(join)
 
@@ -113,12 +117,12 @@ object BpmnCompiler {
                 val exit = gw.next("gw")
                 val resultExpr = "\${${step.id}_result}"
 
-                b.serviceTask(decisionId).name(decisionId).exclusiveGateway(split)
-                var bodyB = b.moveToNode(split).condition("loop", resultExpr)
+                b.serviceTask(decisionId).name("loop guard").exclusiveGateway(split)
+                var bodyB = b.moveToNode(split).condition("repeat", resultExpr)
                 bodyB = compileStep(step.body, bodyB, refs, gw)
                 bodyB.connectTo(decisionId)
 
-                b.moveToNode(split).condition("exit", "\${!(${step.id}_result)}").exclusiveGateway(exit)
+                b.moveToNode(split).condition("done", "\${!(${step.id}_result)}").exclusiveGateway(exit)
             }
 
             is Parallel -> {

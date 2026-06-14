@@ -15,7 +15,7 @@ Full examples and reference: **[it-atelier-gn.github.io/loadshift-kotlin](https:
 
 | Module | Description |
 | --- | --- |
-| `loadshift-core` | Flow IR, the DSL, the `Backend` SPI, and the BPMN compiler. |
+| `loadshift-core` | Flow IR, the DSL, the `Backend` SPI, and the BPMN compiler (with a deterministic diagram layout). |
 | `loadshift-local` | In-process interpreter (`LocalBackend`) for tests and development. |
 | `loadshift-camunda-7` | `Camunda7Backend`. Compiles to BPMN and external tasks, driven over REST. |
 | `loadshift-camunda-8` | `Camunda8Backend`. Camunda 8 REST API with `zeebe:` BPMN extensions. |
