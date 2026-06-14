@@ -37,6 +37,7 @@ dependencies {
     implementation("io.github.it-atelier-gn:loadshift-local:0.2.0")
     implementation("io.github.it-atelier-gn:loadshift-camunda-7:0.2.0")
     implementation("io.github.it-atelier-gn:loadshift-camunda-8:0.2.0")
+    implementation("io.github.it-atelier-gn:loadshift-web:0.2.0")
 }
 ```
 </details>
@@ -50,6 +51,7 @@ dependencies {
     implementation 'io.github.it-atelier-gn:loadshift-local:0.2.0'
     implementation 'io.github.it-atelier-gn:loadshift-camunda-7:0.2.0'
     implementation 'io.github.it-atelier-gn:loadshift-camunda-8:0.2.0'
+    implementation 'io.github.it-atelier-gn:loadshift-web:0.2.0'
 }
 ```
 </details>
@@ -76,6 +78,11 @@ dependencies {
 <dependency>
     <groupId>io.github.it-atelier-gn</groupId>
     <artifactId>loadshift-camunda-8</artifactId>
+    <version>0.2.0</version>
+</dependency>
+<dependency>
+    <groupId>io.github.it-atelier-gn</groupId>
+    <artifactId>loadshift-web</artifactId>
     <version>0.2.0</version>
 </dependency>
 ```

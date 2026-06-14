@@ -120,12 +120,14 @@ done=3 failed=3 deadLetters=3
     implementation("io.github.it-atelier-gn:loadshift-local:0.2.0")
     implementation("io.github.it-atelier-gn:loadshift-camunda-7:0.2.0")
     implementation("io.github.it-atelier-gn:loadshift-camunda-8:0.2.0")
+    implementation("io.github.it-atelier-gn:loadshift-web:0.2.0")
 }</code></pre>
     <pre class="tab-panel" data-tab="groovy"><code class="lang-groovy">dependencies {
     implementation 'io.github.it-atelier-gn:loadshift-core:0.2.0'
     implementation 'io.github.it-atelier-gn:loadshift-local:0.2.0'
     implementation 'io.github.it-atelier-gn:loadshift-camunda-7:0.2.0'
     implementation 'io.github.it-atelier-gn:loadshift-camunda-8:0.2.0'
+    implementation 'io.github.it-atelier-gn:loadshift-web:0.2.0'
 }</code></pre>
     <pre class="tab-panel" data-tab="maven"><code class="lang-xml">&lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
@@ -145,6 +147,11 @@ done=3 failed=3 deadLetters=3
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-camunda-8&lt;/artifactId&gt;
+    &lt;version&gt;0.2.0&lt;/version&gt;
+&lt;/dependency&gt;
+&lt;dependency&gt;
+    &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
+    &lt;artifactId&gt;loadshift-web&lt;/artifactId&gt;
     &lt;version&gt;0.2.0&lt;/version&gt;
 &lt;/dependency&gt;</code></pre>
   </div>
@@ -359,6 +366,7 @@ println("done=${result.done} failed=${result.failed} skipped=${result.skipped}")
       <tr><td><code>loadshift-local</code></td><td>In-process interpreter (<code>LocalBackend</code>) for tests and development.</td></tr>
       <tr><td><code>loadshift-camunda-7</code></td><td><code>Camunda7Backend</code>. BPMN + external tasks, driven over REST.</td></tr>
       <tr><td><code>loadshift-camunda-8</code></td><td><code>Camunda8Backend</code>. Camunda 8 REST API with <code>zeebe:</code> extensions.</td></tr>
+      <tr><td><code>loadshift-web</code></td><td><code>IntrospectionServer</code>. Embedded web console showing live runs of any backend.</td></tr>
       <tr><td><code>loadshift-demo</code></td><td>Runnable example on <code>LocalBackend</code>.</td></tr>
     </tbody>
   </table>
