@@ -115,6 +115,23 @@ main { padding: 1.6rem 2rem; display: grid; gap: 1.2rem; max-width: 1100px; }
 .badge.Paused { color: var(--amber); }
 .badge.Scheduled { color: var(--blue); }
 .started { margin-left: auto; color: var(--dim); font-size: .72rem; }
+.controls { display: flex; gap: .5rem; }
+.controls button {
+  font-family: var(--mono);
+  font-size: .68rem;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  padding: .25em .8em;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  cursor: pointer;
+}
+.controls button:hover { color: var(--ink); border-color: var(--dim); }
+.controls button.start:hover { color: var(--green); border-color: var(--green); }
+.controls button.pause:hover { color: var(--amber); border-color: var(--amber); }
+.controls button.cancel:hover { color: var(--red); border-color: var(--red); }
+.controls button:disabled { opacity: .35; cursor: default; }
 .bar {
   margin: .9rem 0 .55rem;
   height: 14px;
@@ -231,12 +248,19 @@ function renderRun(run) {
       <summary>flow structure</summary>
       <div class="tree">${tree ? renderTree(tree) : "loading…"}</div>
     </details>`;
+  const terminal = run.state === "Completed" || run.state === "Failed" || run.state === "Cancelled";
+  const controls = `<div class="controls">
+    <button class="start" data-action="start" data-run="${esc(run.id)}" ${run.state === "Scheduled" ? "" : "disabled"}>start</button>
+    <button class="pause" data-action="pause" data-run="${esc(run.id)}" ${run.state === "Running" ? "" : "disabled"}>pause</button>
+    <button class="cancel" data-action="cancel" data-run="${esc(run.id)}" ${terminal ? "disabled" : ""}>cancel</button>
+  </div>`;
   return `<section class="run" data-state="${esc(run.state)}">
     <div class="run-head">
       <span class="run-id">${esc(run.id)}</span>
       <span class="run-name">${esc(run.workflowName)}</span>
       <span class="badge ${esc(run.state)}">${esc(run.state)}</span>
       <span class="started">since ${esc(run.startedAt.replace("T", " ").slice(0, 19))}Z</span>
+      ${controls}
     </div>
     ${renderBar(p, run.deadLetters.length)}
     <div class="counters">
@@ -268,6 +292,17 @@ function rememberToggles() {
     if (d.open) openDlqs.add(d.dataset.run); else openDlqs.delete(d.dataset.run);
   });
 }
+
+document.getElementById("runs").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-action]");
+  if (!btn) return;
+  btn.disabled = true;
+  try {
+    await fetch(`api/runs/${btn.dataset.run}/${btn.dataset.action}`, { method: "POST" });
+  } finally {
+    tick();
+  }
+});
 
 async function tick() {
   const pulse = document.getElementById("pulse");

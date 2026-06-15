@@ -12,12 +12,13 @@ import io.ktor.server.http.content.staticResources
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.response.respond
 import io.ktor.server.routing.get
+import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
-import loadshift.core.IntrospectableBackend
+import loadshift.core.ControllableBackend
 
 class IntrospectionServer(
-    private val backend: IntrospectableBackend,
+    private val backend: ControllableBackend,
     private val port: Int = 8571,
     private val host: String = "127.0.0.1",
 ) {
@@ -37,7 +38,7 @@ class IntrospectionServer(
     }
 }
 
-internal fun Application.console(backend: IntrospectableBackend) {
+internal fun Application.console(backend: ControllableBackend) {
     install(ContentNegotiation) { json() }
     routing {
         staticResources("/", "web") {
@@ -45,19 +46,31 @@ internal fun Application.console(backend: IntrospectableBackend) {
         }
         route("/api") {
             get("/backend") {
-                call.respond(BackendDto(backend.introspection.backendType, backend.introspection.runs().size))
+                call.respond(BackendDto(backend.control.backendType, backend.control.runs().size))
             }
             get("/runs") {
-                call.respond(backend.introspection.runs().map { it.toDto() })
+                call.respond(backend.control.runs().map { it.toDto() })
             }
             get("/runs/{id}") {
                 val id = call.parameters["id"].orEmpty()
-                val snapshot = backend.introspection.run(id)
+                val snapshot = backend.control.run(id)
                 if (snapshot == null) {
                     call.respond(HttpStatusCode.NotFound)
                 } else {
-                    call.respond(RunDetailDto(snapshot.toDto(), backend.introspection.structure(id)?.toDto()))
+                    call.respond(RunDetailDto(snapshot.toDto(), backend.control.structure(id)?.toDto()))
                 }
+            }
+            post("/runs/{id}/start") {
+                val id = call.parameters["id"].orEmpty()
+                if (backend.control.start(id)) call.respond(HttpStatusCode.OK) else call.respond(HttpStatusCode.NotFound)
+            }
+            post("/runs/{id}/pause") {
+                val id = call.parameters["id"].orEmpty()
+                if (backend.control.pause(id)) call.respond(HttpStatusCode.OK) else call.respond(HttpStatusCode.NotFound)
+            }
+            post("/runs/{id}/cancel") {
+                val id = call.parameters["id"].orEmpty()
+                if (backend.control.cancel(id)) call.respond(HttpStatusCode.OK) else call.respond(HttpStatusCode.NotFound)
             }
         }
     }

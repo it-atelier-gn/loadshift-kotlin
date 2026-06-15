@@ -3,6 +3,7 @@ package loadshift.core
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -17,7 +18,7 @@ private class IntroChild : WorkItemBase() {
     override val key get() = label
 }
 
-class IntrospectionTest {
+class ControlTest {
 
     private fun sample() = workflow<IntroItem>("intro") {
         input(emptyList())
@@ -68,6 +69,51 @@ class IntrospectionTest {
         assertNotNull(tracker.structure(id))
         assertNull(tracker.run("missing"))
         assertNull(tracker.structure("missing"))
+    }
+
+    @Test
+    fun trackerControlsRunViaHandle() = runTest {
+        val tracker = RunTracker("test")
+        val inspector = object : RunInspector {
+            override fun state() = RunState.Running
+            override fun progress() = Progress()
+        }
+        var started = false
+        var paused = false
+        var cancelled = false
+        val control = object : RunHandle {
+            override suspend fun start() { started = true }
+            override fun progress() = Progress()
+            override suspend fun pause() { paused = true }
+            override suspend fun cancel() { cancelled = true }
+            override suspend fun await() = RunResult(0, 0, 0, emptyList())
+        }
+        val id = tracker.track(sample(), inspector, control)
+
+        assertTrue(tracker.start(id))
+        assertTrue(tracker.pause(id))
+        assertTrue(tracker.cancel(id))
+        assertTrue(started)
+        assertTrue(paused)
+        assertTrue(cancelled)
+
+        assertFalse(tracker.start("missing"))
+        assertFalse(tracker.pause("missing"))
+        assertFalse(tracker.cancel("missing"))
+    }
+
+    @Test
+    fun trackerWithoutControlRejectsCommands() = runTest {
+        val tracker = RunTracker("test")
+        val inspector = object : RunInspector {
+            override fun state() = RunState.Running
+            override fun progress() = Progress()
+        }
+        val id = tracker.track(sample(), inspector)
+
+        assertFalse(tracker.start(id))
+        assertFalse(tracker.pause(id))
+        assertFalse(tracker.cancel(id))
     }
 
     @Test

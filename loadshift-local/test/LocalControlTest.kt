@@ -18,10 +18,10 @@ private class Doc : WorkItemBase() {
 
 private fun doc(id: String) = Doc().apply { this.id = id }
 
-class LocalIntrospectionTest {
+class LocalControlTest {
 
     @Test
-    fun completedRunIsVisibleThroughIntrospection() = runTest {
+    fun completedRunIsVisibleThroughControl() = runTest {
         val backend = LocalBackend()
         val wf = workflow<Doc>("intro-ok") {
             input(listOf(doc("a"), doc("b")))
@@ -29,17 +29,17 @@ class LocalIntrospectionTest {
         }
         backend.run(wf).await()
 
-        val runs = backend.introspection.runs()
+        val runs = backend.control.runs()
         assertEquals(1, runs.size)
         val snap = runs.single()
-        assertEquals("local", backend.introspection.backendType)
+        assertEquals("local", backend.control.backendType)
         assertEquals("intro-ok", snap.workflowName)
         assertEquals(RunState.Completed, snap.state)
         assertEquals(2, snap.progress.seeded)
         assertEquals(2, snap.progress.done)
         assertEquals(emptyList(), snap.deadLetters)
-        assertNotNull(backend.introspection.structure(snap.id))
-        assertEquals("workflow", backend.introspection.structure(snap.id)?.type)
+        assertNotNull(backend.control.structure(snap.id))
+        assertEquals("workflow", backend.control.structure(snap.id)?.type)
     }
 
     @Test
@@ -51,7 +51,7 @@ class LocalIntrospectionTest {
         }
         backend.run(wf, RunConfig(onError = ErrorPolicy.DeadLetter)).await()
 
-        val snap = backend.introspection.runs().single()
+        val snap = backend.control.runs().single()
         assertEquals(RunState.Completed, snap.state)
         assertEquals(0, snap.progress.failed)
         assertEquals(1, snap.deadLetters.size)
@@ -67,7 +67,7 @@ class LocalIntrospectionTest {
         }
         backend.run(wf).await()
         backend.run(wf).await()
-        assertEquals(2, backend.introspection.runs().size)
-        assertEquals(2, backend.introspection.runs().map { it.id }.distinct().size)
+        assertEquals(2, backend.control.runs().size)
+        assertEquals(2, backend.control.runs().map { it.id }.distinct().size)
     }
 }

@@ -5,9 +5,12 @@ import io.ktor.client.call.body
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.get
+import io.ktor.client.request.post
 import io.ktor.client.statement.bodyAsText
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.runBlocking
+import loadshift.core.RunConfig
+import loadshift.core.Start
 import loadshift.core.WorkItemBase
 import loadshift.core.workflow
 import loadshift.local.LocalBackend
@@ -60,6 +63,67 @@ class IntrospectionServerTest {
 
             val html = client.get("http://127.0.0.1:$port/").bodyAsText()
             assertTrue(html.contains("loadshift"))
+        } finally {
+            client.close()
+            server.stop()
+        }
+    }
+
+    @Test
+    fun startEndpointTriggersManualRun() = runBlocking {
+        val backend = LocalBackend()
+        val wf = workflow<Doc>("manual-flow") {
+            input(listOf(doc("a")))
+            task("noop") {}
+        }
+        val handle = backend.run(wf, RunConfig(start = Start.Manual))
+
+        val server = IntrospectionServer(backend, port = 0).start()
+        val port = server.boundPort()
+        val client = HttpClient(CIO) {
+            install(ContentNegotiation) { json() }
+        }
+        try {
+            val runs: List<RunDto> = client.get("http://127.0.0.1:$port/api/runs").body()
+            val id = runs.single().id
+            assertEquals("Scheduled", runs.single().state)
+
+            assertEquals(404, client.post("http://127.0.0.1:$port/api/runs/missing/start").status.value)
+
+            assertEquals(200, client.post("http://127.0.0.1:$port/api/runs/$id/start").status.value)
+            handle.await()
+
+            val after: List<RunDto> = client.get("http://127.0.0.1:$port/api/runs").body()
+            assertEquals("Completed", after.single().state)
+        } finally {
+            client.close()
+            server.stop()
+        }
+    }
+
+    @Test
+    fun cancelEndpointStopsManualRun() = runBlocking {
+        val backend = LocalBackend()
+        val wf = workflow<Doc>("cancel-flow") {
+            input(listOf(doc("a")))
+            task("noop") {}
+        }
+        val handle = backend.run(wf, RunConfig(start = Start.Manual))
+
+        val server = IntrospectionServer(backend, port = 0).start()
+        val port = server.boundPort()
+        val client = HttpClient(CIO) {
+            install(ContentNegotiation) { json() }
+        }
+        try {
+            val runs: List<RunDto> = client.get("http://127.0.0.1:$port/api/runs").body()
+            val id = runs.single().id
+
+            assertEquals(200, client.post("http://127.0.0.1:$port/api/runs/$id/cancel").status.value)
+            handle.await()
+
+            val after: List<RunDto> = client.get("http://127.0.0.1:$port/api/runs").body()
+            assertEquals("Cancelled", after.single().state)
         } finally {
             client.close()
             server.stop()
