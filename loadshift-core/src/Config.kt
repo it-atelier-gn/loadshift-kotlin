@@ -49,6 +49,7 @@ data class RunConfig(
     val resume: Boolean = true,
     val lockDuration: Duration = 5.minutes,
     val maxLoopIterations: Int = 10_000,
+    val logSink: LogSink = NoopLogSink,
 )
 
 data class Progress(

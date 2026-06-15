@@ -10,10 +10,12 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.datetime.Clock
 import loadshift.core.Conditional
@@ -22,6 +24,7 @@ import loadshift.core.awaitNext
 import loadshift.core.DeadLetter
 import loadshift.core.ErrorPolicy
 import loadshift.core.Execute
+import loadshift.core.ExecutionContext
 import loadshift.core.FanOut
 import loadshift.core.ControllableBackend
 import loadshift.core.Loop
@@ -43,6 +46,7 @@ import loadshift.core.TaskOptions
 import loadshift.core.WorkItemBase
 import loadshift.core.Workflow
 import java.util.Collections
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.random.Random
@@ -89,6 +93,7 @@ private class LocalRun<W : WorkItemBase>(
     private val config: RunConfig,
 ) : RunHandle, RunInspector {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val runId = UUID.randomUUID().toString()
     private val startSignal = CompletableDeferred<Unit>()
     private val completion = CompletableDeferred<RunResult>()
 
@@ -186,22 +191,33 @@ private class LocalRun<W : WorkItemBase>(
     }
 
     private suspend fun runTopItem(item: W) {
-        try {
-            interpret(workflow.root.step, item)
-            done.incrementAndGet()
-        } catch (e: DeadLetterSignal) {
-            deadLetters += DeadLetter(item.key, e.topic, e.reason)
-        } catch (e: SkipSignal) {
-            skipped.incrementAndGet()
+        val ctx = ExecutionContext(runId, workflow.name, config.logSink, itemKey = item.key)
+        withContext(ctx) {
+            try {
+                interpret(workflow.root.step, item)
+                done.incrementAndGet()
+            } catch (e: DeadLetterSignal) {
+                deadLetters += DeadLetter(item.key, e.topic, e.reason)
+            } catch (e: SkipSignal) {
+                skipped.incrementAndGet()
+            }
         }
     }
+
+    private suspend fun currentExecutionContext(): ExecutionContext =
+        currentCoroutineContext()[ExecutionContext.Key] ?: ExecutionContext(runId, workflow.name, config.logSink)
 
     @Suppress("UNCHECKED_CAST")
     private suspend fun interpret(step: Step<*>, item: WorkItemBase) {
         when (step) {
             is Sequence<*> -> for (s in step.steps) interpret(s, item)
 
-            is Execute<*> -> runTask((step as Execute<WorkItemBase>).task, step.options, item)
+            is Execute<*> -> {
+                val e = step as Execute<WorkItemBase>
+                withContext(currentExecutionContext().withTopic(e.task.topic)) {
+                    runTask(e.task, e.options, item)
+                }
+            }
 
             is Conditional<*> -> {
                 val c = step as Conditional<WorkItemBase>
@@ -227,13 +243,16 @@ private class LocalRun<W : WorkItemBase>(
                 val fanOut = step as FanOut<WorkItemBase, WorkItemBase>
                 val childFlow = fanOut.expand(item)
                 val semaphore = Semaphore(fanOut.concurrency ?: config.maxConcurrency)
+                val ctx = currentExecutionContext()
                 coroutineScope {
                     childFlow.collect { child ->
                         expanded.incrementAndGet()
                         semaphore.acquire()
                         launch {
                             try {
-                                runChild(fanOut.body.step, child)
+                                withContext(ctx.child(child.key ?: "?")) {
+                                    runChild(fanOut.body.step, child)
+                                }
                             } finally {
                                 semaphore.release()
                             }

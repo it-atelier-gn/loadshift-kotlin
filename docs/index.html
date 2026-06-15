@@ -76,7 +76,8 @@
   <a href="#reliability"><b>06</b> Reliability</a>
   <a href="#backends"><b>07</b> Backends</a>
   <a href="#run-control"><b>08</b> Run control</a>
-  <a href="#modules"><b>09</b> Modules</a>
+  <a href="#logging"><b>09</b> Logging</a>
+  <a href="#modules"><b>10</b> Modules</a>
 </aside>
 
 <div class="content" id="examples">
@@ -121,6 +122,7 @@ done=3 failed=0 deadLetters=3
     implementation("io.github.it-atelier-gn:loadshift-camunda-7:0.3.0")
     implementation("io.github.it-atelier-gn:loadshift-camunda-8:0.3.0")
     implementation("io.github.it-atelier-gn:loadshift-web:0.3.0")
+    implementation("io.github.it-atelier-gn:loadshift-sqlite:0.3.0")
 }</code></pre>
     <pre class="tab-panel" data-tab="groovy"><code class="lang-groovy">dependencies {
     implementation 'io.github.it-atelier-gn:loadshift-core:0.3.0'
@@ -128,6 +130,7 @@ done=3 failed=0 deadLetters=3
     implementation 'io.github.it-atelier-gn:loadshift-camunda-7:0.3.0'
     implementation 'io.github.it-atelier-gn:loadshift-camunda-8:0.3.0'
     implementation 'io.github.it-atelier-gn:loadshift-web:0.3.0'
+    implementation 'io.github.it-atelier-gn:loadshift-sqlite:0.3.0'
 }</code></pre>
     <pre class="tab-panel" data-tab="maven"><code class="lang-xml">&lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
@@ -152,6 +155,11 @@ done=3 failed=0 deadLetters=3
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-web&lt;/artifactId&gt;
+    &lt;version&gt;0.3.0&lt;/version&gt;
+&lt;/dependency&gt;
+&lt;dependency&gt;
+    &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
+    &lt;artifactId&gt;loadshift-sqlite&lt;/artifactId&gt;
     &lt;version&gt;0.3.0&lt;/version&gt;
 &lt;/dependency&gt;</code></pre>
   </div>
@@ -383,8 +391,29 @@ LocalBackend().run(sync, RunConfig(start = Start.Cron("0 9 * * *")))</code></pre
   sources — this works the same whether a tick seeds one item or millions.</p>
 </section>
 
+<section id="logging" class="block">
+  <h2><span class="num">09</span>Logging</h2>
+  <p>Task bodies can call <code>log()</code> to record structured entries that carry the
+  execution tree context: run id, workflow name, the ancestor item-key path through nested
+  <code>fanOut</code>s, the current item key, and the current task's topic.</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>Logging.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">task("charge") { order ->
+    log("charging customer", "orderId" to order.id, "amount" to order.amount)
+}</code></pre>
+  </div>
+  <p class="note">Logging is opt-in via <code>RunConfig.logSink</code> (default
+  <code>NoopLogSink</code>, which discards everything). <code>loadshift-sqlite</code>
+  provides <code>SqliteLogSink</code>, which persists entries to a SQLite database.</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>SqliteLog.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">val sink = SqliteLogSink("logs.db")
+backend.run(workflow, RunConfig(logSink = sink)).await()</code></pre>
+  </div>
+</section>
+
 <section id="modules" class="block">
-  <h2><span class="num">09</span>Modules</h2>
+  <h2><span class="num">10</span>Modules</h2>
   <table class="modtable">
     <thead><tr><th>MODULE</th><th>CONTENTS</th></tr></thead>
     <tbody>
@@ -393,6 +422,7 @@ LocalBackend().run(sync, RunConfig(start = Start.Cron("0 9 * * *")))</code></pre
       <tr><td><code>loadshift-camunda-7</code></td><td><code>Camunda7Backend</code>. BPMN + external tasks, driven over REST.</td></tr>
       <tr><td><code>loadshift-camunda-8</code></td><td><code>Camunda8Backend</code>. Camunda 8 REST API with <code>zeebe:</code> extensions.</td></tr>
       <tr><td><code>loadshift-web</code></td><td><code>IntrospectionServer</code>. Embedded web console showing live runs of any backend.</td></tr>
+      <tr><td><code>loadshift-sqlite</code></td><td><code>SqliteLogSink</code>. Persists <code>log()</code> entries to a SQLite database.</td></tr>
       <tr><td><code>loadshift-demo</code></td><td>Runnable example on <code>LocalBackend</code>.</td></tr>
     </tbody>
   </table>

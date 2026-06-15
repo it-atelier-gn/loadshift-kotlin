@@ -3,11 +3,15 @@ package loadshift.local
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlinx.datetime.Clock
+import kotlinx.serialization.json.JsonPrimitive
 import loadshift.core.ErrorPolicy
+import loadshift.core.LogEntry
+import loadshift.core.LogSink
 import loadshift.core.RetryPolicy
 import loadshift.core.RunConfig
 import loadshift.core.Start
 import loadshift.core.WorkItemBase
+import loadshift.core.log
 import loadshift.core.workflow
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
@@ -198,6 +202,32 @@ class LocalBackendTest {
         val handle = LocalBackend().run(wf, RunConfig(start = Start.At(Clock.System.now() + 80.milliseconds)))
         handle.await()
         assertTrue(ran.get())
+    }
+
+    @Test
+    fun logCapturesExecutionTreeContext() = runTest {
+        val entries = Collections.synchronizedList(mutableListOf<LogEntry>())
+        val sink = object : LogSink {
+            override suspend fun write(entry: LogEntry) {
+                entries += entry
+            }
+        }
+        val wf = workflow<Cust>("logging") {
+            input(listOf(cust("p")))
+            fanOut<Kid>(expand = { listOf(kid("p-1")) }) {
+                task("touch") { k -> log("processed", "label" to k.label) }
+            }
+        }
+        LocalBackend().run(wf, RunConfig(logSink = sink)).await()
+
+        assertEquals(1, entries.size)
+        val entry = entries[0]
+        assertEquals("logging", entry.workflowName)
+        assertEquals("processed", entry.message)
+        assertEquals("p-1", entry.itemKey)
+        assertEquals("touch", entry.topic)
+        assertEquals(listOf("p"), entry.path)
+        assertEquals(JsonPrimitive("p-1"), entry.data["label"])
     }
 
     @Test

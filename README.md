@@ -20,6 +20,7 @@ Full examples and reference: **[it-atelier-gn.github.io/loadshift-kotlin](https:
 | `loadshift-camunda-7` | `Camunda7Backend`. Compiles to BPMN and external tasks, driven over REST. |
 | `loadshift-camunda-8` | `Camunda8Backend`. Camunda 8 REST API with `zeebe:` BPMN extensions. |
 | `loadshift-web` | `IntrospectionServer`. Embedded web console showing live runs of any backend. |
+| `loadshift-sqlite` | `SqliteLogSink`. Persists `log()` entries to a SQLite database. |
 | `loadshift-demo` | Runnable example on `LocalBackend`. |
 
 ---
@@ -38,6 +39,7 @@ dependencies {
     implementation("io.github.it-atelier-gn:loadshift-camunda-7:0.3.0")
     implementation("io.github.it-atelier-gn:loadshift-camunda-8:0.3.0")
     implementation("io.github.it-atelier-gn:loadshift-web:0.3.0")
+    implementation("io.github.it-atelier-gn:loadshift-sqlite:0.3.0")
 }
 ```
 </details>
@@ -52,6 +54,7 @@ dependencies {
     implementation 'io.github.it-atelier-gn:loadshift-camunda-7:0.3.0'
     implementation 'io.github.it-atelier-gn:loadshift-camunda-8:0.3.0'
     implementation 'io.github.it-atelier-gn:loadshift-web:0.3.0'
+    implementation 'io.github.it-atelier-gn:loadshift-sqlite:0.3.0'
 }
 ```
 </details>
@@ -83,6 +86,11 @@ dependencies {
 <dependency>
     <groupId>io.github.it-atelier-gn</groupId>
     <artifactId>loadshift-web</artifactId>
+    <version>0.3.0</version>
+</dependency>
+<dependency>
+    <groupId>io.github.it-atelier-gn</groupId>
+    <artifactId>loadshift-sqlite</artifactId>
     <version>0.3.0</version>
 </dependency>
 ```
@@ -168,6 +176,29 @@ Runs registered with `Start.Manual` wait for a trigger. The dashboard's start/pa
 buttons (and the matching `POST /api/runs/{id}/start`, `/pause`, `/cancel` endpoints) call
 straight through to the tracked `RunHandle`, so a separate process or operator can drive a
 run that another process started.
+
+---
+
+## Logging
+
+Tasks can call `log(message, "key" to value, ...)` from `loadshift-core` to record structured
+log entries. Each entry automatically carries the execution tree context: run id, workflow name,
+the ancestor item-key path through nested `fanOut`s, the current item key, and the current task's
+topic.
+
+Logging is opt-in via `RunConfig.logSink` (default `NoopLogSink`, which discards everything).
+`loadshift-sqlite` provides `SqliteLogSink`, which persists entries to a SQLite database:
+
+```kotlin
+val sink = SqliteLogSink("logs.db")
+backend.run(workflow, RunConfig(logSink = sink)).await()
+```
+
+```kotlin
+task("charge") { order ->
+    log("charging customer", "orderId" to order.id, "amount" to order.amount)
+}
+```
 
 ---
 
