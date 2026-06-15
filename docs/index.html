@@ -373,7 +373,7 @@ println("done=${result.done} failed=${result.failed} skipped=${result.skipped}")
   registered (process definitions deployed on Camunda, worker pool started) and then
   waits for <code>handle.start()</code> before seeding via <code>input()</code>. If the
   process that called <code>run()</code> isn't the one that should trigger it,
-  <code>loadshift-web</code>'s <code>IntrospectionServer</code> exposes the same controls
+  <code>loadshift-web</code>'s <code>ControlServer</code> exposes the same controls
   over HTTP: <code>POST /api/runs/{id}/start</code>, <code>/pause</code>, and
   <code>/cancel</code>, backed by <code>Control.start/pause/cancel</code> on the
   tracked <code>RunHandle</code>.</p>
@@ -421,7 +421,7 @@ backend.run(workflow, RunConfig(logSink = sink)).await()</code></pre>
       <tr><td><code>loadshift-local</code></td><td>In-process interpreter (<code>LocalBackend</code>) for tests and development.</td></tr>
       <tr><td><code>loadshift-camunda-7</code></td><td><code>Camunda7Backend</code>. BPMN + external tasks, driven over REST.</td></tr>
       <tr><td><code>loadshift-camunda-8</code></td><td><code>Camunda8Backend</code>. Camunda 8 REST API with <code>zeebe:</code> extensions.</td></tr>
-      <tr><td><code>loadshift-web</code></td><td><code>IntrospectionServer</code>. Embedded web console showing live runs of any backend.</td></tr>
+      <tr><td><code>loadshift-web</code></td><td><code>ControlServer</code>. Embedded web console showing live runs of any backend.</td></tr>
       <tr><td><code>loadshift-sqlite</code></td><td><code>SqliteLogSink</code>. Persists <code>log()</code> entries to a SQLite database.</td></tr>
       <tr><td><code>loadshift-demo</code></td><td>Runnable example on <code>LocalBackend</code>.</td></tr>
     </tbody>
