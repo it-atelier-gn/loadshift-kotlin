@@ -125,7 +125,7 @@ class LocalBackendTest {
         }
         val result = LocalBackend().run(wf, RunConfig(onError = ErrorPolicy.DeadLetter)).await()
         assertEquals(3, attempts.get())
-        assertEquals(1, result.failed)
+        assertEquals(0, result.failed)
         assertEquals(1, result.deadLetters.size)
         assertEquals("flaky", result.deadLetters[0].topic)
         assertEquals("x", result.deadLetters[0].key)
@@ -172,6 +172,23 @@ class LocalBackendTest {
     }
 
     @Test
+    fun failPolicyCancelsInFlightSiblings() = runTest {
+        val completed = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("fail-cancel") {
+            input(listOf(cust("order-1"), cust("order-2"), cust("order-3")))
+            task("work", retry = RetryPolicy.None) { c ->
+                if (c.id == "order-2") error("boom")
+                delay(200)
+                completed += c.id
+            }
+        }
+        val handle = LocalBackend().run(wf, RunConfig(onError = ErrorPolicy.Fail, maxConcurrency = 3))
+        val result = runCatching { handle.await() }
+        assertTrue(result.isFailure, "expected await() to fail")
+        assertTrue(completed.isEmpty(), "in-flight siblings should be cancelled, completed=$completed")
+    }
+
+    @Test
     fun scheduledStartDelaysExecution() = runTest {
         val ran = AtomicBoolean(false)
         val wf = workflow<Cust>("sched") {
@@ -181,5 +198,24 @@ class LocalBackendTest {
         val handle = LocalBackend().run(wf, RunConfig(start = Start.At(Clock.System.now() + 80.milliseconds)))
         handle.await()
         assertTrue(ran.get())
+    }
+
+    @Test
+    fun cronStartReseedsOnEveryTick() = runTest {
+        val runs = AtomicInteger(0)
+        val wf = workflow<Cust>("cron") {
+            input(listOf(cust("x")))
+            task("t") { runs.incrementAndGet() }
+        }
+        val handle = LocalBackend().run(wf, RunConfig(start = Start.Cron("* * * * *")))
+
+        val deadline = System.currentTimeMillis() + 2000
+        while (runs.get() == 0 && System.currentTimeMillis() < deadline) {
+            Thread.sleep(10)
+        }
+        assertEquals(1, runs.get())
+
+        handle.cancel()
+        runCatching { handle.await() }
     }
 }

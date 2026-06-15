@@ -5,6 +5,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -18,6 +19,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import loadshift.core.BpmnCompiler
 import loadshift.core.Conditional
+import loadshift.core.CronSchedule
+import loadshift.core.awaitNext
 import loadshift.core.Execute
 import loadshift.core.FanOut
 import loadshift.core.IntrospectableBackend
@@ -166,7 +169,6 @@ internal class Camunda8Run(
         scope.launch {
             try {
                 when (val s = config.start) {
-                    is Start.Manual -> startSignal.await()
                     is Start.At -> {
                         val waitMs = s.time.toEpochMilliseconds() - Clock.System.now().toEpochMilliseconds()
                         if (waitMs > 0) delay(waitMs)
@@ -174,8 +176,20 @@ internal class Camunda8Run(
                     else -> {}
                 }
                 runState = RunState.Running
-                startRootInstances()
-                awaitDrain()
+                when (val s = config.start) {
+                    is Start.Manual -> awaitCancellation()
+                    is Start.Cron -> {
+                        while (true) {
+                            startRootInstances()
+                            awaitDrain()
+                            CronSchedule.awaitNext(s.expr)
+                        }
+                    }
+                    else -> {
+                        startRootInstances()
+                        awaitDrain()
+                    }
+                }
                 running = false
                 runState = RunState.Completed
                 completion.complete(RunResult(done.get(), failed.get(), 0, emptyList()))

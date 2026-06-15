@@ -45,6 +45,7 @@ data class ExternalTaskDto(
     val topicName: String,
     val processInstanceId: String,
     val processDefinitionKey: String? = null,
+    val retries: Int? = null,
     val variables: Map<String, CamundaValue> = emptyMap(),
 )
 
