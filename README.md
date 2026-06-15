@@ -19,7 +19,7 @@ Full examples and reference: **[it-atelier-gn.github.io/loadshift-kotlin](https:
 | `loadshift-local` | In-process interpreter (`LocalBackend`) for tests and development. |
 | `loadshift-camunda-7` | `Camunda7Backend`. Compiles to BPMN and external tasks, driven over REST. |
 | `loadshift-camunda-8` | `Camunda8Backend`. Camunda 8 REST API with `zeebe:` BPMN extensions. |
-| `loadshift-web` | `IntrospectionServer`. Embedded web console showing live runs of any backend. |
+| `loadshift-web` | `ControlServer`. Embedded web console showing live runs of any backend. |
 | `loadshift-sqlite` | `SqliteLogSink`. Persists `log()` entries to a SQLite database. |
 | `loadshift-demo` | Runnable example on `LocalBackend`. |
 
@@ -166,7 +166,7 @@ Every backend implements the control API (`ControllableBackend` in `loadshift-co
 
 ```kotlin
 val backend = LocalBackend()
-IntrospectionServer(backend, port = 8571).start()
+ControlServer(backend, port = 8571).start()
 backend.run(workflow).await()
 ```
 

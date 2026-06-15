@@ -6,7 +6,7 @@ import loadshift.core.RunConfig
 import loadshift.core.WorkItemBase
 import loadshift.core.workflow
 import loadshift.local.LocalBackend
-import loadshift.web.IntrospectionServer
+import loadshift.web.ControlServer
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -70,7 +70,7 @@ fun main(args: Array<String>) = runBlocking<Unit> {
 
 private suspend fun uiDemo() {
     val backend = LocalBackend()
-    val server = IntrospectionServer(backend, port = 8571).start()
+    val server = ControlServer(backend, port = 8571).start()
     println("loadshift console: http://127.0.0.1:8571")
 
     val customers = (1..6).map { n -> User().apply { id = "cust-$n" } }

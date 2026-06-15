@@ -26,7 +26,7 @@ private class Doc : WorkItemBase() {
 
 private fun doc(id: String) = Doc().apply { this.id = id }
 
-class IntrospectionServerTest {
+class ControlServerTest {
 
     @Test
     fun servesApiAndUi() = runBlocking {
@@ -37,7 +37,7 @@ class IntrospectionServerTest {
         }
         backend.run(wf).await()
 
-        val server = IntrospectionServer(backend, port = 0).start()
+        val server = ControlServer(backend, port = 0).start()
         val port = server.boundPort()
         val client = HttpClient(CIO) {
             install(ContentNegotiation) { json() }
@@ -78,7 +78,7 @@ class IntrospectionServerTest {
         }
         val handle = backend.run(wf, RunConfig(start = Start.Manual))
 
-        val server = IntrospectionServer(backend, port = 0).start()
+        val server = ControlServer(backend, port = 0).start()
         val port = server.boundPort()
         val client = HttpClient(CIO) {
             install(ContentNegotiation) { json() }
@@ -110,7 +110,7 @@ class IntrospectionServerTest {
         }
         val handle = backend.run(wf, RunConfig(start = Start.Manual))
 
-        val server = IntrospectionServer(backend, port = 0).start()
+        val server = ControlServer(backend, port = 0).start()
         val port = server.boundPort()
         val client = HttpClient(CIO) {
             install(ContentNegotiation) { json() }

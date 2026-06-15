@@ -17,14 +17,14 @@ import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import loadshift.core.ControllableBackend
 
-class IntrospectionServer(
+class ControlServer(
     private val backend: ControllableBackend,
     private val port: Int = 8571,
     private val host: String = "127.0.0.1",
 ) {
     private var server: EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>? = null
 
-    fun start(wait: Boolean = false): IntrospectionServer {
+    fun start(wait: Boolean = false): ControlServer {
         server = embeddedServer(CIO, port = port, host = host) { console(backend) }.also { it.start(wait) }
         return this
     }
