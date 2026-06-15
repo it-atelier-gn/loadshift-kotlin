@@ -31,18 +31,21 @@ interface RunInspector {
     suspend fun engineActive(): Long? = null
 }
 
-interface Introspection {
+interface Control {
     val backendType: String
     suspend fun runs(): List<RunSnapshot>
     suspend fun run(id: String): RunSnapshot?
     fun structure(id: String): FlowNode?
+    suspend fun start(id: String): Boolean
+    suspend fun pause(id: String): Boolean
+    suspend fun cancel(id: String): Boolean
 }
 
-interface IntrospectableBackend : Backend {
-    val introspection: Introspection
+interface ControllableBackend : Backend {
+    val control: Control
 }
 
-class RunTracker(override val backendType: String) : Introspection {
+class RunTracker(override val backendType: String) : Control {
 
     private class Entry(
         val id: String,
@@ -51,12 +54,13 @@ class RunTracker(override val backendType: String) : Introspection {
         val startedAt: Instant,
         val structure: FlowNode,
         val inspector: RunInspector,
+        val control: RunHandle?,
     )
 
     private val counter = AtomicLong()
     private val entries = ConcurrentHashMap<String, Entry>()
 
-    fun track(workflow: Workflow<*>, inspector: RunInspector): String {
+    fun track(workflow: Workflow<*>, inspector: RunInspector, control: RunHandle? = null): String {
         val id = "run-${counter.incrementAndGet()}"
         entries[id] = Entry(
             id = id,
@@ -65,6 +69,7 @@ class RunTracker(override val backendType: String) : Introspection {
             startedAt = Clock.System.now(),
             structure = describeFlow(workflow),
             inspector = inspector,
+            control = control,
         )
         return id
     }
@@ -75,6 +80,18 @@ class RunTracker(override val backendType: String) : Introspection {
     override suspend fun run(id: String): RunSnapshot? = entries[id]?.let { snapshot(it) }
 
     override fun structure(id: String): FlowNode? = entries[id]?.structure
+
+    override suspend fun start(id: String): Boolean = withControl(id) { it.start() }
+
+    override suspend fun pause(id: String): Boolean = withControl(id) { it.pause() }
+
+    override suspend fun cancel(id: String): Boolean = withControl(id) { it.cancel() }
+
+    private suspend fun withControl(id: String, action: suspend (RunHandle) -> Unit): Boolean {
+        val control = entries[id]?.control ?: return false
+        action(control)
+        return true
+    }
 
     private suspend fun snapshot(e: Entry): RunSnapshot = RunSnapshot(
         id = e.id,

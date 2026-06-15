@@ -130,7 +130,7 @@ class Camunda8E2eTest {
             seen.toSet(),
         )
 
-        val snap = backend.introspection.runs().single()
+        val snap = backend.control.runs().single()
         assertEquals(RunState.Completed, snap.state)
         assertEquals(2, snap.progress.seeded)
     }

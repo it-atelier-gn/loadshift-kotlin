@@ -361,12 +361,14 @@ handle.cancel()
 val result = handle.await()
 println("done=${result.done} failed=${result.failed} skipped=${result.skipped}")</code></pre>
   </div>
-  <p class="note">On <code>LocalBackend</code>, <code>Start.Manual</code> is code-driven:
-  the run waits for <code>handle.start()</code>. On the Camunda backends,
-  <code>Start.Manual</code> means manual via the engine, not via code — loadshift deploys
-  the process definition and does not call <code>startInstance</code> itself. An operator
-  starts instances through Camunda Cockpit or the engine's REST API; the worker pool keeps
-  polling external tasks until <code>handle.cancel()</code> is called.</p>
+  <p class="note"><code>Start.Manual</code> is uniform across backends: the run is
+  registered (process definitions deployed on Camunda, worker pool started) and then
+  waits for <code>handle.start()</code> before seeding via <code>input()</code>. If the
+  process that called <code>run()</code> isn't the one that should trigger it,
+  <code>loadshift-web</code>'s <code>IntrospectionServer</code> exposes the same controls
+  over HTTP: <code>POST /api/runs/{id}/start</code>, <code>/pause</code>, and
+  <code>/cancel</code>, backed by <code>Control.start/pause/cancel</code> on the
+  tracked <code>RunHandle</code>.</p>
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>ScheduledStart.kt</span><button class="copy" type="button">COPY</button></div>
 <pre><code class="lang-kotlin">LocalBackend().run(sync, RunConfig(start = Start.At(Clock.System.now() + 5.minutes)))

@@ -23,7 +23,7 @@ import loadshift.core.DeadLetter
 import loadshift.core.ErrorPolicy
 import loadshift.core.Execute
 import loadshift.core.FanOut
-import loadshift.core.IntrospectableBackend
+import loadshift.core.ControllableBackend
 import loadshift.core.Loop
 import loadshift.core.Parallel
 import loadshift.core.Progress
@@ -48,12 +48,12 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.random.Random
 import kotlin.time.Duration
 
-class LocalBackend : IntrospectableBackend {
-    override val introspection = RunTracker("local")
+class LocalBackend : ControllableBackend {
+    override val control = RunTracker("local")
 
     override suspend fun <W : WorkItemBase> run(workflow: Workflow<W>, config: RunConfig): RunHandle {
         val run = LocalRun(workflow, config)
-        introspection.track(workflow, run)
+        control.track(workflow, run, run)
         return run
     }
 

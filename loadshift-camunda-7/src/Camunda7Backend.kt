@@ -6,7 +6,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -20,7 +19,7 @@ import loadshift.core.CronSchedule
 import loadshift.core.Execute
 import loadshift.core.FanOut
 import loadshift.core.Conditional
-import loadshift.core.IntrospectableBackend
+import loadshift.core.ControllableBackend
 import loadshift.core.Loop
 import loadshift.core.Parallel
 import loadshift.core.Progress
@@ -49,9 +48,9 @@ private typealias Factory = (MutableMap<String, Any?>) -> WorkItemBase
 class Camunda7Backend(
     base: String = "http://localhost:8080/engine-rest",
     private val client: Camunda7Client = Camunda7Client(base),
-) : IntrospectableBackend {
+) : ControllableBackend {
 
-    override val introspection = RunTracker("camunda7")
+    override val control = RunTracker("camunda7")
 
     override suspend fun <W : WorkItemBase> run(workflow: Workflow<W>, config: RunConfig): RunHandle {
         val processes = BpmnCompiler.compile(workflow)
@@ -63,7 +62,7 @@ class Camunda7Backend(
 
         val registry = buildRegistry(workflow)
         val run = Camunda7Run(workflow, config, client, registry, processes.map { it.key }).also { it.begin() }
-        introspection.track(workflow, run)
+        control.track(workflow, run, run)
         return run
     }
 
@@ -177,6 +176,7 @@ internal class Camunda7Run(
         scope.launch {
             try {
                 when (val s = config.start) {
+                    is Start.Manual -> startSignal.await()
                     is Start.At -> {
                         val waitMs = s.time.toEpochMilliseconds() - Clock.System.now().toEpochMilliseconds()
                         if (waitMs > 0) delay(waitMs)
@@ -185,11 +185,11 @@ internal class Camunda7Run(
                 }
                 runState = RunState.Running
                 when (val s = config.start) {
-                    is Start.Manual -> awaitCancellation()
                     is Start.Cron -> {
-                        while (true) {
+                        while (running) {
                             startRootInstances()
                             awaitDrain()
+                            if (!running) break
                             CronSchedule.awaitNext(s.expr)
                         }
                     }

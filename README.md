@@ -154,7 +154,7 @@ Requires the [Kotlin 2.4 command-line compiler](https://kotlinlang.org/docs/comm
 
 ## Web Console
 
-Every backend implements the introspection API (`IntrospectableBackend` in `loadshift-core`): run state, progress counters, dead letters, and the flow structure. `loadshift-web` serves it as JSON plus an HTML dashboard:
+Every backend implements the control API (`ControllableBackend` in `loadshift-core`): run state, progress counters, dead letters, the flow structure, and start/pause/cancel. `loadshift-web` serves it as JSON plus an HTML dashboard:
 
 ```kotlin
 val backend = LocalBackend()
@@ -163,6 +163,11 @@ backend.run(workflow).await()
 ```
 
 Endpoints: `/` (dashboard), `/api/backend`, `/api/runs`, `/api/runs/{id}`. The Camunda backends additionally report the engine's live instance count per run.
+
+Runs registered with `Start.Manual` wait for a trigger. The dashboard's start/pause/cancel
+buttons (and the matching `POST /api/runs/{id}/start`, `/pause`, `/cancel` endpoints) call
+straight through to the tracked `RunHandle`, so a separate process or operator can drive a
+run that another process started.
 
 ---
 
