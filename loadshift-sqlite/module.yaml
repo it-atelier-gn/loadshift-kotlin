@@ -15,14 +15,11 @@ repositories:
     publish: true
 
 dependencies:
-  - $libs.kotlinx.coroutines.core:
-      exported: true
-  - $libs.kotlinx.datetime:
-      exported: true
-  - $libs.kotlinx.serialization.json:
-      exported: true
-  - org.camunda.bpm.model:camunda-bpmn-model:7.24.0:
-      exported: true
+  - ../loadshift-core
+  - $libs.kotlinx.coroutines.core
+  - $libs.kotlinx.datetime
+  - $libs.kotlinx.serialization.json
+  - org.xerial:sqlite-jdbc:3.46.1.3
 
 test-dependencies:
   - $libs.kotlinx.coroutines.test

@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -22,6 +23,7 @@ import loadshift.core.Conditional
 import loadshift.core.CronSchedule
 import loadshift.core.awaitNext
 import loadshift.core.Execute
+import loadshift.core.ExecutionContext
 import loadshift.core.FanOut
 import loadshift.core.ControllableBackend
 import loadshift.core.Loop
@@ -154,6 +156,7 @@ internal class Camunda8Run(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val workerId = "loadshift-${UUID.randomUUID()}"
+    private val runId = UUID.randomUUID().toString()
     private val startSignal = CompletableDeferred<Unit>()
     private val completion = CompletableDeferred<RunResult>()
 
@@ -165,7 +168,9 @@ internal class Camunda8Run(
     @Volatile private var runState = if (config.start is Start.Now) RunState.Running else RunState.Scheduled
 
     fun begin() {
-        registry.topics.forEach { topic -> scope.launch { workerLoop(topic) } }
+        registry.topics.forEach { topic ->
+            repeat(config.maxConcurrency) { scope.launch { workerLoop(topic) } }
+        }
         scope.launch {
             try {
                 when (val s = config.start) {
@@ -339,7 +344,9 @@ internal class Camunda8Run(
     private suspend fun dispatch(topic: String, variables: MutableMap<String, Any?>): JsonObject {
         registry.taskHandlers[topic]?.let { handler ->
             val item = handler.factory(variables)
-            handler.task.execute(item)
+            withContext(ExecutionContext(runId, workflow.name, config.logSink, itemKey = item.key, topic = topic)) {
+                handler.task.execute(item)
+            }
             return C8Variables.toJson(item.toMap())
         }
         registry.decisionHandlers[topic]?.let { handler ->

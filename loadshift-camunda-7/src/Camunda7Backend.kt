@@ -14,10 +14,12 @@ import kotlinx.coroutines.flow.collectIndexed
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import loadshift.core.BpmnCompiler
 import loadshift.core.CronSchedule
 import loadshift.core.Execute
+import loadshift.core.ExecutionContext
 import loadshift.core.FanOut
 import loadshift.core.Conditional
 import loadshift.core.ControllableBackend
@@ -161,6 +163,7 @@ internal class Camunda7Run(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val workerId = "loadshift-${UUID.randomUUID()}"
+    private val runId = UUID.randomUUID().toString()
     private val startSignal = CompletableDeferred<Unit>()
     private val completion = CompletableDeferred<RunResult>()
 
@@ -357,7 +360,9 @@ internal class Camunda7Run(
     private suspend fun dispatch(topic: String, variables: MutableMap<String, Any?>): Map<String, CamundaValue> {
         registry.taskHandlers[topic]?.let { handler ->
             val item = handler.factory(variables)
-            handler.task.execute(item)
+            withContext(ExecutionContext(runId, workflow.name, config.logSink, itemKey = item.key, topic = topic)) {
+                handler.task.execute(item)
+            }
             return CamundaVariables.toCamunda(item.toMap())
         }
         registry.decisionHandlers[topic]?.let { handler ->
