@@ -7,6 +7,8 @@ import java.util.concurrent.atomic.AtomicLong
 
 enum class RunState { Scheduled, Running, Paused, Completed, Failed, Cancelled }
 
+private val TERMINAL_STATES = setOf(RunState.Completed, RunState.Failed, RunState.Cancelled)
+
 data class FlowNode(
     val type: String,
     val label: String,
@@ -45,7 +47,7 @@ interface ControllableBackend : Backend {
     val control: Control
 }
 
-class RunTracker(override val backendType: String) : Control {
+class RunTracker(override val backendType: String, private val maxEntries: Int = 1000) : Control {
 
     private class Entry(
         val id: String,
@@ -71,7 +73,18 @@ class RunTracker(override val backendType: String) : Control {
             inspector = inspector,
             control = control,
         )
+        evictOldestCompleted()
         return id
+    }
+
+    private fun evictOldestCompleted() {
+        while (entries.size > maxEntries) {
+            val oldest = entries.values
+                .filter { it.inspector.state() in TERMINAL_STATES }
+                .minByOrNull { it.startedAt }
+                ?: break
+            entries.remove(oldest.id)
+        }
     }
 
     override suspend fun runs(): List<RunSnapshot> =

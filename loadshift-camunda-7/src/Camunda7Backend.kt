@@ -10,6 +10,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collectIndexed
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
@@ -241,7 +242,7 @@ internal class Camunda7Run(
     private suspend fun startRootInstances() {
         val semaphore = Semaphore(config.maxConcurrency)
         coroutineScope {
-            workflow.seed().toList().forEachIndexed { index, item ->
+            workflow.seed().collectIndexed { index, item ->
                 seeded.incrementAndGet()
                 semaphore.acquire()
                 launch {

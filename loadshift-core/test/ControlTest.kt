@@ -117,6 +117,46 @@ class ControlTest {
     }
 
     @Test
+    fun trackerEvictsOldestCompletedRunsBeyondCapacity() = runTest {
+        val tracker = RunTracker("test", maxEntries = 2)
+        val completed = object : RunInspector {
+            override fun state() = RunState.Completed
+            override fun progress() = Progress()
+        }
+        val running = object : RunInspector {
+            override fun state() = RunState.Running
+            override fun progress() = Progress()
+        }
+
+        val first = tracker.track(sample(), completed)
+        val second = tracker.track(sample(), completed)
+        assertEquals(2, tracker.runs().size)
+
+        val third = tracker.track(sample(), running)
+
+        assertEquals(2, tracker.runs().size)
+        assertNull(tracker.run(first))
+        assertNotNull(tracker.run(second))
+        assertNotNull(tracker.run(third))
+    }
+
+    @Test
+    fun trackerKeepsRunningEntriesEvenBeyondCapacity() = runTest {
+        val tracker = RunTracker("test", maxEntries = 1)
+        val running = object : RunInspector {
+            override fun state() = RunState.Running
+            override fun progress() = Progress()
+        }
+
+        val first = tracker.track(sample(), running)
+        val second = tracker.track(sample(), running)
+
+        assertEquals(2, tracker.runs().size)
+        assertNotNull(tracker.run(first))
+        assertNotNull(tracker.run(second))
+    }
+
+    @Test
     fun inspectorDefaultsAreEmpty() = runTest {
         val inspector = object : RunInspector {
             override fun state() = RunState.Completed
