@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -15,6 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.datetime.Clock
 import loadshift.core.BpmnCompiler
+import loadshift.core.CronSchedule
 import loadshift.core.Execute
 import loadshift.core.FanOut
 import loadshift.core.Conditional
@@ -27,7 +29,9 @@ import loadshift.core.RunHandle
 import loadshift.core.RunInspector
 import loadshift.core.RunResult
 import loadshift.core.RunState
+import loadshift.core.RetryPolicy
 import loadshift.core.RunTracker
+import loadshift.core.awaitNext
 import loadshift.core.Sequence
 import loadshift.core.Start
 import loadshift.core.Step
@@ -173,7 +177,6 @@ internal class Camunda7Run(
         scope.launch {
             try {
                 when (val s = config.start) {
-                    is Start.Manual -> startSignal.await()
                     is Start.At -> {
                         val waitMs = s.time.toEpochMilliseconds() - Clock.System.now().toEpochMilliseconds()
                         if (waitMs > 0) delay(waitMs)
@@ -181,8 +184,20 @@ internal class Camunda7Run(
                     else -> {}
                 }
                 runState = RunState.Running
-                startRootInstances()
-                awaitDrain()
+                when (val s = config.start) {
+                    is Start.Manual -> awaitCancellation()
+                    is Start.Cron -> {
+                        while (true) {
+                            startRootInstances()
+                            awaitDrain()
+                            CronSchedule.awaitNext(s.expr)
+                        }
+                    }
+                    else -> {
+                        startRootInstances()
+                        awaitDrain()
+                    }
+                }
                 running = false
                 runState = RunState.Completed
                 completion.complete(RunResult(done.get(), failed.get(), 0, emptyList()))
@@ -289,7 +304,9 @@ internal class Camunda7Run(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
-            failed.incrementAndGet()
+            val remaining = task.retries ?: config.retry.maxAttempts
+            val retries = nextRetries(remaining)
+            if (retries == 0) failed.incrementAndGet()
             runCatching {
                 client.failure(
                     task.id,
@@ -297,8 +314,8 @@ internal class Camunda7Run(
                         workerId = workerId,
                         errorMessage = e.message ?: "task failed",
                         errorDetails = e.stackTraceToString(),
-                        retries = (config.retry.maxAttempts - 1).coerceAtLeast(0),
-                        retryTimeout = config.retry.baseDelay.inWholeMilliseconds,
+                        retries = retries,
+                        retryTimeout = retryBackoffMillis(config.retry, remaining),
                     ),
                 )
             }
@@ -366,4 +383,13 @@ internal class Camunda7Run(
         }
         return variables
     }
+}
+
+internal fun nextRetries(remainingBeforeFailure: Int): Int = (remainingBeforeFailure - 1).coerceAtLeast(0)
+
+internal fun retryBackoffMillis(policy: RetryPolicy, remainingBeforeFailure: Int): Long {
+    val attempt = policy.maxAttempts - remainingBeforeFailure + 1
+    val base = policy.baseDelay.inWholeMilliseconds
+    val raw = base shl (attempt - 1).coerceIn(0, 20)
+    return minOf(raw, policy.maxDelay.inWholeMilliseconds)
 }

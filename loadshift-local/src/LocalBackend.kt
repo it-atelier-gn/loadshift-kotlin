@@ -17,6 +17,8 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withTimeout
 import kotlinx.datetime.Clock
 import loadshift.core.Conditional
+import loadshift.core.CronSchedule
+import loadshift.core.awaitNext
 import loadshift.core.DeadLetter
 import loadshift.core.ErrorPolicy
 import loadshift.core.Execute
@@ -116,7 +118,15 @@ private class LocalRun<W : WorkItemBase>(
                     else -> {}
                 }
                 runState = RunState.Running
-                execute()
+                val cron = config.start as? Start.Cron
+                if (cron != null) {
+                    while (true) {
+                        execute()
+                        CronSchedule.awaitNext(cron.expr)
+                    }
+                } else {
+                    execute()
+                }
                 runState = RunState.Completed
                 completion.complete(snapshotResult())
             } catch (e: CancellationException) {
@@ -181,7 +191,6 @@ private class LocalRun<W : WorkItemBase>(
             done.incrementAndGet()
         } catch (e: DeadLetterSignal) {
             deadLetters += DeadLetter(item.key, e.topic, e.reason)
-            failed.incrementAndGet()
         } catch (e: SkipSignal) {
             skipped.incrementAndGet()
         }
@@ -240,7 +249,6 @@ private class LocalRun<W : WorkItemBase>(
             interpret(step, child)
         } catch (e: DeadLetterSignal) {
             deadLetters += DeadLetter(child.key, e.topic, e.reason)
-            failed.incrementAndGet()
         } catch (e: SkipSignal) {
             skipped.incrementAndGet()
         }

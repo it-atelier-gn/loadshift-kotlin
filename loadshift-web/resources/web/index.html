@@ -203,17 +203,19 @@ function renderTree(node) {
     (kids ? `<div class="tree">${kids}</div>` : "") + `</div>`;
 }
 
-function renderBar(p) {
-  const total = Math.max(p.seeded + p.expanded, p.done + p.failed + p.skipped, 1);
+function renderBar(p, deadLetterCount) {
+  const failed = p.failed + deadLetterCount;
+  const total = Math.max(p.seeded + p.expanded, p.done + failed + p.skipped, 1);
   const w = n => (100 * n / total).toFixed(2) + "%";
   return `<div class="bar">` +
     `<i class="done" style="width:${w(p.done)}"></i>` +
-    `<i class="failed" style="width:${w(p.failed)}"></i>` +
+    `<i class="failed" style="width:${w(failed)}"></i>` +
     `<i class="skipped" style="width:${w(p.skipped)}"></i></div>`;
 }
 
 function renderRun(run) {
   const p = run.progress;
+  const failed = p.failed + run.deadLetters.length;
   const active = run.engineActive == null ? "" :
     `<span class="k-active">engine-active<b>${run.engineActive}</b></span>`;
   const dlq = run.deadLetters.length ? `
@@ -236,12 +238,12 @@ function renderRun(run) {
       <span class="badge ${esc(run.state)}">${esc(run.state)}</span>
       <span class="started">since ${esc(run.startedAt.replace("T", " ").slice(0, 19))}Z</span>
     </div>
-    ${renderBar(p)}
+    ${renderBar(p, run.deadLetters.length)}
     <div class="counters">
       <span>seeded<b>${p.seeded}</b></span>
       <span>expanded<b>${p.expanded}</b></span>
       <span class="k-done">done<b>${p.done}</b></span>
-      <span class="k-failed">failed<b>${p.failed}</b></span>
+      <span class="k-failed">failed<b>${failed}</b></span>
       <span class="k-skipped">skipped<b>${p.skipped}</b></span>
       ${active}
     </div>

@@ -53,7 +53,7 @@ class LocalIntrospectionTest {
 
         val snap = backend.introspection.runs().single()
         assertEquals(RunState.Completed, snap.state)
-        assertEquals(1, snap.progress.failed)
+        assertEquals(0, snap.progress.failed)
         assertEquals(1, snap.deadLetters.size)
         assertEquals("explode", snap.deadLetters.single().topic)
     }

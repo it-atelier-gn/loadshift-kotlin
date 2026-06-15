@@ -13,16 +13,20 @@ abstract class WorkItemBase {
         variables.putAll(values)
     }
 
-    protected fun <T> required(): RequiredVar<T> = RequiredVar(variables)
+    protected fun <T> required(default: T? = null): RequiredVar<T> = RequiredVar(variables, default)
 
     protected fun <T> optional(): OptionalVar<T> = OptionalVar(variables)
 }
 
-class RequiredVar<T> internal constructor(private val variables: MutableMap<String, Any?>) {
+class RequiredVar<T> internal constructor(
+    private val variables: MutableMap<String, Any?>,
+    private val default: T? = null,
+) {
     @Suppress("UNCHECKED_CAST")
     operator fun getValue(thisRef: Any?, property: KProperty<*>): T =
-        (variables[property.name]
-            ?: error("Missing required variable '${property.name}'")) as T
+        (variables[property.name] as T?)
+            ?: default
+            ?: error("Missing required variable '${property.name}'")
 
     operator fun setValue(thisRef: Any?, property: KProperty<*>, value: T) {
         variables[property.name] = value

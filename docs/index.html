@@ -100,12 +100,12 @@ cd loadshift-kotlin
 == Execute on LocalBackend ==
   flag-missing cust-1-b
   cleanup cust-1-a &lt;cust-1@example.com&gt;
-done=3 failed=3 deadLetters=3
+done=3 failed=0 deadLetters=3
   DLQ topic=cleanup error=invalid email for cust-1-c</code></pre>
   </div>
 
   <p>Or pull it into an existing project from Maven Central
-  (<code>io.github.it-atelier-gn</code>, version <code>0.2.0</code>):</p>
+  (<code>io.github.it-atelier-gn</code>, version <code>0.3.0</code>):</p>
   <div class="codecard">
     <div class="codecard-head">
       <div class="tabs">
@@ -116,43 +116,43 @@ done=3 failed=3 deadLetters=3
       <button class="copy" type="button">COPY</button>
     </div>
     <pre class="tab-panel active" data-tab="kts"><code class="lang-kotlin">dependencies {
-    implementation("io.github.it-atelier-gn:loadshift-core:0.2.0")
-    implementation("io.github.it-atelier-gn:loadshift-local:0.2.0")
-    implementation("io.github.it-atelier-gn:loadshift-camunda-7:0.2.0")
-    implementation("io.github.it-atelier-gn:loadshift-camunda-8:0.2.0")
-    implementation("io.github.it-atelier-gn:loadshift-web:0.2.0")
+    implementation("io.github.it-atelier-gn:loadshift-core:0.3.0")
+    implementation("io.github.it-atelier-gn:loadshift-local:0.3.0")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-7:0.3.0")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-8:0.3.0")
+    implementation("io.github.it-atelier-gn:loadshift-web:0.3.0")
 }</code></pre>
     <pre class="tab-panel" data-tab="groovy"><code class="lang-groovy">dependencies {
-    implementation 'io.github.it-atelier-gn:loadshift-core:0.2.0'
-    implementation 'io.github.it-atelier-gn:loadshift-local:0.2.0'
-    implementation 'io.github.it-atelier-gn:loadshift-camunda-7:0.2.0'
-    implementation 'io.github.it-atelier-gn:loadshift-camunda-8:0.2.0'
-    implementation 'io.github.it-atelier-gn:loadshift-web:0.2.0'
+    implementation 'io.github.it-atelier-gn:loadshift-core:0.3.0'
+    implementation 'io.github.it-atelier-gn:loadshift-local:0.3.0'
+    implementation 'io.github.it-atelier-gn:loadshift-camunda-7:0.3.0'
+    implementation 'io.github.it-atelier-gn:loadshift-camunda-8:0.3.0'
+    implementation 'io.github.it-atelier-gn:loadshift-web:0.3.0'
 }</code></pre>
     <pre class="tab-panel" data-tab="maven"><code class="lang-xml">&lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-core&lt;/artifactId&gt;
-    &lt;version&gt;0.2.0&lt;/version&gt;
+    &lt;version&gt;0.3.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-local&lt;/artifactId&gt;
-    &lt;version&gt;0.2.0&lt;/version&gt;
+    &lt;version&gt;0.3.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-camunda-7&lt;/artifactId&gt;
-    &lt;version&gt;0.2.0&lt;/version&gt;
+    &lt;version&gt;0.3.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-camunda-8&lt;/artifactId&gt;
-    &lt;version&gt;0.2.0&lt;/version&gt;
+    &lt;version&gt;0.3.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-web&lt;/artifactId&gt;
-    &lt;version&gt;0.2.0&lt;/version&gt;
+    &lt;version&gt;0.3.0&lt;/version&gt;
 &lt;/dependency&gt;</code></pre>
   </div>
   <p class="note">Pick the modules you need — see <a href="#modules">Modules</a> for what each one contains.</p>
@@ -170,6 +170,7 @@ done=3 failed=3 deadLetters=3
     <div class="codecard-head"><span>WorkItems.kt</span><button class="copy" type="button">COPY</button></div>
 <pre><code class="lang-kotlin">class Customer : WorkItemBase() {
     var id: String by required()
+    var attempts: Int by required(default = 0)
     override val key get() = id
 }
 
@@ -182,7 +183,10 @@ class Contact : WorkItemBase() {
 val vip = Customer().apply { id = "cust-1" }</code></pre>
   </div>
   <p class="note">Reading a <code>required()</code> variable that was never set fails fast
-  with <code>Missing required variable 'id'</code>.</p>
+  with <code>Missing required variable 'id'</code>. Pass <code>default = …</code> to give
+  it a starting value (e.g. a loop counter) without an <code>apply</code> block or a
+  secondary constructor — the default is only written into the variable map once the
+  property is first assigned, so <code>toMap()</code> / checkpoint restore stay exact.</p>
 </section>
 
 <section id="workflows" class="block">
@@ -296,6 +300,10 @@ val sync = workflow&lt;Customer&gt;("sync-all") {
     rateLimit = perSecond(50),
 ) { enrich(it) }</code></pre>
   </div>
+  <p class="note">A task's <code>retry</code> policy applies wherever it runs, including
+  inside a <code>parallel</code> branch: a failing branch task is retried in full
+  (e.g. all 3 attempts of the default policy) before the item is handed to the run's
+  <code>ErrorPolicy</code>.</p>
   <p>What happens when a task still fails is a run-level decision.
   <code>ErrorPolicy.DeadLetter</code> records the failure and keeps going,
   <code>Fail</code> aborts the run, <code>Skip</code> counts and continues.</p>
@@ -337,7 +345,9 @@ Camunda8Backend("http://localhost:8080", token = zeebeToken).run(cleanup).await(
 <section id="run-control" class="block">
   <h2><span class="num">08</span>Run control</h2>
   <p><code>run()</code> returns a <code>RunHandle</code>: live progress counters, pause,
-  cancel, and an awaitable result. Starts can be immediate, manual, or scheduled.</p>
+  cancel, and an awaitable result. <code>RunConfig.start</code> picks one of
+  <code>Start.Now</code>, <code>Start.Manual</code>, <code>Start.At</code>, or
+  <code>Start.Cron</code>.</p>
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>RunControl.kt</span><button class="copy" type="button">COPY</button></div>
 <pre><code class="lang-kotlin">val handle = LocalBackend().run(sync, RunConfig(start = Start.Manual))
@@ -351,10 +361,24 @@ handle.cancel()
 val result = handle.await()
 println("done=${result.done} failed=${result.failed} skipped=${result.skipped}")</code></pre>
   </div>
+  <p class="note">On <code>LocalBackend</code>, <code>Start.Manual</code> is code-driven:
+  the run waits for <code>handle.start()</code>. On the Camunda backends,
+  <code>Start.Manual</code> means manual via the engine, not via code — loadshift deploys
+  the process definition and does not call <code>startInstance</code> itself. An operator
+  starts instances through Camunda Cockpit or the engine's REST API; the worker pool keeps
+  polling external tasks until <code>handle.cancel()</code> is called.</p>
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>ScheduledStart.kt</span><button class="copy" type="button">COPY</button></div>
-<pre><code class="lang-kotlin">LocalBackend().run(sync, RunConfig(start = Start.At(Clock.System.now() + 5.minutes)))</code></pre>
+<pre><code class="lang-kotlin">LocalBackend().run(sync, RunConfig(start = Start.At(Clock.System.now() + 5.minutes)))
+
+LocalBackend().run(sync, RunConfig(start = Start.Cron("0 9 * * *")))</code></pre>
   </div>
+  <p class="note"><code>Start.At</code> waits until the given instant, then seeds and runs
+  once. <code>Start.Cron</code> takes a standard 5-field cron expression
+  (minute hour day-of-month month day-of-week) and repeats indefinitely: on every tick it
+  calls <code>input()</code> again and runs that batch to completion before waiting for the
+  next tick. Because each tick re-reads <code>input()</code> — including paginated
+  sources — this works the same whether a tick seeds one item or millions.</p>
 </section>
 
 <section id="modules" class="block">
