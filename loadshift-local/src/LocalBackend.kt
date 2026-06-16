@@ -42,6 +42,7 @@ import loadshift.core.Sequence
 import loadshift.core.Start
 import loadshift.core.Step
 import loadshift.core.Task
+import loadshift.core.ParentItemStack
 import loadshift.core.WorkItem
 import loadshift.core.Workflow
 import java.util.Collections
@@ -243,13 +244,14 @@ private class LocalRun<W : WorkItem>(
                 val childFlow = fanOut.expand(item)
                 val semaphore = Semaphore(fanOut.concurrency ?: config.maxConcurrency)
                 val ctx = currentExecutionContext()
+                val parentStack = (currentCoroutineContext()[ParentItemStack.Key] ?: ParentItemStack(emptyList())).push(item)
                 coroutineScope {
                     childFlow.collect { child ->
                         expanded.incrementAndGet()
                         semaphore.acquire()
                         launch {
                             try {
-                                withContext(ctx.child(child.key ?: "?")) {
+                                withContext(ctx.child(child.key ?: "?") + parentStack) {
                                     runChild(fanOut.body.step, child)
                                 }
                             } finally {
