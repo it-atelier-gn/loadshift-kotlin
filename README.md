@@ -27,19 +27,19 @@ Full examples and reference: **[it-atelier-gn.github.io/loadshift-kotlin](https:
 
 ## Add as a dependency
 
-Published to Maven Central under group `io.github.it-atelier-gn`, version `0.3.0`. Pick the modules you need (see [Modules](#modules)).
+Published to Maven Central under group `io.github.it-atelier-gn`, version `0.4.0`. Pick the modules you need (see [Modules](#modules)).
 
 <details>
 <summary>Gradle (Kotlin DSL)</summary>
 
 ```kotlin
 dependencies {
-    implementation("io.github.it-atelier-gn:loadshift-core:0.3.0")
-    implementation("io.github.it-atelier-gn:loadshift-local:0.3.0")
-    implementation("io.github.it-atelier-gn:loadshift-camunda-7:0.3.0")
-    implementation("io.github.it-atelier-gn:loadshift-camunda-8:0.3.0")
-    implementation("io.github.it-atelier-gn:loadshift-web:0.3.0")
-    implementation("io.github.it-atelier-gn:loadshift-sqlite:0.3.0")
+    implementation("io.github.it-atelier-gn:loadshift-core:0.4.0")
+    implementation("io.github.it-atelier-gn:loadshift-local:0.4.0")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-7:0.4.0")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-8:0.4.0")
+    implementation("io.github.it-atelier-gn:loadshift-web:0.4.0")
+    implementation("io.github.it-atelier-gn:loadshift-sqlite:0.4.0")
 }
 ```
 </details>
@@ -49,12 +49,12 @@ dependencies {
 
 ```groovy
 dependencies {
-    implementation 'io.github.it-atelier-gn:loadshift-core:0.3.0'
-    implementation 'io.github.it-atelier-gn:loadshift-local:0.3.0'
-    implementation 'io.github.it-atelier-gn:loadshift-camunda-7:0.3.0'
-    implementation 'io.github.it-atelier-gn:loadshift-camunda-8:0.3.0'
-    implementation 'io.github.it-atelier-gn:loadshift-web:0.3.0'
-    implementation 'io.github.it-atelier-gn:loadshift-sqlite:0.3.0'
+    implementation 'io.github.it-atelier-gn:loadshift-core:0.4.0'
+    implementation 'io.github.it-atelier-gn:loadshift-local:0.4.0'
+    implementation 'io.github.it-atelier-gn:loadshift-camunda-7:0.4.0'
+    implementation 'io.github.it-atelier-gn:loadshift-camunda-8:0.4.0'
+    implementation 'io.github.it-atelier-gn:loadshift-web:0.4.0'
+    implementation 'io.github.it-atelier-gn:loadshift-sqlite:0.4.0'
 }
 ```
 </details>
@@ -66,32 +66,32 @@ dependencies {
 <dependency>
     <groupId>io.github.it-atelier-gn</groupId>
     <artifactId>loadshift-core</artifactId>
-    <version>0.3.0</version>
+    <version>0.4.0</version>
 </dependency>
 <dependency>
     <groupId>io.github.it-atelier-gn</groupId>
     <artifactId>loadshift-local</artifactId>
-    <version>0.3.0</version>
+    <version>0.4.0</version>
 </dependency>
 <dependency>
     <groupId>io.github.it-atelier-gn</groupId>
     <artifactId>loadshift-camunda-7</artifactId>
-    <version>0.3.0</version>
+    <version>0.4.0</version>
 </dependency>
 <dependency>
     <groupId>io.github.it-atelier-gn</groupId>
     <artifactId>loadshift-camunda-8</artifactId>
-    <version>0.3.0</version>
+    <version>0.4.0</version>
 </dependency>
 <dependency>
     <groupId>io.github.it-atelier-gn</groupId>
     <artifactId>loadshift-web</artifactId>
-    <version>0.3.0</version>
+    <version>0.4.0</version>
 </dependency>
 <dependency>
     <groupId>io.github.it-atelier-gn</groupId>
     <artifactId>loadshift-sqlite</artifactId>
-    <version>0.3.0</version>
+    <version>0.4.0</version>
 </dependency>
 ```
 </details>

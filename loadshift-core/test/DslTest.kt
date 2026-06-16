@@ -1,23 +1,21 @@
 package loadshift.core
 
+import kotlinx.serialization.Serializable
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
-private class Item : WorkItemBase() {
-    var n: Int by required()
+@Serializable
+private data class Item(var n: Int) : WorkItem {
     override val key get() = n.toString()
 }
 
-private class Child : WorkItemBase() {
-    var v: Int by required()
-}
-
-private fun item(n: Int) = Item().apply { this.n = n }
+@Serializable
+private data class Child(var v: Int) : WorkItem
 
 private fun richWorkflow(): Workflow<Item> = workflow("wf") {
-    input(item(1))
+    input(Item(1))
     task("a") { }
     condition({ it.n > 0 }) { task("b") { } } otherwise { task("c") { } }
     loop({ it.n < 3 }) { task("d") { } }
@@ -25,7 +23,7 @@ private fun richWorkflow(): Workflow<Item> = workflow("wf") {
         branch { task("e") { } }
         branch { task("f") { } }
     }
-    fanOut<Child>(expand = { listOf(Child().apply { v = 0 }) }) {
+    fanOut<Child>(expand = { listOf(Child(0)) }) {
         task("g") { }
     }
 }
@@ -56,7 +54,7 @@ class DslTest {
         val seq = wf.root.step as Sequence<Item>
         val cond = seq.steps[1] as Conditional<Item>
         assertTrue(cond.onFalse != null)
-        assertTrue(cond.predicate(item(5)))
+        assertTrue(cond.predicate(Item(5)))
     }
 
     @Test

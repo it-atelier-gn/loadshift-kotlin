@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
+import kotlinx.serialization.json.JsonObject
 import loadshift.core.BpmnCompiler
 import loadshift.core.CronSchedule
 import loadshift.core.Execute
@@ -39,14 +40,13 @@ import loadshift.core.Start
 import loadshift.core.Step
 import loadshift.core.SubFlow
 import loadshift.core.Task
-import loadshift.core.WorkItemBase
+import loadshift.core.WorkItem
+import loadshift.core.WorkItemCodec
 import loadshift.core.Workflow
 import org.camunda.bpm.model.bpmn.Bpmn
 import java.io.ByteArrayOutputStream
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
-
-private typealias Factory = (MutableMap<String, Any?>) -> WorkItemBase
 
 class Camunda7Backend(
     base: String = "http://localhost:8080/engine-rest",
@@ -55,7 +55,7 @@ class Camunda7Backend(
 
     override val control = RunTracker("camunda7")
 
-    override suspend fun <W : WorkItemBase> run(workflow: Workflow<W>, config: RunConfig): RunHandle {
+    override suspend fun <W : WorkItem> run(workflow: Workflow<W>, config: RunConfig): RunHandle {
         val processes = BpmnCompiler.compile(workflow)
         val resources = processes.map { p ->
             Camunda7Dialect.decorate(p.model, p.serviceTasks)
@@ -76,12 +76,13 @@ class Camunda7Backend(
     }
 }
 
-internal class TaskHandler(val task: Task<WorkItemBase>, val factory: Factory)
-internal class DecisionHandler(val id: String, val predicate: (WorkItemBase) -> Boolean, val factory: Factory)
+internal class TaskHandler(val task: Task<WorkItem>, val codec: WorkItemCodec<WorkItem>)
+internal class DecisionHandler(val id: String, val predicate: (WorkItem) -> Boolean, val codec: WorkItemCodec<WorkItem>)
 internal class ExpandHandler(
     val id: String,
-    val expand: suspend (WorkItemBase) -> Flow<WorkItemBase>,
-    val factory: Factory,
+    val expand: suspend (WorkItem) -> Flow<WorkItem>,
+    val codec: WorkItemCodec<WorkItem>,
+    val childCodec: WorkItemCodec<WorkItem>,
 )
 
 internal class Registry {
@@ -102,34 +103,34 @@ private fun buildRegistry(workflow: Workflow<*>): Registry {
     val levels = mutableListOf<SubFlow<*>>()
     gather(workflow.root, levels)
     for (level in levels) {
-        val factory = level.factory as Factory
+        val codec = level.codec as WorkItemCodec<WorkItem>
         for ((topic, predicate) in level.decisions) {
             val id = topic.removePrefix("decision_")
-            registry.decisionHandlers[topic] = DecisionHandler(id, predicate as (WorkItemBase) -> Boolean, factory)
+            registry.decisionHandlers[topic] = DecisionHandler(id, predicate as (WorkItem) -> Boolean, codec)
         }
-        collectFromStep(level.step, factory, registry)
+        collectFromStep(level.step, codec, registry)
     }
     return registry
 }
 
 @Suppress("UNCHECKED_CAST")
-private fun collectFromStep(step: Step<*>, factory: Factory, registry: Registry) {
+private fun collectFromStep(step: Step<*>, codec: WorkItemCodec<WorkItem>, registry: Registry) {
     when (step) {
-        is Sequence -> step.steps.forEach { collectFromStep(it, factory, registry) }
+        is Sequence -> step.steps.forEach { collectFromStep(it, codec, registry) }
         is Execute<*> -> {
-            val task = step.task as Task<WorkItemBase>
-            registry.taskHandlers[task.topic] = TaskHandler(task, factory)
+            val task = step.task as Task<WorkItem>
+            registry.taskHandlers[task.topic] = TaskHandler(task, codec)
         }
         is Conditional -> {
-            collectFromStep(step.onTrue, factory, registry)
-            step.onFalse?.let { collectFromStep(it, factory, registry) }
+            collectFromStep(step.onTrue, codec, registry)
+            step.onFalse?.let { collectFromStep(it, codec, registry) }
         }
-        is Loop -> collectFromStep(step.body, factory, registry)
-        is Parallel -> step.branches.forEach { collectFromStep(it, factory, registry) }
+        is Loop -> collectFromStep(step.body, codec, registry)
+        is Parallel -> step.branches.forEach { collectFromStep(it, codec, registry) }
         is FanOut<*, *> -> {
-            val fanOut = step as FanOut<WorkItemBase, WorkItemBase>
+            val fanOut = step as FanOut<WorkItem, WorkItem>
             registry.expandHandlers["expand_${fanOut.id}"] =
-                ExpandHandler(fanOut.id, fanOut.expand, factory)
+                ExpandHandler(fanOut.id, fanOut.expand, codec, fanOut.childCodec as WorkItemCodec<WorkItem>)
         }
     }
 }
@@ -242,7 +243,9 @@ internal class Camunda7Run(
     override suspend fun engineActive(): Long? =
         runCatching { levelKeys.sumOf { client.processInstanceCount(it) } }.getOrNull()
 
+    @Suppress("UNCHECKED_CAST")
     private suspend fun startRootInstances() {
+        val rootCodec = workflow.root.codec as WorkItemCodec<WorkItem>
         val semaphore = Semaphore(config.maxConcurrency)
         coroutineScope {
             workflow.seed().collectIndexed { index, item ->
@@ -252,7 +255,7 @@ internal class Camunda7Run(
                     try {
                         client.startInstance(
                             processDefinitionKey = workflow.root.key,
-                            variables = CamundaVariables.toCamunda(item.toMap()),
+                            variables = CamundaVariables.toCamunda(rootCodec.encode(item as WorkItem)),
                             businessKey = index.toString(),
                         )
                     } finally {
@@ -304,7 +307,7 @@ internal class Camunda7Run(
     private suspend fun process(task: ExternalTaskDto) {
         val variables = unwrapItemVariables(CamundaVariables.fromCamunda(task.variables))
         val completionVars = try {
-            dispatch(task.topicName, variables)
+            dispatch(task.topicName, CamundaVariables.toJsonElement(variables) as JsonObject)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -357,23 +360,23 @@ internal class Camunda7Run(
         }
     }
 
-    private suspend fun dispatch(topic: String, variables: MutableMap<String, Any?>): Map<String, CamundaValue> {
+    private suspend fun dispatch(topic: String, variables: JsonObject): Map<String, CamundaValue> {
         registry.taskHandlers[topic]?.let { handler ->
-            val item = handler.factory(variables)
+            val item = handler.codec.decode(variables)
             withContext(ExecutionContext(runId, workflow.name, config.logSink, itemKey = item.key, topic = topic)) {
                 handler.task.execute(item)
             }
-            return CamundaVariables.toCamunda(item.toMap())
+            return CamundaVariables.toCamunda(handler.codec.encode(item))
         }
         registry.decisionHandlers[topic]?.let { handler ->
-            val item = handler.factory(variables)
+            val item = handler.codec.decode(variables)
             val result = handler.predicate(item)
             return mapOf("${handler.id}_result" to CamundaVariables.encode(result))
         }
         registry.expandHandlers[topic]?.let { handler ->
-            val item = handler.factory(variables)
+            val item = handler.codec.decode(variables)
             val children = handler.expand(item).toList()
-            return mapOf("${handler.id}_items" to CamundaVariables.encode(children.map { it.toMap() }))
+            return mapOf("${handler.id}_items" to CamundaVariables.encode(children.map { handler.childCodec.encode(it) }))
         }
         error("no handler for topic '$topic'")
     }

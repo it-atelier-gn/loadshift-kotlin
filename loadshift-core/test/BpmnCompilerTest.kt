@@ -1,17 +1,16 @@
 package loadshift.core
 
+import kotlinx.serialization.Serializable
 import org.camunda.bpm.model.bpmn.Bpmn
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-private class Order : WorkItemBase() {
-    var paid: Boolean by required()
-}
+@Serializable
+private data class Order(var paid: Boolean) : WorkItem
 
-private class Line : WorkItemBase() {
-    var sku: String by required()
-}
+@Serializable
+private data class Line(var sku: String) : WorkItem
 
 class BpmnCompilerTest {
     private fun workflowWithEverything(): Workflow<Order> = workflow("order-job") {

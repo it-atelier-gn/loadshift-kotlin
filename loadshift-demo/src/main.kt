@@ -1,37 +1,32 @@
 package loadshift.demo
 
-import loadshift.core.ErrorPolicy
-import loadshift.core.RetryPolicy
-import loadshift.core.RunConfig
-import loadshift.core.WorkItemBase
-import loadshift.core.workflow
-import loadshift.local.LocalBackend
-import loadshift.web.ControlServer
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.Serializable
+import loadshift.core.ErrorPolicy
+import loadshift.core.RetryPolicy
+import loadshift.core.RunConfig
+import loadshift.core.WorkItem
+import loadshift.core.workflow
+import loadshift.local.LocalBackend
+import loadshift.web.ControlServer
 import kotlin.time.Duration.Companion.milliseconds
 
-class User : WorkItemBase() {
-    var id: String by required()
+@Serializable
+class User(var id: String) : WorkItem {
     override val key get() = id
 }
 
-class Contact : WorkItemBase() {
-    var id: String by required()
-    var email: String? by optional()
+@Serializable
+class Contact(var id: String, var email: String? = null) : WorkItem {
     override val key get() = id
-}
-
-private fun contact(id: String, email: String?) = Contact().apply {
-    this.id = id
-    this.email = email
 }
 
 private fun fetchContacts(customerId: String): List<Contact> = listOf(
-    contact("$customerId-a", "$customerId@example.com"),
-    contact("$customerId-b", null),
-    contact("$customerId-c", "bad"),
+    Contact("$customerId-a", "$customerId@example.com"),
+    Contact("$customerId-b", null),
+    Contact("$customerId-c", "bad"),
 )
 
 fun main(args: Array<String>) = runBlocking<Unit> {
@@ -40,7 +35,7 @@ fun main(args: Array<String>) = runBlocking<Unit> {
         return@runBlocking
     }
 
-    val customers = (1..3).map { n -> User().apply { id = "cust-$n" } }
+    val customers = (1..3).map { n -> User("cust-$n") }
 
     val cleanup = workflow<User>("contact-cleanup") {
         input(customers)
@@ -73,7 +68,7 @@ private suspend fun uiDemo() {
     val server = ControlServer(backend, port = 8571).start()
     println("loadshift console: http://127.0.0.1:8571")
 
-    val customers = (1..6).map { n -> User().apply { id = "cust-$n" } }
+    val customers = (1..6).map { n -> User("cust-$n") }
     val cleanup = workflow<User>("contact-cleanup") {
         input(customers)
         fanOut<Contact>(expand = { fetchContacts(it.id) }, concurrency = 2) {

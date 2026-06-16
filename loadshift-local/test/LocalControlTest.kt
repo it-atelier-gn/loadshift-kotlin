@@ -1,22 +1,21 @@
 package loadshift.local
 
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.Serializable
 import loadshift.core.ErrorPolicy
 import loadshift.core.RetryPolicy
 import loadshift.core.RunConfig
 import loadshift.core.RunState
-import loadshift.core.WorkItemBase
+import loadshift.core.WorkItem
 import loadshift.core.workflow
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 
-private class Doc : WorkItemBase() {
-    var id: String by required()
+@Serializable
+private data class Doc(var id: String) : WorkItem {
     override val key get() = id
 }
-
-private fun doc(id: String) = Doc().apply { this.id = id }
 
 class LocalControlTest {
 
@@ -24,7 +23,7 @@ class LocalControlTest {
     fun completedRunIsVisibleThroughControl() = runTest {
         val backend = LocalBackend()
         val wf = workflow<Doc>("intro-ok") {
-            input(listOf(doc("a"), doc("b")))
+            input(listOf(Doc("a"), Doc("b")))
             task("noop") {}
         }
         backend.run(wf).await()
@@ -46,7 +45,7 @@ class LocalControlTest {
     fun deadLettersShowUpInSnapshot() = runTest {
         val backend = LocalBackend()
         val wf = workflow<Doc>("intro-dlq") {
-            input(listOf(doc("bad")))
+            input(listOf(Doc("bad")))
             task("explode", retry = RetryPolicy.None) { error("kaboom") }
         }
         backend.run(wf, RunConfig(onError = ErrorPolicy.DeadLetter)).await()
@@ -62,7 +61,7 @@ class LocalControlTest {
     fun eachRunGetsItsOwnSnapshot() = runTest {
         val backend = LocalBackend()
         val wf = workflow<Doc>("intro-multi") {
-            input(listOf(doc("x")))
+            input(listOf(Doc("x")))
             task("noop") {}
         }
         backend.run(wf).await()

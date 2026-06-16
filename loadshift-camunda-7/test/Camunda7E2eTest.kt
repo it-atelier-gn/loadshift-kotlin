@@ -6,9 +6,10 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.Serializable
 import loadshift.core.RunConfig
 import loadshift.core.RunState
-import loadshift.core.WorkItemBase
+import loadshift.core.WorkItem
 import loadshift.core.workflow
 import org.testcontainers.DockerClientFactory
 import org.testcontainers.containers.GenericContainer
@@ -21,20 +22,15 @@ import java.util.Collections
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-private class EUser : WorkItemBase() {
-    var id: String by required()
-    var note: String? by optional()
+@Serializable
+private data class EUser(var id: String, var note: String? = null) : WorkItem {
     override val key get() = id
 }
 
-private class EContact : WorkItemBase() {
-    var label: String by required()
+@Serializable
+private data class EContact(var label: String) : WorkItem {
     override val key get() = label
 }
-
-private fun user(id: String) = EUser().apply { this.id = id }
-
-private fun contact(label: String) = EContact().apply { this.label = label }
 
 private fun purgeRunningInstances(base: String) {
     val http = java.net.http.HttpClient.newHttpClient()
@@ -83,9 +79,9 @@ class Camunda7E2eTest {
         val seen = Collections.synchronizedList(mutableListOf<String>())
         val key = "e2e7x${System.currentTimeMillis()}"
         val wf = workflow<EUser>(key) {
-            input(listOf(user("a"), user("b")))
+            input(listOf(EUser("a"), EUser("b")))
             task("stamp") { it.note = "ok:${it.id}" }
-            fanOut<EContact>(expand = { u -> listOf(contact("${u.id}-1"), contact("${u.id}-2")) }) {
+            fanOut<EContact>(expand = { u -> listOf(EContact("${u.id}-1"), EContact("${u.id}-2")) }) {
                 condition({ it.label.endsWith("1") }) {
                     task("first") { c -> seen += "first:${c.label}" }
                 } otherwise {

@@ -1,6 +1,6 @@
 package loadshift.core
 
-class Workflow<W : WorkItemBase>(
+class Workflow<W : WorkItem>(
     val key: String,
     val name: String,
     val seed: Seed<W>,
@@ -8,5 +8,5 @@ class Workflow<W : WorkItemBase>(
 )
 
 interface Backend {
-    suspend fun <W : WorkItemBase> run(workflow: Workflow<W>, config: RunConfig = RunConfig()): RunHandle
+    suspend fun <W : WorkItem> run(workflow: Workflow<W>, config: RunConfig = RunConfig()): RunHandle
 }

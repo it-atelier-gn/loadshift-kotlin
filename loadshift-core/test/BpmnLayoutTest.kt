@@ -1,5 +1,6 @@
 package loadshift.core
 
+import kotlinx.serialization.Serializable
 import org.camunda.bpm.model.bpmn.instance.Gateway
 import org.camunda.bpm.model.bpmn.instance.ServiceTask
 import org.camunda.bpm.model.bpmn.instance.bpmndi.BpmnEdge
@@ -8,9 +9,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-private class LayoutItem : WorkItemBase() {
-    var n: Int by required()
-}
+@Serializable
+private data class LayoutItem(var n: Int) : WorkItem
 
 class BpmnLayoutTest {
 

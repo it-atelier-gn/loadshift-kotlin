@@ -42,8 +42,7 @@ import loadshift.core.Sequence
 import loadshift.core.Start
 import loadshift.core.Step
 import loadshift.core.Task
-import loadshift.core.TaskOptions
-import loadshift.core.WorkItemBase
+import loadshift.core.WorkItem
 import loadshift.core.Workflow
 import java.util.Collections
 import java.util.UUID
@@ -55,13 +54,13 @@ import kotlin.time.Duration
 class LocalBackend : ControllableBackend {
     override val control = RunTracker("local")
 
-    override suspend fun <W : WorkItemBase> run(workflow: Workflow<W>, config: RunConfig): RunHandle {
+    override suspend fun <W : WorkItem> run(workflow: Workflow<W>, config: RunConfig): RunHandle {
         val run = LocalRun(workflow, config)
         control.track(workflow, run, run)
         return run
     }
 
-    suspend fun <W : WorkItemBase> dryRun(workflow: Workflow<W>): List<String> {
+    suspend fun <W : WorkItem> dryRun(workflow: Workflow<W>): List<String> {
         val run = LocalRun(workflow, RunConfig(dryRun = true, maxConcurrency = 1))
         run.await()
         return run.trace()
@@ -88,7 +87,7 @@ private sealed class UnitSignal(val topic: String, val reason: String) : Excepti
 private class DeadLetterSignal(topic: String, reason: String) : UnitSignal(topic, reason)
 private class SkipSignal(topic: String) : UnitSignal(topic, "skipped")
 
-private class LocalRun<W : WorkItemBase>(
+private class LocalRun<W : WorkItem>(
     private val workflow: Workflow<W>,
     private val config: RunConfig,
 ) : RunHandle, RunInspector {
@@ -208,24 +207,24 @@ private class LocalRun<W : WorkItemBase>(
         currentCoroutineContext()[ExecutionContext.Key] ?: ExecutionContext(runId, workflow.name, config.logSink)
 
     @Suppress("UNCHECKED_CAST")
-    private suspend fun interpret(step: Step<*>, item: WorkItemBase) {
+    private suspend fun interpret(step: Step<*>, item: WorkItem) {
         when (step) {
             is Sequence<*> -> for (s in step.steps) interpret(s, item)
 
             is Execute<*> -> {
-                val e = step as Execute<WorkItemBase>
+                val e = step as Execute<WorkItem>
                 withContext(currentExecutionContext().withTopic(e.task.topic)) {
                     runTask(e.task, e.options, item)
                 }
             }
 
             is Conditional<*> -> {
-                val c = step as Conditional<WorkItemBase>
+                val c = step as Conditional<WorkItem>
                 if (c.predicate(item)) interpret(c.onTrue, item) else c.onFalse?.let { interpret(it, item) }
             }
 
             is Loop<*> -> {
-                val l = step as Loop<WorkItemBase>
+                val l = step as Loop<WorkItem>
                 var iterations = 0
                 while (l.predicate(item)) {
                     if (++iterations > config.maxLoopIterations) {
@@ -240,7 +239,7 @@ private class LocalRun<W : WorkItemBase>(
             }
 
             is FanOut<*, *> -> {
-                val fanOut = step as FanOut<WorkItemBase, WorkItemBase>
+                val fanOut = step as FanOut<WorkItem, WorkItem>
                 val childFlow = fanOut.expand(item)
                 val semaphore = Semaphore(fanOut.concurrency ?: config.maxConcurrency)
                 val ctx = currentExecutionContext()
@@ -263,7 +262,7 @@ private class LocalRun<W : WorkItemBase>(
         }
     }
 
-    private suspend fun runChild(step: Step<*>, child: WorkItemBase) {
+    private suspend fun runChild(step: Step<*>, child: WorkItem) {
         try {
             interpret(step, child)
         } catch (e: DeadLetterSignal) {
@@ -273,7 +272,7 @@ private class LocalRun<W : WorkItemBase>(
         }
     }
 
-    private suspend fun runTask(task: Task<WorkItemBase>, options: TaskOptions, item: WorkItemBase) {
+    private suspend fun runTask(task: Task<WorkItem>, options: TaskOptions, item: WorkItem) {
         while (paused) delay(50)
 
         if (config.dryRun) {

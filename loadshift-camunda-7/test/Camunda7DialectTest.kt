@@ -1,19 +1,18 @@
 package loadshift.camunda7
 
+import kotlinx.serialization.Serializable
 import loadshift.core.BpmnCompiler
-import loadshift.core.WorkItemBase
+import loadshift.core.WorkItem
 import loadshift.core.workflow
 import org.camunda.bpm.model.bpmn.Bpmn
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
-private class Job : WorkItemBase() {
-    var id: String by required()
-}
+@Serializable
+private data class Job(var id: String = "") : WorkItem
 
-private class Line : WorkItemBase() {
-    var sku: String by required()
-}
+@Serializable
+private data class Line(var sku: String = "") : WorkItem
 
 class Camunda7DialectTest {
     @Test
