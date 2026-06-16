@@ -1,10 +1,11 @@
 package loadshift.examples
 
+import kotlinx.serialization.Serializable
 import loadshift.camunda7.Camunda7Dialect
 import loadshift.camunda8.Camunda8Dialect
 import loadshift.core.BpmnCompiler
 import loadshift.core.CompiledProcess
-import loadshift.core.WorkItemBase
+import loadshift.core.WorkItem
 import loadshift.core.Workflow
 import loadshift.core.workflow
 import org.camunda.bpm.model.bpmn.Bpmn
@@ -20,16 +21,13 @@ import org.camunda.bpm.model.bpmn.instance.bpmndi.BpmnEdge
 import org.camunda.bpm.model.bpmn.instance.bpmndi.BpmnShape
 import java.io.File
 
-class Order : WorkItemBase() {
-    var id: String by required()
-    var total: Int by required()
-    var attempts: Int by required()
+@Serializable
+class Order(var id: String, var total: Int = 0, var attempts: Int = 0) : WorkItem {
     override val key get() = id
 }
 
-class Line : WorkItemBase() {
-    var sku: String by required()
-    var qty: Int by required()
+@Serializable
+class Line(var sku: String, var qty: Int = 0) : WorkItem {
     override val key get() = sku
 }
 

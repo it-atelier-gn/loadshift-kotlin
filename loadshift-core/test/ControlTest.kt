@@ -1,6 +1,7 @@
 package loadshift.core
 
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.Serializable
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -8,13 +9,13 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-private class IntroItem : WorkItemBase() {
-    var id: String by required()
+@Serializable
+private data class IntroItem(var id: String) : WorkItem {
     override val key get() = id
 }
 
-private class IntroChild : WorkItemBase() {
-    var label: String by required()
+@Serializable
+private data class IntroChild(var label: String) : WorkItem {
     override val key get() = label
 }
 

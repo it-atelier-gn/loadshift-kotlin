@@ -9,9 +9,10 @@ import io.ktor.client.request.post
 import io.ktor.client.statement.bodyAsText
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.Serializable
 import loadshift.core.RunConfig
 import loadshift.core.Start
-import loadshift.core.WorkItemBase
+import loadshift.core.WorkItem
 import loadshift.core.workflow
 import loadshift.local.LocalBackend
 import kotlin.test.Test
@@ -19,12 +20,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-private class Doc : WorkItemBase() {
-    var id: String by required()
+@Serializable
+private data class Doc(var id: String) : WorkItem {
     override val key get() = id
 }
-
-private fun doc(id: String) = Doc().apply { this.id = id }
 
 class ControlServerTest {
 
@@ -32,7 +31,7 @@ class ControlServerTest {
     fun servesApiAndUi() = runBlocking {
         val backend = LocalBackend()
         val wf = workflow<Doc>("web-flow") {
-            input(listOf(doc("a"), doc("b")))
+            input(listOf(Doc("a"), Doc("b")))
             task("noop") {}
         }
         backend.run(wf).await()
@@ -73,7 +72,7 @@ class ControlServerTest {
     fun startEndpointTriggersManualRun() = runBlocking {
         val backend = LocalBackend()
         val wf = workflow<Doc>("manual-flow") {
-            input(listOf(doc("a")))
+            input(listOf(Doc("a")))
             task("noop") {}
         }
         val handle = backend.run(wf, RunConfig(start = Start.Manual))
@@ -105,7 +104,7 @@ class ControlServerTest {
     fun cancelEndpointStopsManualRun() = runBlocking {
         val backend = LocalBackend()
         val wf = workflow<Doc>("cancel-flow") {
-            input(listOf(doc("a")))
+            input(listOf(Doc("a")))
             task("noop") {}
         }
         val handle = backend.run(wf, RunConfig(start = Start.Manual))

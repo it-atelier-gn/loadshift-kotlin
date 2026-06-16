@@ -3,7 +3,6 @@ package loadshift.core
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
-import kotlin.reflect.KClass
 import kotlin.time.Duration
 
 @DslMarker
@@ -17,16 +16,9 @@ class IdGen {
 internal fun sanitizeId(s: String): String =
     s.lowercase().replace(Regex("[^a-z0-9_\\-]"), "-")
 
-@PublishedApi
-internal fun <C : WorkItemBase> childFactoryFor(klass: KClass<C>): (MutableMap<String, Any?>) -> C {
-    val ctor = klass.java.getDeclaredConstructor()
-    ctor.isAccessible = true
-    return { map -> ctor.newInstance().also { it.hydrate(map) } }
-}
-
 @LoadshiftDsl
-open class FlowSpec<W : WorkItemBase> internal constructor(
-    @PublishedApi internal val factory: (MutableMap<String, Any?>) -> W,
+open class FlowSpec<W : WorkItem> internal constructor(
+    @PublishedApi internal val codec: WorkItemCodec<W>,
     @PublishedApi internal val baseKey: String,
     @PublishedApi internal val idgen: IdGen,
 ) {
@@ -88,41 +80,41 @@ open class FlowSpec<W : WorkItemBase> internal constructor(
         steps += Parallel(ps.branchSteps.toList())
     }
 
-    inline fun <reified C : WorkItemBase> fanOut(
+    inline fun <reified C : WorkItem> fanOut(
         noinline expand: suspend (W) -> List<C>,
         concurrency: Int? = null,
         noinline body: FlowSpec<C>.() -> Unit,
     ) = fanOutInternal(
-        childFactoryFor(C::class),
+        workItemCodec<C>(),
         { w -> kotlinx.coroutines.flow.flow { for (c in expand(w)) emit(c) } },
         concurrency,
         body,
     )
 
-    inline fun <reified C : WorkItemBase> fanOut(
+    inline fun <reified C : WorkItem> fanOut(
         paginated: Paginated<W, C>,
         concurrency: Int? = null,
         noinline body: FlowSpec<C>.() -> Unit,
-    ) = fanOutInternal(childFactoryFor(C::class), { w -> paginated.asFlow(w) }, concurrency, body)
+    ) = fanOutInternal(workItemCodec<C>(), { w -> paginated.asFlow(w) }, concurrency, body)
 
     @PublishedApi
-    internal fun <C : WorkItemBase> fanOutInternal(
-        childFactory: (MutableMap<String, Any?>) -> C,
+    internal fun <C : WorkItem> fanOutInternal(
+        childCodec: WorkItemCodec<C>,
         expand: suspend (W) -> Flow<C>,
         concurrency: Int?,
         body: FlowSpec<C>.() -> Unit,
     ) {
         val id = idgen.next("f")
         val childKey = "${baseKey}_$id"
-        val childSpec = FlowSpec(childFactory, childKey, IdGen()).apply(body)
+        val childSpec = FlowSpec(childCodec, childKey, IdGen()).apply(body)
         val sub = SubFlow(
             childKey,
             childSpec.toStep(),
-            childFactory,
+            childCodec,
             childSpec.tasks.toMap(),
             childSpec.decisions.toMap(),
         )
-        steps += FanOut(id, childKey, expand, childFactory, concurrency, sub)
+        steps += FanOut(id, childKey, expand, childCodec, concurrency, sub)
     }
 
     internal fun setElse(
@@ -137,7 +129,7 @@ open class FlowSpec<W : WorkItemBase> internal constructor(
         steps[index] = Conditional(id, predicate, thenStep, elseSpec.toStep())
     }
 
-    internal fun child(): FlowSpec<W> = FlowSpec(factory, baseKey, idgen)
+    internal fun child(): FlowSpec<W> = FlowSpec(codec, baseKey, idgen)
 
     internal fun absorb(other: FlowSpec<W>) {
         tasks.putAll(other.tasks)
@@ -147,7 +139,7 @@ open class FlowSpec<W : WorkItemBase> internal constructor(
     internal fun toStep(): Step<W> = Sequence(steps.toList())
 }
 
-class ElseHandle<W : WorkItemBase> internal constructor(
+class ElseHandle<W : WorkItem> internal constructor(
     private val parent: FlowSpec<W>,
     private val index: Int,
     private val id: String,
@@ -160,7 +152,7 @@ class ElseHandle<W : WorkItemBase> internal constructor(
 }
 
 @LoadshiftDsl
-class ParallelSpec<W : WorkItemBase> internal constructor(private val parent: FlowSpec<W>) {
+class ParallelSpec<W : WorkItem> internal constructor(private val parent: FlowSpec<W>) {
     internal val branchSteps = mutableListOf<Step<W>>()
 
     fun branch(body: FlowSpec<W>.() -> Unit) {
@@ -171,10 +163,10 @@ class ParallelSpec<W : WorkItemBase> internal constructor(private val parent: Fl
 }
 
 @LoadshiftDsl
-class WorkflowSpec<W : WorkItemBase> @PublishedApi internal constructor(
-    factory: (MutableMap<String, Any?>) -> W,
+class WorkflowSpec<W : WorkItem> @PublishedApi internal constructor(
+    codec: WorkItemCodec<W>,
     private val wfName: String,
-) : FlowSpec<W>(factory, sanitizeId(wfName), IdGen()) {
+) : FlowSpec<W>(codec, sanitizeId(wfName), IdGen()) {
     private var seed: Seed<W> = { emptyFlow() }
 
     fun input(list: List<W>) {
@@ -198,12 +190,12 @@ class WorkflowSpec<W : WorkItemBase> @PublishedApi internal constructor(
             key = key,
             name = wfName,
             seed = seed,
-            root = SubFlow(key, toStep(), factory, tasks.toMap(), decisions.toMap()),
+            root = SubFlow(key, toStep(), codec, tasks.toMap(), decisions.toMap()),
         )
     }
 }
 
-inline fun <reified W : WorkItemBase> workflow(
+inline fun <reified W : WorkItem> workflow(
     name: String,
     build: WorkflowSpec<W>.() -> Unit,
-): Workflow<W> = WorkflowSpec<W>(childFactoryFor(W::class), name).apply(build).build()
+): Workflow<W> = WorkflowSpec<W>(workItemCodec<W>(), name).apply(build).build()

@@ -21,6 +21,9 @@ object CamundaVariables {
     fun toCamunda(map: Map<String, Any?>): Map<String, CamundaValue> =
         map.mapValues { (_, v) -> encode(v) }
 
+    fun toCamunda(json: JsonObject): Map<String, CamundaValue> =
+        json.mapValues { (_, v) -> encode(fromJsonElement(v)) }
+
     fun fromCamunda(vars: Map<String, CamundaValue>): MutableMap<String, Any?> =
         vars.mapValues { (_, cv) -> decode(cv) }.toMutableMap()
 

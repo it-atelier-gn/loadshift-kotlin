@@ -3,6 +3,7 @@ package loadshift.local
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlinx.datetime.Clock
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonPrimitive
 import loadshift.core.ErrorPolicy
 import loadshift.core.LogEntry
@@ -10,7 +11,7 @@ import loadshift.core.LogSink
 import loadshift.core.RetryPolicy
 import loadshift.core.RunConfig
 import loadshift.core.Start
-import loadshift.core.WorkItemBase
+import loadshift.core.WorkItem
 import loadshift.core.log
 import loadshift.core.workflow
 import java.util.Collections
@@ -22,23 +23,15 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
-private class Cust : WorkItemBase() {
-    var id: String by required()
-    var n: Int by required()
+@Serializable
+private data class Cust(var id: String, var n: Int = 0) : WorkItem {
     override val key get() = id
 }
 
-private class Kid : WorkItemBase() {
-    var label: String by required()
+@Serializable
+private data class Kid(var label: String) : WorkItem {
     override val key get() = label
 }
-
-private fun cust(id: String, n: Int = 0) = Cust().apply {
-    this.id = id
-    this.n = n
-}
-
-private fun kid(label: String) = Kid().apply { this.label = label }
 
 class LocalBackendTest {
 
@@ -46,8 +39,8 @@ class LocalBackendTest {
     fun nestedFanOutVisitsEveryChild() = runTest {
         val seen = Collections.synchronizedList(mutableListOf<String>())
         val wf = workflow<Cust>("nested") {
-            input(listOf(cust("a"), cust("b")))
-            fanOut<Kid>(expand = { c -> listOf(kid("${c.id}-1"), kid("${c.id}-2")) }) {
+            input(listOf(Cust("a"), Cust("b")))
+            fanOut<Kid>(expand = { c -> listOf(Kid("${c.id}-1"), Kid("${c.id}-2")) }) {
                 task("touch") { k -> seen += k.label }
             }
         }
@@ -62,7 +55,7 @@ class LocalBackendTest {
     fun conditionalPicksBranch() = runTest {
         val results = Collections.synchronizedList(mutableListOf<String>())
         val wf = workflow<Cust>("cond") {
-            input(listOf(cust("yes", 5), cust("no", -1)))
+            input(listOf(Cust("yes", 5), Cust("no", -1)))
             condition({ it.n > 0 }) {
                 task("pos") { results += "pos:${it.id}" }
             } otherwise {
@@ -75,7 +68,7 @@ class LocalBackendTest {
 
     @Test
     fun loopRunsUntilGuardFalse() = runTest {
-        val item = cust("x", 0)
+        val item = Cust("x", 0)
         val wf = workflow<Cust>("loop") {
             input(listOf(item))
             loop({ it.n < 3 }) {
@@ -90,7 +83,7 @@ class LocalBackendTest {
     fun parallelRunsAllBranches() = runTest {
         val hits = Collections.synchronizedList(mutableListOf<String>())
         val wf = workflow<Cust>("par") {
-            input(listOf(cust("x")))
+            input(listOf(Cust("x")))
             parallel {
                 branch { task("e") { hits += "e" } }
                 branch { task("f") { hits += "f" } }
@@ -105,7 +98,7 @@ class LocalBackendTest {
         val current = AtomicInteger()
         val max = AtomicInteger()
         val wf = workflow<Cust>("cap") {
-            input((1..12).map { cust("$it") })
+            input((1..12).map { Cust("$it") })
             task("work") {
                 val c = current.incrementAndGet()
                 max.updateAndGet { m -> maxOf(m, c) }
@@ -121,7 +114,7 @@ class LocalBackendTest {
     fun retriesThenDeadLetters() = runTest {
         val attempts = AtomicInteger()
         val wf = workflow<Cust>("retry") {
-            input(listOf(cust("x")))
+            input(listOf(Cust("x")))
             task("flaky", retry = RetryPolicy(maxAttempts = 3, baseDelay = 1.milliseconds, jitter = false)) {
                 attempts.incrementAndGet()
                 throw RuntimeException("boom")
@@ -138,8 +131,8 @@ class LocalBackendTest {
     @Test
     fun childDeadLetterCarriesItemKey() = runTest {
         val wf = workflow<Cust>("child-dlq") {
-            input(listOf(cust("p")))
-            fanOut<Kid>(expand = { listOf(kid("p-1")) }) {
+            input(listOf(Cust("p")))
+            fanOut<Kid>(expand = { listOf(Kid("p-1")) }) {
                 task("explode", retry = RetryPolicy(maxAttempts = 1)) { throw RuntimeException("boom") }
             }
         }
@@ -151,7 +144,7 @@ class LocalBackendTest {
     @Test
     fun dryRunRecordsTopicsWithoutExecuting() = runTest {
         val wf = workflow<Cust>("dry") {
-            input(listOf(cust("x", 1)))
+            input(listOf(Cust("x", 1)))
             task("a") { error("should not run") }
             condition({ it.n > 0 }) {
                 task("b") { error("should not run") }
@@ -164,7 +157,7 @@ class LocalBackendTest {
     fun manualStartWaitsForTrigger() = runTest {
         val ran = AtomicBoolean(false)
         val wf = workflow<Cust>("manual") {
-            input(listOf(cust("x")))
+            input(listOf(Cust("x")))
             task("t") { ran.set(true) }
         }
         val handle = LocalBackend().run(wf, RunConfig(start = Start.Manual))
@@ -179,7 +172,7 @@ class LocalBackendTest {
     fun failPolicyCancelsInFlightSiblings() = runTest {
         val completed = Collections.synchronizedList(mutableListOf<String>())
         val wf = workflow<Cust>("fail-cancel") {
-            input(listOf(cust("order-1"), cust("order-2"), cust("order-3")))
+            input(listOf(Cust("order-1"), Cust("order-2"), Cust("order-3")))
             task("work", retry = RetryPolicy.None) { c ->
                 if (c.id == "order-2") error("boom")
                 delay(200)
@@ -196,7 +189,7 @@ class LocalBackendTest {
     fun scheduledStartDelaysExecution() = runTest {
         val ran = AtomicBoolean(false)
         val wf = workflow<Cust>("sched") {
-            input(listOf(cust("x")))
+            input(listOf(Cust("x")))
             task("t") { ran.set(true) }
         }
         val handle = LocalBackend().run(wf, RunConfig(start = Start.At(Clock.System.now() + 80.milliseconds)))
@@ -213,8 +206,8 @@ class LocalBackendTest {
             }
         }
         val wf = workflow<Cust>("logging") {
-            input(listOf(cust("p")))
-            fanOut<Kid>(expand = { listOf(kid("p-1")) }) {
+            input(listOf(Cust("p")))
+            fanOut<Kid>(expand = { listOf(Kid("p-1")) }) {
                 task("touch") { k -> log("processed", "label" to k.label) }
             }
         }
@@ -234,7 +227,7 @@ class LocalBackendTest {
     fun cronStartReseedsOnEveryTick() = runTest {
         val runs = AtomicInteger(0)
         val wf = workflow<Cust>("cron") {
-            input(listOf(cust("x")))
+            input(listOf(Cust("x")))
             task("t") { runs.incrementAndGet() }
         }
         val handle = LocalBackend().run(wf, RunConfig(start = Start.Cron("* * * * *")))

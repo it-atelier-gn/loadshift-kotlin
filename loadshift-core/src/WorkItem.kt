@@ -1,44 +1,22 @@
 package loadshift.core
 
-import kotlin.reflect.KProperty
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.encodeToJsonElement
 
-abstract class WorkItemBase {
-    open val key: String? = null
-
-    private val variables: MutableMap<String, Any?> = mutableMapOf()
-
-    fun toMap(): Map<String, Any?> = variables.toMap()
-
-    internal fun hydrate(values: Map<String, Any?>) {
-        variables.putAll(values)
-    }
-
-    protected fun <T> required(default: T? = null): RequiredVar<T> = RequiredVar(variables, default)
-
-    protected fun <T> optional(): OptionalVar<T> = OptionalVar(variables)
+interface WorkItem {
+    val key: String? get() = null
 }
 
-class RequiredVar<T> internal constructor(
-    private val variables: MutableMap<String, Any?>,
-    private val default: T? = null,
-) {
-    @Suppress("UNCHECKED_CAST")
-    operator fun getValue(thisRef: Any?, property: KProperty<*>): T =
-        (variables[property.name] as T?)
-            ?: default
-            ?: error("Missing required variable '${property.name}'")
+class WorkItemCodec<W : WorkItem>(
+    val decode: (JsonObject) -> W,
+    val encode: (W) -> JsonObject,
+)
 
-    operator fun setValue(thisRef: Any?, property: KProperty<*>, value: T) {
-        variables[property.name] = value
-    }
-}
+private val codecJson = Json { ignoreUnknownKeys = true }
 
-class OptionalVar<T> internal constructor(private val variables: MutableMap<String, Any?>) {
-    @Suppress("UNCHECKED_CAST")
-    operator fun getValue(thisRef: Any?, property: KProperty<*>): T? =
-        variables[property.name] as T?
-
-    operator fun setValue(thisRef: Any?, property: KProperty<*>, value: T?) {
-        variables[property.name] = value
-    }
-}
+inline fun <reified W : WorkItem> workItemCodec(): WorkItemCodec<W> = WorkItemCodec(
+    decode = { json -> codecJson.decodeFromJsonElement(json) },
+    encode = { item -> codecJson.encodeToJsonElement(item) as JsonObject },
+)
