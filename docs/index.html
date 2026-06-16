@@ -258,6 +258,22 @@ parallel {
     }
 }</code></pre>
   </div>
+  <p>Tasks inside a fan-out block can receive the parent item as a typed first argument.
+  Nested fan-out accumulates all ancestors:</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>FanOutParent.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">fanOut&lt;Order&gt;(expand = { customer -&gt; fetchOrders(customer.id) }) {
+    task("stamp") { customer, order -&gt;
+        order.tier = customer.tier
+    }
+
+    fanOut&lt;Item&gt;(expand = { order -&gt; order.items }) {
+        task("ship") { customer, order, item -&gt;
+            ship(item, order.id, customer.address)
+        }
+    }
+}</code></pre>
+  </div>
 </section>
 
 <section id="sources" class="block">
