@@ -107,10 +107,12 @@ class Camunda8E2eTest {
             input(listOf(EUser("a"), EUser("b")))
             task("stamp") { it.note = "ok:${it.id}" }
             fanOut<EContact>(expand = { u -> listOf(EContact("${u.id}-1"), EContact("${u.id}-2")) }) {
-                condition({ it.label.endsWith("1") }) {
-                    task("first") { c -> seen += "first:${c.label}" }
-                } otherwise {
-                    task("second") { c -> seen += "second:${c.label}" }
+                task("process") { parent, child ->
+                    if (child.label.endsWith("1")) {
+                        seen += "first:${child.label}:${parent.note}"
+                    } else {
+                        seen += "second:${child.label}"
+                    }
                 }
             }
         }
@@ -120,9 +122,9 @@ class Camunda8E2eTest {
         val result = withTimeout(180_000) { handle.await() }
 
         assertEquals(0, result.failed)
-        assertEquals(12, result.done)
+        assertEquals(8, result.done)
         assertEquals(
-            setOf("first:a-1", "second:a-2", "first:b-1", "second:b-2"),
+            setOf("first:a-1:ok:a", "second:a-2", "first:b-1:ok:b", "second:b-2"),
             seen.toSet(),
         )
 
