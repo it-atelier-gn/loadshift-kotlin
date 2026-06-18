@@ -163,13 +163,13 @@ done=3 failed=0 deadLetters=3
     &lt;version&gt;0.4.0&lt;/version&gt;
 &lt;/dependency&gt;</code></pre>
   </div>
-  <p class="note">Pick the modules you need; see <a href="#modules">Modules</a> for what each one contains.</p>
+  <p class="note">Pick the modules you need — see <a href="#modules">Modules</a> for what each one contains.</p>
 </section>
 
 <section id="work-items" class="block">
   <h2><span class="num">01</span>Work items</h2>
   <p>A work item is the unit that travels through a workflow. Implement
-  <code>WorkItem</code> with a <code>@Serializable</code> data class; fields are
+  <code>WorkItem</code> with a <code>@Serializable</code> data class — fields are
   plain constructor properties. The Camunda backends use kotlinx.serialization to
   convert them to and from process variables. Override <code>key</code> to give
   items a stable identity for tracing and dead letters.</p>
@@ -398,8 +398,8 @@ LocalBackend().run(sync, RunConfig(start = Start.Cron("0 9 * * *")))</code></pre
   once. <code>Start.Cron</code> takes a standard 5-field cron expression
   (minute hour day-of-month month day-of-week) and repeats indefinitely: on every tick it
   calls <code>input()</code> again and runs that batch to completion before waiting for the
-  next tick. Because each tick re-reads <code>input()</code> (including paginated
-  sources), this works the same whether a tick seeds one item or millions.</p>
+  next tick. Because each tick re-reads <code>input()</code> — including paginated
+  sources — this works the same whether a tick seeds one item or millions.</p>
 </section>
 
 <section id="logging" class="block">
