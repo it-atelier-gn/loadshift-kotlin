@@ -14,7 +14,8 @@ class WorkItemCodec<W : WorkItem>(
     val encode: (W) -> JsonObject,
 )
 
-private val codecJson = Json { ignoreUnknownKeys = true }
+@PublishedApi
+internal val codecJson = Json { ignoreUnknownKeys = true }
 
 inline fun <reified W : WorkItem> workItemCodec(): WorkItemCodec<W> = WorkItemCodec(
     decode = { json -> codecJson.decodeFromJsonElement(json) },

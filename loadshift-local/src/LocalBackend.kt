@@ -42,6 +42,7 @@ import loadshift.core.Sequence
 import loadshift.core.Start
 import loadshift.core.Step
 import loadshift.core.Task
+import loadshift.core.TaskOptions
 import loadshift.core.WorkItem
 import loadshift.core.Workflow
 import java.util.Collections
