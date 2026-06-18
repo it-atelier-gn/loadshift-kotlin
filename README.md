@@ -134,7 +134,7 @@ The Camunda modules contain full-loop e2e tests (`Camunda7E2eTest`, `Camunda8E2e
 
 ## Local dev engine
 
-To develop and test workflows against a real engine, start an empty one with a single command (Docker and the Kotlin 2.4 CLI required):
+To develop and test workflows against a real engine, start an empty one with a single command (Docker and the Kotlin 2.3 CLI required):
 
 ```sh
 .\kotlin run -m engine c7              # Camunda 7 Run on :8080 — engine-rest + Cockpit (demo/demo)
@@ -151,7 +151,7 @@ To develop and test workflows against a real engine, start an empty one with a s
 
 `scripts/examples` compiles a set of example workflows with both Camunda dialects, verifies the BPMN structurally (service task topics, gateways, call activities, FEEL conditions, complete diagram interchange), and generates [docs/examples.html](https://it-atelier-gn.github.io/loadshift-kotlin/examples.html) — DSL source on the left, the rendered BPMN diagram (bpmn-js) on the right.
 
-Requires the [Kotlin 2.4 command-line compiler](https://kotlinlang.org/docs/command-line.html):
+Requires the [Kotlin 2.3 command-line compiler](https://kotlinlang.org/docs/command-line.html):
 
 ```sh
 .\kotlin run -m examples           # verify + regenerate docs/examples.html

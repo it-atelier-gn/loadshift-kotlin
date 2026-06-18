@@ -13,6 +13,7 @@ import kotlinx.serialization.Serializable
 import loadshift.core.RunConfig
 import loadshift.core.Start
 import loadshift.core.WorkItem
+import loadshift.core.task
 import loadshift.core.workflow
 import loadshift.local.LocalBackend
 import kotlin.test.Test

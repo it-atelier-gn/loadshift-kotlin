@@ -7,6 +7,7 @@ import loadshift.core.RetryPolicy
 import loadshift.core.RunConfig
 import loadshift.core.RunState
 import loadshift.core.WorkItem
+import loadshift.core.task
 import loadshift.core.workflow
 import kotlin.test.Test
 import kotlin.test.assertEquals

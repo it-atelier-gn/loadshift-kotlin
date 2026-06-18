@@ -18,6 +18,8 @@ dependencies:
 settings:
   kotlin:
     serialization: json
+    freeCompilerArgs:
+      - -Xcontext-parameters
   publishing:
     enabled: true
     group: io.github.it-atelier-gn

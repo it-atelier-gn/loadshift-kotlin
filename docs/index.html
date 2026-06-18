@@ -187,8 +187,8 @@ data class Contact(var id: String, var email: String? = null) : WorkItem {
 
 val vip = Customer("cust-1")</code></pre>
   </div>
-  <p class="note"><code>@Serializable</code> is required on any work item type used with
-  <code>workflow&lt;W&gt;</code> or <code>fanOut&lt;C&gt;</code> when running on a Camunda
+  <p class="note"><code>@Serializable</code> is required on any work item type used as a
+  <code>workflow</code> input or <code>fanOut</code> child when running on a Camunda
   backend. The local backend passes objects in memory directly and never calls the codec.</p>
 </section>
 
@@ -249,7 +249,7 @@ parallel {
 <pre><code class="lang-kotlin">val cleanup = workflow&lt;Customer&gt;("contact-cleanup") {
     input(customers)
 
-    fanOut&lt;Contact&gt;(expand = { fetchContacts(it.id) }, concurrency = 4) {
+    fanOut(expand = { fetchContacts(it.id) }, concurrency = 4) {
         condition({ it.email == null }) {
             task("flag-missing") { flag(it) }
         } otherwise {
@@ -258,6 +258,24 @@ parallel {
     }
 }</code></pre>
   </div>
+  <p>Tasks inside a fan-out can read their ancestor items as <strong>context parameters</strong>.
+  Reach a parent with <code>contextOf&lt;T&gt;()</code> (or any function declared with
+  <code>context(T)</code>); nested fan-out accumulates every ancestor, up to five levels deep.</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>ParentAccess.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">fanOut(expand = { customer -&gt; fetchOrders(customer.id) }) {
+    fanOut(expand = { order -&gt; order.items }) {
+        task("ship") { item -&gt;
+            val order    = contextOf&lt;Order&gt;()
+            val customer = contextOf&lt;Customer&gt;()
+            ship(item, order.id, customer.address)
+        }
+    }
+}</code></pre>
+  </div>
+  <p class="note">Requires Kotlin 2.3 with <code>-Xcontext-parameters</code>. Ancestors are selected by
+  type, so two ancestors of the <em>same</em> type cannot be told apart: <code>contextOf&lt;T&gt;()</code>
+  is a compile error when the chain holds more than one <code>T</code>. Give such items distinct types.</p>
 </section>
 
 <section id="sources" class="block">
@@ -280,7 +298,7 @@ val sync = workflow&lt;Customer&gt;("sync-all") {
   <p>Fan-out can paginate per parent too, with <code>paginateWith</code>:</p>
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>PaginatedFanOut.kt</span><button class="copy" type="button">COPY</button></div>
-<pre><code class="lang-kotlin">fanOut&lt;Contact&gt;(
+<pre><code class="lang-kotlin">fanOut(
     paginateWith { customer, cursor -&gt; crm.contacts(customer.id, cursor) },
     concurrency = 8,
 ) {

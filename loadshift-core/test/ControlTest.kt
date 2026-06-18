@@ -28,7 +28,7 @@ class ControlTest {
         } otherwise {
             task("no") {}
         }
-        fanOut<IntroChild>(expand = { emptyList() }) {
+        fanOut(expand = { emptyList<IntroChild>() }) {
             task("child") {}
         }
     }

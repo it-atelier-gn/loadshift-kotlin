@@ -106,7 +106,7 @@ class BpmnLayoutTest {
             input(emptyList())
             condition({ it.n > 0 }) { task("hi") { } } otherwise { task("lo") { } }
             loop({ it.n < 3 }) { task("again") { } }
-            fanOut<LayoutItem>(expand = { emptyList() }) { task("leaf") { } }
+            fanOut(expand = { emptyList<LayoutItem>() }) { task("leaf") { } }
         }
         val root = BpmnCompiler.compile(wf)[0]
         val taskNames = root.model.getModelElementsByType(ServiceTask::class.java).map { it.name }.toSet()

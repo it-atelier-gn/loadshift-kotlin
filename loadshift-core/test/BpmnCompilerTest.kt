@@ -20,7 +20,7 @@ class BpmnCompilerTest {
             branch { task("index") { } }
             branch { task("notify") { } }
         }
-        fanOut<Line>(expand = { emptyList() }) {
+        fanOut(expand = { emptyList<Line>() }) {
             task("price-line") { }
         }
     }

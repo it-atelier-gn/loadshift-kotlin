@@ -3,6 +3,8 @@ package loadshift.camunda8
 import kotlinx.serialization.Serializable
 import loadshift.core.BpmnCompiler
 import loadshift.core.WorkItem
+import loadshift.core.fanOut
+import loadshift.core.task
 import loadshift.core.workflow
 import org.camunda.bpm.model.bpmn.Bpmn
 import kotlin.test.Test
@@ -21,7 +23,7 @@ class Camunda8DialectTest {
         val wf = workflow<Job>("c8-test") {
             input(emptyList())
             task("cleanup") { }
-            fanOut<Line>(expand = { emptyList() }) {
+            fanOut(expand = { emptyList<Line>() }) {
                 task("price") { }
             }
         }
@@ -38,7 +40,7 @@ class Camunda8DialectTest {
     fun injectsZeebeLoopCharacteristics() {
         val wf = workflow<Job>("c8-fanout") {
             input(emptyList())
-            fanOut<Line>(expand = { emptyList() }) {
+            fanOut(expand = { emptyList<Line>() }) {
                 task("price") { }
             }
         }
