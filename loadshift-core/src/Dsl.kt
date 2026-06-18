@@ -83,31 +83,30 @@ open class FlowSpec<W : WorkItem> internal constructor(
     inline fun <reified C : WorkItem> fanOut(
         noinline expand: suspend (W) -> List<C>,
         concurrency: Int? = null,
-        noinline body: ChildFlowSpec1<W, C>.() -> Unit,
+        noinline body: FlowSpec<C>.() -> Unit,
     ) = fanOutInternal(
         workItemCodec<C>(),
-        { w -> flow { for (c in expand(w)) emit(c) } },
+        { w -> kotlinx.coroutines.flow.flow { for (c in expand(w)) emit(c) } },
         concurrency,
-    ) { codec, key, idgen -> ChildFlowSpec1<W, C>(codec, key, idgen).apply(body) }
+        body,
+    )
 
     inline fun <reified C : WorkItem> fanOut(
         paginated: Paginated<W, C>,
         concurrency: Int? = null,
-        noinline body: ChildFlowSpec1<W, C>.() -> Unit,
-    ) = fanOutInternal(workItemCodec<C>(), { w -> paginated.asFlow(w) }, concurrency) { codec, key, idgen ->
-        ChildFlowSpec1<W, C>(codec, key, idgen).apply(body)
-    }
+        noinline body: FlowSpec<C>.() -> Unit,
+    ) = fanOutInternal(workItemCodec<C>(), { w -> paginated.asFlow(w) }, concurrency, body)
 
     @PublishedApi
     internal fun <C : WorkItem> fanOutInternal(
         childCodec: WorkItemCodec<C>,
         expand: suspend (W) -> Flow<C>,
         concurrency: Int?,
-        buildSpec: (WorkItemCodec<C>, String, IdGen) -> FlowSpec<C>,
+        body: FlowSpec<C>.() -> Unit,
     ) {
         val id = idgen.next("f")
         val childKey = "${baseKey}_$id"
-        val childSpec = buildSpec(childCodec, childKey, IdGen())
+        val childSpec = FlowSpec(childCodec, childKey, IdGen()).apply(body)
         val sub = SubFlow(
             childKey,
             childSpec.toStep(),

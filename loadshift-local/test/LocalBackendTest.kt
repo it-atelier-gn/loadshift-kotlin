@@ -241,36 +241,4 @@ class LocalBackendTest {
         handle.cancel()
         runCatching { handle.await() }
     }
-
-    @Test
-    fun parentAccessInDirectChildTask() = runTest {
-        val seen = Collections.synchronizedList(mutableListOf<String>())
-        val wf = workflow<Cust>("parent-access") {
-            input(listOf(Cust("a", 42), Cust("b", 7)))
-            fanOut<Kid>(expand = { c -> listOf(Kid("${c.id}-1")) }) {
-                task("read-parent") { parent, child ->
-                    seen += "${child.label}:${parent.id}:${parent.n}"
-                }
-            }
-        }
-        LocalBackend().run(wf).await()
-        assertEquals(setOf("a-1:a:42", "b-1:b:7"), seen.toSet())
-    }
-
-    @Test
-    fun grandparentAccessInNestedFanOut() = runTest {
-        val seen = Collections.synchronizedList(mutableListOf<String>())
-        val wf = workflow<Cust>("grandparent-access") {
-            input(listOf(Cust("root", 1)))
-            fanOut<Kid>(expand = { c -> listOf(Kid("${c.id}-child")) }) {
-                fanOut<Cust>(expand = { k -> listOf(Cust("${k.label}-grandchild", 99)) }) {
-                    task("read-all") { grandparent, parent, child ->
-                        seen += "${child.id}:${parent.label}:${grandparent.id}"
-                    }
-                }
-            }
-        }
-        LocalBackend().run(wf).await()
-        assertEquals(listOf("root-child-grandchild:root-child:root"), seen.toList())
-    }
 }
