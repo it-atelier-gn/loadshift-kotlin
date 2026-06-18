@@ -10,6 +10,8 @@ import kotlinx.serialization.Serializable
 import loadshift.core.RunConfig
 import loadshift.core.RunState
 import loadshift.core.WorkItem
+import loadshift.core.fanOut
+import loadshift.core.task
 import loadshift.core.workflow
 import org.testcontainers.DockerClientFactory
 import org.testcontainers.containers.GenericContainer
@@ -81,11 +83,13 @@ class Camunda7E2eTest {
         val wf = workflow<EUser>(key) {
             input(listOf(EUser("a"), EUser("b")))
             task("stamp") { it.note = "ok:${it.id}" }
-            fanOut<EContact>(expand = { u -> listOf(EContact("${u.id}-1"), EContact("${u.id}-2")) }) {
-                condition({ it.label.endsWith("1") }) {
-                    task("first") { c -> seen += "first:${c.label}" }
-                } otherwise {
-                    task("second") { c -> seen += "second:${c.label}" }
+            fanOut(expand = { u -> listOf(EContact("${u.id}-1"), EContact("${u.id}-2")) }) {
+                task("process") { child ->
+                    if (child.label.endsWith("1")) {
+                        seen += "first:${child.label}:${contextOf<EUser>().note}"
+                    } else {
+                        seen += "second:${child.label}"
+                    }
                 }
             }
         }
@@ -95,9 +99,9 @@ class Camunda7E2eTest {
         val result = withTimeout(180_000) { handle.await() }
 
         assertEquals(0, result.failed)
-        assertEquals(12, result.done)
+        assertEquals(8, result.done)
         assertEquals(
-            setOf("first:a-1", "second:a-2", "first:b-1", "second:b-2"),
+            setOf("first:a-1:ok:a", "second:a-2", "first:b-1:ok:b", "second:b-2"),
             seen.toSet(),
         )
 

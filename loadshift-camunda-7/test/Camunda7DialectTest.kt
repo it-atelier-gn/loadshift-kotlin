@@ -3,6 +3,8 @@ package loadshift.camunda7
 import kotlinx.serialization.Serializable
 import loadshift.core.BpmnCompiler
 import loadshift.core.WorkItem
+import loadshift.core.fanOut
+import loadshift.core.task
 import loadshift.core.workflow
 import org.camunda.bpm.model.bpmn.Bpmn
 import kotlin.test.Test
@@ -32,7 +34,7 @@ class Camunda7DialectTest {
     fun fanOutIteratesSpinElementsAndMapsItemIntoChild() {
         val wf = workflow<Job>("dialect-fanout") {
             input(emptyList())
-            fanOut<Line>(expand = { emptyList() }) {
+            fanOut(expand = { emptyList<Line>() }) {
                 task("price") { }
             }
         }

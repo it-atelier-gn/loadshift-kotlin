@@ -23,7 +23,7 @@ private fun richWorkflow(): Workflow<Item> = workflow("wf") {
         branch { task("e") { } }
         branch { task("f") { } }
     }
-    fanOut<Child>(expand = { listOf(Child(0)) }) {
+    fanOut(expand = { listOf(Child(0)) }) {
         task("g") { }
     }
 }

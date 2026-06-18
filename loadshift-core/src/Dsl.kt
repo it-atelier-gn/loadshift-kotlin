@@ -37,19 +37,6 @@ open class FlowSpec<W : WorkItem> internal constructor(
     }
 
     fun task(
-        topic: String,
-        retry: RetryPolicy? = null,
-        timeout: Duration? = null,
-        rateLimit: Rate? = null,
-        body: suspend (W) -> Unit,
-    ) {
-        val t = object : Task<W>(topic) {
-            override suspend fun execute(item: W) = body(item)
-        }
-        task(t, retry, timeout, rateLimit)
-    }
-
-    fun task(
         topic: Topic<W>,
         retry: RetryPolicy? = null,
         timeout: Duration? = null,
@@ -80,33 +67,16 @@ open class FlowSpec<W : WorkItem> internal constructor(
         steps += Parallel(ps.branchSteps.toList())
     }
 
-    inline fun <reified C : WorkItem> fanOut(
-        noinline expand: suspend (W) -> List<C>,
-        concurrency: Int? = null,
-        noinline body: FlowSpec<C>.() -> Unit,
-    ) = fanOutInternal(
-        workItemCodec<C>(),
-        { w -> kotlinx.coroutines.flow.flow { for (c in expand(w)) emit(c) } },
-        concurrency,
-        body,
-    )
-
-    inline fun <reified C : WorkItem> fanOut(
-        paginated: Paginated<W, C>,
-        concurrency: Int? = null,
-        noinline body: FlowSpec<C>.() -> Unit,
-    ) = fanOutInternal(workItemCodec<C>(), { w -> paginated.asFlow(w) }, concurrency, body)
-
     @PublishedApi
     internal fun <C : WorkItem> fanOutInternal(
         childCodec: WorkItemCodec<C>,
         expand: suspend (W) -> Flow<C>,
         concurrency: Int?,
-        body: FlowSpec<C>.() -> Unit,
+        buildSpec: (WorkItemCodec<C>, String, IdGen) -> FlowSpec<C>,
     ) {
         val id = idgen.next("f")
         val childKey = "${baseKey}_$id"
-        val childSpec = FlowSpec(childCodec, childKey, IdGen()).apply(body)
+        val childSpec = buildSpec(childCodec, childKey, IdGen())
         val sub = SubFlow(
             childKey,
             childSpec.toStep(),
@@ -137,6 +107,37 @@ open class FlowSpec<W : WorkItem> internal constructor(
     }
 
     internal fun toStep(): Step<W> = Sequence(steps.toList())
+}
+
+fun <W : WorkItem> FlowSpec<W>.task(
+    topic: String,
+    retry: RetryPolicy? = null,
+    timeout: Duration? = null,
+    rateLimit: Rate? = null,
+    body: suspend (W) -> Unit,
+) {
+    val t = object : Task<W>(topic) {
+        override suspend fun execute(item: W) = body(item)
+    }
+    task(t, retry, timeout, rateLimit)
+}
+
+inline fun <W : WorkItem, reified C : WorkItem> FlowSpec<W>.fanOut(
+    noinline expand: suspend (W) -> List<C>,
+    concurrency: Int? = null,
+    noinline body: ChildFlowSpec1<W, C>.() -> Unit,
+) = fanOutInternal(
+    workItemCodec<C>(),
+    { w -> flow { for (c in expand(w)) emit(c) } },
+    concurrency,
+) { codec, key, idgen -> ChildFlowSpec1<W, C>(codec, key, idgen).apply(body) }
+
+inline fun <W : WorkItem, reified C : WorkItem> FlowSpec<W>.fanOut(
+    paginated: Paginated<W, C>,
+    concurrency: Int? = null,
+    noinline body: ChildFlowSpec1<W, C>.() -> Unit,
+) = fanOutInternal(workItemCodec<C>(), { w -> paginated.asFlow(w) }, concurrency) { codec, key, idgen ->
+    ChildFlowSpec1<W, C>(codec, key, idgen).apply(body)
 }
 
 class ElseHandle<W : WorkItem> internal constructor(

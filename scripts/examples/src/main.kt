@@ -7,6 +7,8 @@ import loadshift.core.BpmnCompiler
 import loadshift.core.CompiledProcess
 import loadshift.core.WorkItem
 import loadshift.core.Workflow
+import loadshift.core.fanOut
+import loadshift.core.task
 import loadshift.core.workflow
 import org.camunda.bpm.model.bpmn.Bpmn
 import org.camunda.bpm.model.bpmn.instance.CallActivity
@@ -132,7 +134,7 @@ val examples = listOf(
             workflow<Order>("order-lines") {
                 input(orders)
                 task("load") { load(it) }
-                fanOut<Line>(expand = { fetchLines(it.id) }, concurrency = 4) {
+                fanOut(expand = { fetchLines(it.id) }, concurrency = 4) {
                     condition({ it.qty > 10 }) {
                         task("bulk-price") { bulk(it) }
                     } otherwise {
@@ -144,7 +146,7 @@ val examples = listOf(
         flow = workflow<Order>("order-lines") {
             input(emptyList())
             task("load") { }
-            fanOut<Line>(expand = { emptyList() }, concurrency = 4) {
+            fanOut(expand = { emptyList<Line>() }, concurrency = 4) {
                 condition({ it.qty > 10 }) {
                     task("bulk-price") { }
                 } otherwise {

@@ -8,6 +8,8 @@ import loadshift.core.ErrorPolicy
 import loadshift.core.RetryPolicy
 import loadshift.core.RunConfig
 import loadshift.core.WorkItem
+import loadshift.core.fanOut
+import loadshift.core.task
 import loadshift.core.workflow
 import loadshift.local.LocalBackend
 import loadshift.web.ControlServer
@@ -39,7 +41,7 @@ fun main(args: Array<String>) = runBlocking<Unit> {
 
     val cleanup = workflow<User>("contact-cleanup") {
         input(customers)
-        fanOut<Contact>(expand = { fetchContacts(it.id) }, concurrency = 4) {
+        fanOut(expand = { fetchContacts(it.id) }, concurrency = 4) {
             condition({ it.email == null }) {
                 task("flag-missing") { println("  flag-missing ${it.id}") }
             } otherwise {
@@ -71,7 +73,7 @@ private suspend fun uiDemo() {
     val customers = (1..6).map { n -> User("cust-$n") }
     val cleanup = workflow<User>("contact-cleanup") {
         input(customers)
-        fanOut<Contact>(expand = { fetchContacts(it.id) }, concurrency = 2) {
+        fanOut(expand = { fetchContacts(it.id) }, concurrency = 2) {
             condition({ it.email == null }) {
                 task("flag-missing") { delay(800) }
             } otherwise {

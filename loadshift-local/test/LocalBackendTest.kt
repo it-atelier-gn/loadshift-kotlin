@@ -13,6 +13,8 @@ import loadshift.core.RunConfig
 import loadshift.core.Start
 import loadshift.core.WorkItem
 import loadshift.core.log
+import loadshift.core.fanOut
+import loadshift.core.task
 import loadshift.core.workflow
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
@@ -40,7 +42,7 @@ class LocalBackendTest {
         val seen = Collections.synchronizedList(mutableListOf<String>())
         val wf = workflow<Cust>("nested") {
             input(listOf(Cust("a"), Cust("b")))
-            fanOut<Kid>(expand = { c -> listOf(Kid("${c.id}-1"), Kid("${c.id}-2")) }) {
+            fanOut(expand = { c -> listOf(Kid("${c.id}-1"), Kid("${c.id}-2")) }) {
                 task("touch") { k -> seen += k.label }
             }
         }
@@ -132,7 +134,7 @@ class LocalBackendTest {
     fun childDeadLetterCarriesItemKey() = runTest {
         val wf = workflow<Cust>("child-dlq") {
             input(listOf(Cust("p")))
-            fanOut<Kid>(expand = { listOf(Kid("p-1")) }) {
+            fanOut(expand = { listOf(Kid("p-1")) }) {
                 task("explode", retry = RetryPolicy(maxAttempts = 1)) { throw RuntimeException("boom") }
             }
         }
@@ -207,7 +209,7 @@ class LocalBackendTest {
         }
         val wf = workflow<Cust>("logging") {
             input(listOf(Cust("p")))
-            fanOut<Kid>(expand = { listOf(Kid("p-1")) }) {
+            fanOut(expand = { listOf(Kid("p-1")) }) {
                 task("touch") { k -> log("processed", "label" to k.label) }
             }
         }
@@ -240,5 +242,40 @@ class LocalBackendTest {
 
         handle.cancel()
         runCatching { handle.await() }
+    }
+
+    @Test
+    fun parentAccessInDirectChildTask() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("parent-access") {
+            input(listOf(Cust("a", 42), Cust("b", 7)))
+            fanOut(expand = { c -> listOf(Kid("${c.id}-1")) }) {
+                task("read-parent") { child ->
+                    val parent = contextOf<Cust>()
+                    seen += "${child.label}:${parent.id}:${parent.n}"
+                }
+            }
+        }
+        LocalBackend().run(wf).await()
+        assertEquals(setOf("a-1:a:42", "b-1:b:7"), seen.toSet())
+    }
+
+    @Test
+    fun grandparentAccessInNestedFanOut() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("grandparent-access") {
+            input(listOf(Cust("root", 1)))
+            fanOut(expand = { c -> listOf(Kid("${c.id}-child")) }) {
+                fanOut(expand = { k -> listOf(Cust("${k.label}-grandchild", 99)) }) {
+                    task("read-all") { child ->
+                        val grandparent = contextOf<Cust>()
+                        val parent = contextOf<Kid>()
+                        seen += "${child.id}:${parent.label}:${grandparent.id}"
+                    }
+                }
+            }
+        }
+        LocalBackend().run(wf).await()
+        assertEquals(listOf("root-child-grandchild:root-child:root"), seen.toList())
     }
 }

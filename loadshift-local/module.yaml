@@ -5,6 +5,9 @@ settings:
     enabled: true
     group: io.github.it-atelier-gn
     version: 0.4.0
+  kotlin:
+    freeCompilerArgs:
+      - -Xcontext-parameters
 
 repositories:
   - id: mavenLocal
