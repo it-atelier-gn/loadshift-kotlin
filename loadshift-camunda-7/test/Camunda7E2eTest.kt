@@ -83,10 +83,10 @@ class Camunda7E2eTest {
         val wf = workflow<EUser>(key) {
             input(listOf(EUser("a"), EUser("b")))
             task("stamp") { it.note = "ok:${it.id}" }
-            fanOut(expand = { u -> listOf(EContact("${u.id}-1"), EContact("${u.id}-2")) }) {
+            fanOut(expand = { u -> listOf(EContact("${u.id}-1"), EContact("${u.id}-2")) }, context = { it }) {
                 task("process") { child ->
                     if (child.label.endsWith("1")) {
-                        seen += "first:${child.label}:${contextOf<EUser>().note}"
+                        seen += "first:${child.label}:${context().note}"
                     } else {
                         seen += "second:${child.label}"
                     }

@@ -245,13 +245,13 @@ class LocalBackendTest {
     }
 
     @Test
-    fun parentAccessInDirectChildTask() = runTest {
+    fun contextExposesParentWhenRequested() = runTest {
         val seen = Collections.synchronizedList(mutableListOf<String>())
         val wf = workflow<Cust>("parent-access") {
             input(listOf(Cust("a", 42), Cust("b", 7)))
-            fanOut(expand = { c -> listOf(Kid("${c.id}-1")) }) {
+            fanOut(expand = { c -> listOf(Kid("${c.id}-1")) }, context = { it }) {
                 task("read-parent") { child ->
-                    val parent = contextOf<Cust>()
+                    val parent = context()
                     seen += "${child.label}:${parent.id}:${parent.n}"
                 }
             }
@@ -261,21 +261,96 @@ class LocalBackendTest {
     }
 
     @Test
-    fun grandparentAccessInNestedFanOut() = runTest {
+    fun contextIsNullWhenNotConfigured() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String?>())
+        val wf = workflow<Cust>("no-context") {
+            input(listOf(Cust("a")))
+            fanOut(expand = { c -> listOf(Kid("${c.id}-1")) }) {
+                task("read") { child -> seen += context() }
+            }
+        }
+        LocalBackend().run(wf).await()
+        assertEquals(listOf<String?>(null), seen.toList())
+    }
+
+    @Test
+    fun explicitContextTransformsParent() = runTest {
         val seen = Collections.synchronizedList(mutableListOf<String>())
-        val wf = workflow<Cust>("grandparent-access") {
+        val wf = workflow<Cust>("explicit-context") {
+            input(listOf(Cust("a", 42), Cust("b", 7)))
+            fanOut(
+                expand = { c -> listOf(Kid("${c.id}-1")) },
+                context = { c -> "cust:${c.id}:${c.n}" },
+            ) {
+                task("read") { child ->
+                    seen += "${child.label}:${context()}"
+                }
+            }
+        }
+        LocalBackend().run(wf).await()
+        assertEquals(setOf("a-1:cust:a:42", "b-1:cust:b:7"), seen.toSet())
+    }
+
+    @Test
+    fun nestedFanOutContextReturnsImmediateParent() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("nested-context") {
             input(listOf(Cust("root", 1)))
             fanOut(expand = { c -> listOf(Kid("${c.id}-child")) }) {
-                fanOut(expand = { k -> listOf(Cust("${k.label}-grandchild", 99)) }) {
-                    task("read-all") { child ->
-                        val grandparent = contextOf<Cust>()
-                        val parent = contextOf<Kid>()
-                        seen += "${child.id}:${parent.label}:${grandparent.id}"
+                fanOut(expand = { k -> listOf(Cust("${k.label}-grandchild", 99)) }, context = { it }) {
+                    task("read") { child ->
+                        val parent = context()
+                        seen += "${child.id}:${parent.label}"
                     }
                 }
             }
         }
         LocalBackend().run(wf).await()
-        assertEquals(listOf("root-child-grandchild:root-child:root"), seen.toList())
+        assertEquals(listOf("root-child-grandchild:root-child"), seen.toList())
+    }
+
+    @Test
+    fun cumulativeContextExposesGrandparent() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("cumulative-context") {
+            input(listOf(Cust("root", 1)))
+            fanOut(expand = { c -> listOf(Kid("${c.id}-child")) }, context = { it }) {
+                fanOut(
+                    expand = { k -> listOf(Cust("${k.label}-grandchild", 99)) },
+                    context = { kid, cust -> "${kid.label}@${cust.id}" },
+                ) {
+                    task("read") { child ->
+                        seen += "${child.id}:${context()}"
+                    }
+                }
+            }
+        }
+        LocalBackend().run(wf).await()
+        assertEquals(listOf("root-child-grandchild:root-child@root"), seen.toList())
+    }
+
+    @Test
+    fun cumulativeContextComposesThreeLevels() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("cumulative-three") {
+            input(listOf(Cust("root", 1)))
+            fanOut(expand = { c -> listOf(Kid("${c.id}-l1")) }, context = { it.id }) {
+                fanOut(
+                    expand = { k -> listOf(Kid("${k.label}-l2")) },
+                    context = { kid, rootId -> "$rootId>${kid.label}" },
+                ) {
+                    fanOut(
+                        expand = { k -> listOf(Cust("${k.label}-l3", 0)) },
+                        context = { kid, upper -> "$upper>${kid.label}" },
+                    ) {
+                        task("read") { child ->
+                            seen += "${child.id}:${context()}"
+                        }
+                    }
+                }
+            }
+        }
+        LocalBackend().run(wf).await()
+        assertEquals(listOf("root-l1-l2-l3:root>root-l1>root-l1-l2"), seen.toList())
     }
 }

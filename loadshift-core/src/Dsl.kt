@@ -125,19 +125,73 @@ fun <W : WorkItem> FlowSpec<W>.task(
 inline fun <W : WorkItem, reified C : WorkItem> FlowSpec<W>.fanOut(
     noinline expand: suspend (W) -> List<C>,
     concurrency: Int? = null,
-    noinline body: ChildFlowSpec1<W, C>.() -> Unit,
+    noinline body: FanFlowSpec<C, Nothing?>.() -> Unit,
 ) = fanOutInternal(
     workItemCodec<C>(),
     { w -> flow { for (c in expand(w)) emit(c) } },
     concurrency,
-) { codec, key, idgen -> ChildFlowSpec1<W, C>(codec, key, idgen).apply(body) }
+) { codec, key, idgen ->
+    FanFlowSpec<C, Nothing?>(codec, key, idgen) { null }.apply(body)
+}
+
+inline fun <W : WorkItem, reified C : WorkItem, Ctx> FlowSpec<W>.fanOut(
+    noinline expand: suspend (W) -> List<C>,
+    noinline context: suspend (W) -> Ctx,
+    concurrency: Int? = null,
+    noinline body: FanFlowSpec<C, Ctx>.() -> Unit,
+) = fanOutInternal(
+    workItemCodec<C>(),
+    { w -> flow { for (c in expand(w)) emit(c) } },
+    concurrency,
+) { codec, key, idgen ->
+    FanFlowSpec<C, Ctx>(codec, key, idgen) { d -> @Suppress("UNCHECKED_CAST") context(ancestorStack()[d] as W) }.apply(body)
+}
+
+inline fun <W : WorkItem, Ctx, reified C : WorkItem, NewCtx> FanFlowSpec<W, Ctx>.fanOut(
+    noinline expand: suspend (W) -> List<C>,
+    noinline context: suspend (W, Ctx) -> NewCtx,
+    concurrency: Int? = null,
+    noinline body: FanFlowSpec<C, NewCtx>.() -> Unit,
+) = fanOutInternal(
+    workItemCodec<C>(),
+    { w -> flow { for (c in expand(w)) emit(c) } },
+    concurrency,
+) { codec, key, idgen ->
+    val parentProvider = contextProvider
+    FanFlowSpec<C, NewCtx>(codec, key, idgen) { d ->
+        @Suppress("UNCHECKED_CAST")
+        context(ancestorStack()[d] as W, parentProvider(d + 1))
+    }.apply(body)
+}
 
 inline fun <W : WorkItem, reified C : WorkItem> FlowSpec<W>.fanOut(
     paginated: Paginated<W, C>,
     concurrency: Int? = null,
-    noinline body: ChildFlowSpec1<W, C>.() -> Unit,
+    noinline body: FanFlowSpec<C, Nothing?>.() -> Unit,
 ) = fanOutInternal(workItemCodec<C>(), { w -> paginated.asFlow(w) }, concurrency) { codec, key, idgen ->
-    ChildFlowSpec1<W, C>(codec, key, idgen).apply(body)
+    FanFlowSpec<C, Nothing?>(codec, key, idgen) { null }.apply(body)
+}
+
+inline fun <W : WorkItem, reified C : WorkItem, Ctx> FlowSpec<W>.fanOut(
+    paginated: Paginated<W, C>,
+    noinline context: suspend (W) -> Ctx,
+    concurrency: Int? = null,
+    noinline body: FanFlowSpec<C, Ctx>.() -> Unit,
+) = fanOutInternal(workItemCodec<C>(), { w -> paginated.asFlow(w) }, concurrency) { codec, key, idgen ->
+    FanFlowSpec<C, Ctx>(codec, key, idgen) { d -> @Suppress("UNCHECKED_CAST") context(ancestorStack()[d] as W) }.apply(body)
+}
+
+inline fun <W : WorkItem, Ctx, reified C : WorkItem, NewCtx> FanFlowSpec<W, Ctx>.fanOut(
+    paginated: Paginated<W, C>,
+    noinline context: suspend (W, Ctx) -> NewCtx,
+    concurrency: Int? = null,
+    noinline body: FanFlowSpec<C, NewCtx>.() -> Unit,
+) = fanOutInternal(workItemCodec<C>(), { w -> paginated.asFlow(w) }, concurrency) { codec, key, idgen ->
+    val parentProvider = contextProvider
+    FanFlowSpec<C, NewCtx>(codec, key, idgen) { d ->
+        @Suppress("UNCHECKED_CAST")
+        context(ancestorStack()[d] as W, parentProvider(d + 1))
+    }.apply(body)
 }
 
 class ElseHandle<W : WorkItem> internal constructor(
