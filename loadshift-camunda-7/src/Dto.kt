@@ -16,6 +16,13 @@ data class StartInstanceRequest(
 )
 
 @Serializable
+data class MessageRequest(
+    val messageName: String,
+    val correlationKeys: Map<String, CamundaValue>? = null,
+    val all: Boolean = true,
+)
+
+@Serializable
 data class StartInstanceResponse(
     val id: String,
     val definitionId: String,

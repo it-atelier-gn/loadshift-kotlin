@@ -273,6 +273,14 @@ internal class Camunda7Run(
 
     override suspend fun await(): RunResult = completion.await()
 
+    override suspend fun send(message: String, key: String) {
+        client.correlateMessage(MessageRequest(message, mapOf("_ls_key" to CamundaVariables.encode(key)), all = true))
+    }
+
+    override suspend fun broadcast(message: String) {
+        client.correlateMessage(MessageRequest(message, correlationKeys = null, all = true))
+    }
+
     override fun state(): RunState = runState
 
     override suspend fun engineActive(): Long? =
@@ -293,7 +301,8 @@ internal class Camunda7Run(
                     try {
                         client.startInstance(
                             processDefinitionKey = workflow.root.key,
-                            variables = CamundaVariables.toCamunda(rootCodec.encode(item as WorkItem)),
+                            variables = CamundaVariables.toCamunda(rootCodec.encode(item as WorkItem)) +
+                                ("_ls_key" to CamundaVariables.encode((item as WorkItem).key ?: index.toString())),
                             businessKey = index.toString(),
                         )
                     } finally {

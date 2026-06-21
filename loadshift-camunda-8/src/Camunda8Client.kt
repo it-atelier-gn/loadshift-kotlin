@@ -70,6 +70,16 @@ class Camunda8Client(
         if (!response.status.isSuccess()) error("createInstance failed: ${response.status} ${response.bodyAsText()}")
     }
 
+    suspend fun publishMessage(name: String, correlationKey: String) {
+        runCatching {
+            http.post("$v2/messages/publication") {
+                auth()
+                contentType(ContentType.Application.Json)
+                setBody(PublishMessageRequest(name, correlationKey))
+            }
+        }
+    }
+
     suspend fun activateJobs(request: ActivateJobsRequest): List<ActivatedJob> {
         val response = http.post("$v2/jobs/activation") {
             auth()

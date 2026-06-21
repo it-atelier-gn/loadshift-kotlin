@@ -265,6 +265,14 @@ internal class Camunda8Run(
 
     override suspend fun await(): RunResult = completion.await()
 
+    override suspend fun send(message: String, key: String) {
+        client.publishMessage(message, key)
+    }
+
+    override suspend fun broadcast(message: String) {
+        throw UnsupportedOperationException("Zeebe correlates messages per key; use send(message, key)")
+    }
+
     override fun state(): RunState = runState
 
     override suspend fun engineActive(): Long? =
@@ -283,7 +291,12 @@ internal class Camunda8Run(
                 semaphore.acquire()
                 launch {
                     try {
-                        client.createInstance(workflow.root.key, rootCodec.encode(item as WorkItem))
+                        val encoded = rootCodec.encode(item as WorkItem)
+                        val withKey = buildJsonObject {
+                            encoded.forEach { (k, v) -> put(k, v) }
+                            put("_ls_key", JsonPrimitive((item as WorkItem).key ?: ""))
+                        }
+                        client.createInstance(workflow.root.key, withKey)
                     } finally {
                         semaphore.release()
                     }

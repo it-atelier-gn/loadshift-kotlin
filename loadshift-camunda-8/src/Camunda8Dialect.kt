@@ -6,6 +6,7 @@ import org.camunda.bpm.model.bpmn.instance.BaseElement
 import org.camunda.bpm.model.bpmn.instance.CallActivity
 import org.camunda.bpm.model.bpmn.instance.ConditionExpression
 import org.camunda.bpm.model.bpmn.instance.ExtensionElements
+import org.camunda.bpm.model.bpmn.instance.Message
 import org.camunda.bpm.model.bpmn.instance.MultiInstanceLoopCharacteristics
 import org.camunda.bpm.model.bpmn.instance.ServiceTask
 
@@ -32,6 +33,10 @@ object Camunda8Dialect {
             mi.camundaElementVariable?.let { loop.domElement.setAttribute("inputElement", it) }
             mi.domElement.removeAttribute(CAMUNDA_NS, "collection")
             mi.domElement.removeAttribute(CAMUNDA_NS, "elementVariable")
+        }
+        for (message in model.getModelElementsByType(Message::class.java)) {
+            val subscription = ensureExtensions(model, message).addExtensionElement(ZEEBE_NS, "subscription")
+            subscription.domElement.setAttribute("correlationKey", "=_ls_key")
         }
         for (condition in model.getModelElementsByType(ConditionExpression::class.java)) {
             condition.textContent = toFeel(condition.textContent.trim())

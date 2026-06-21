@@ -1,5 +1,7 @@
 package loadshift.camunda7
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
@@ -86,6 +88,7 @@ class Camunda7E2eTest {
                 task("stamp") { it.note = "ok:${it.id}" }
                 wait(1.seconds)
             }
+            awaitMessage("proceed")
             fanOut(expand = { u -> listOf(EContact("${u.id}-1"), EContact("${u.id}-2")) }, context = { it }) {
                 task("process") { child ->
                     if (child.label.endsWith("1")) {
@@ -101,7 +104,14 @@ class Camunda7E2eTest {
 
         val backend = Camunda7Backend(base)
         val handle = backend.run(wf, RunConfig(maxConcurrency = 4))
-        val result = withTimeout(180_000) { handle.await() }
+        val result = withTimeout(180_000) {
+            val done = async { handle.await() }
+            while (done.isActive) {
+                handle.broadcast("proceed")
+                delay(500)
+            }
+            done.await()
+        }
 
         assertEquals(0, result.failed)
         assertEquals(10, result.done)
