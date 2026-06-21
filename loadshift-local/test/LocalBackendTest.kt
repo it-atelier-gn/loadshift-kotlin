@@ -6,6 +6,7 @@ import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonPrimitive
 import loadshift.core.ErrorPolicy
+import loadshift.core.InMemoryCheckpointStore
 import loadshift.core.LogEntry
 import loadshift.core.LogSink
 import loadshift.core.Parent
@@ -564,5 +565,26 @@ class LocalBackendTest {
         }
         LocalBackend().run(wf).await()
         assertEquals(listOf("charge", "ship"), log.toList())
+    }
+
+    @Test
+    fun checkpointStoreSkipsCompletedItemsOnRerun() = runTest {
+        val store = InMemoryCheckpointStore()
+        val processed = Collections.synchronizedList(mutableListOf<String>())
+        val first = workflow<Cust>("resumable") {
+            input(listOf(Cust("a"), Cust("b")))
+            task("t") { c ->
+                processed += c.id
+                if (c.id == "b") throw RuntimeException("boom")
+            }
+        }
+        LocalBackend().run(first, RunConfig(checkpoints = store, retry = RetryPolicy(maxAttempts = 1))).await()
+        processed.clear()
+        val second = workflow<Cust>("resumable") {
+            input(listOf(Cust("a"), Cust("b")))
+            task("t") { c -> processed += c.id }
+        }
+        LocalBackend().run(second, RunConfig(checkpoints = store)).await()
+        assertEquals(listOf("b"), processed.toList())
     }
 }

@@ -218,6 +218,10 @@ private class LocalRun<W : WorkItem>(
                     skipped.incrementAndGet()
                     return@collect
                 }
+                if (key != null && config.checkpoints?.isComplete(workflow.key, key) == true) {
+                    skipped.incrementAndGet()
+                    return@collect
+                }
                 seeded.incrementAndGet()
                 semaphore.acquire()
                 launch {
@@ -238,6 +242,7 @@ private class LocalRun<W : WorkItem>(
             try {
                 interpret(workflow.root.step, item)
                 done.incrementAndGet()
+                item.key?.let { config.checkpoints?.markComplete(workflow.key, it) }
             } catch (e: DeadLetterSignal) {
                 runCompensations(comps)
                 deadLetters += DeadLetter(item.key, e.topic, e.reason)
