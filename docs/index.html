@@ -261,8 +261,8 @@ task("ship") { ship(it) }   // if this fails…
 // …release(it) then refund(it) run automatically, in reverse</code></pre>
   </div>
   <p class="note">A failing step rolls back the completed steps before it: each <code>compensate</code>
-  block runs in reverse order, so a half-done item is undone instead of left inconsistent. On the local
-  backend this is enforced at runtime.</p>
+  block runs in reverse order, so a half-done item is undone instead of left inconsistent. Enforced at
+  runtime on the local backend and worker-side on Camunda 7 and 8.</p>
 </section>
 
 <section id="fan-out" class="block">

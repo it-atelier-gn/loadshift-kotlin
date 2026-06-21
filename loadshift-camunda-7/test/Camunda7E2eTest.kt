@@ -9,6 +9,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.Serializable
+import loadshift.core.RetryPolicy
 import loadshift.core.RunConfig
 import loadshift.core.RunState
 import loadshift.core.WorkItem
@@ -125,5 +126,30 @@ class Camunda7E2eTest {
         val snap = backend.control.runs().single()
         assertEquals(RunState.Completed, snap.state)
         assertEquals(2, snap.progress.seeded)
+    }
+
+    @Test
+    fun compensationRunsThroughRealEngine() = runBlocking {
+        val base = requireNotNull(Camunda7Engine.base) {
+            "Camunda7E2eTest requires Docker or LOADSHIFT_C7_BASE"
+        }
+        purgeRunningInstances(base)
+
+        val compensated = Collections.synchronizedList(mutableListOf<String>())
+        val key = "e2e7saga${System.currentTimeMillis()}"
+        val wf = workflow<EUser>(key) {
+            input(listOf(EUser("saga1")))
+            task("charge") { } compensate { compensated += "refund:${it.id}" }
+            task("ship") { throw RuntimeException("boom") }
+        }
+
+        val backend = Camunda7Backend(base)
+        val handle = backend.run(wf, RunConfig(maxConcurrency = 4, retry = RetryPolicy(maxAttempts = 1)))
+        withTimeout(120_000) {
+            while (compensated.isEmpty()) delay(500)
+        }
+        handle.cancel()
+
+        assertEquals(listOf("refund:saga1"), compensated.toList())
     }
 }
