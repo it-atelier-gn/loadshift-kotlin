@@ -14,7 +14,9 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.datetime.Clock
@@ -29,6 +31,7 @@ import loadshift.core.FanOut
 import loadshift.core.FanIn
 import loadshift.core.Wait
 import loadshift.core.Timeout
+import loadshift.core.AwaitMessage
 import loadshift.core.ControllableBackend
 import loadshift.core.Loop
 import loadshift.core.Parallel
@@ -112,6 +115,11 @@ private class LocalRun<W : WorkItem>(
     private val globalLimiter = config.rateLimit?.let { RateLimiter(it) }
     private val taskLimiters = ConcurrentHashMap<String, RateLimiter>()
 
+    private val waiters = mutableMapOf<Pair<String, String?>, MutableList<CompletableDeferred<Unit>>>()
+    private val delivered = mutableSetOf<Pair<String, String?>>()
+    private val broadcasted = mutableSetOf<String>()
+    private val waitersMutex = Mutex()
+
     @Volatile private var paused = false
     @Volatile private var runState = if (config.start is Start.Now) RunState.Running else RunState.Scheduled
 
@@ -167,6 +175,23 @@ private class LocalRun<W : WorkItem>(
     }
 
     override suspend fun await(): RunResult = completion.await()
+
+    override suspend fun send(message: String, key: String) {
+        val list = waitersMutex.withLock {
+            val l = waiters.remove(message to key)
+            if (l.isNullOrEmpty()) delivered.add(message to key)
+            l
+        }
+        list?.forEach { it.complete(Unit) }
+    }
+
+    override suspend fun broadcast(message: String) {
+        val lists = waitersMutex.withLock {
+            broadcasted.add(message)
+            waiters.keys.filter { it.first == message }.mapNotNull { waiters.remove(it) }
+        }
+        lists.flatten().forEach { it.complete(Unit) }
+    }
 
     override fun state(): RunState = runState
 
@@ -250,6 +275,21 @@ private class LocalRun<W : WorkItem>(
             }
 
             is Wait<*> -> delay(step.duration)
+
+            is AwaitMessage<*> -> {
+                val k = step.message to item.key
+                val signal = CompletableDeferred<Unit>()
+                val resumeNow = waitersMutex.withLock {
+                    if (k in delivered || step.message in broadcasted) {
+                        delivered.remove(k)
+                        true
+                    } else {
+                        waiters.getOrPut(k) { mutableListOf() }.add(signal)
+                        false
+                    }
+                }
+                if (!resumeNow) signal.await()
+            }
 
             is Timeout<*> -> {
                 val t = step as Timeout<WorkItem>

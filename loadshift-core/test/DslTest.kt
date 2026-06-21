@@ -103,4 +103,15 @@ class DslTest {
         assertEquals(30.seconds, to.duration)
         assertTrue("inner" in wf.root.tasks.keys)
     }
+
+    @Test
+    fun awaitMessageBuildsAwaitMessageStep() {
+        val wf = workflow<Item>("await") {
+            input(Item(1))
+            awaitMessage("payment-confirmed")
+        }
+        val seq = wf.root.step as Sequence<Item>
+        val m = assertIs<AwaitMessage<Item>>(seq.steps[0])
+        assertEquals("payment-confirmed", m.message)
+    }
 }

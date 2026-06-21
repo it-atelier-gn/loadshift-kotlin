@@ -33,6 +33,7 @@ import loadshift.core.FanOut
 import loadshift.core.FanIn
 import loadshift.core.Wait
 import loadshift.core.Timeout
+import loadshift.core.AwaitMessage
 import loadshift.core.ControllableBackend
 import loadshift.core.Loop
 import loadshift.core.Parallel
@@ -175,6 +176,7 @@ private fun collectFromStep(
         }
         is Wait -> {}
         is Timeout -> collectFromStep(step.body, codec, parentCodecs, registry)
+        is AwaitMessage -> {}
     }
 }
 

@@ -239,13 +239,20 @@ task("settle") { settle(it) }
 
 timeout(10.minutes) {
     task("call-vendor") { callVendor(it) }
-}</code></pre>
+}
+
+awaitMessage("payment-confirmed")
+task("fulfil") { fulfil(it) }</code></pre>
   </div>
   <p class="note">Runaway loops are cut off by <code>RunConfig(maxLoopIterations = …)</code>
   and turned into dead letters. <code>wait</code> pauses the flow for a fixed duration —
   a real timer catch event on Camunda, a suspending delay locally. <code>timeout</code> wraps a
   block in an interrupting boundary timer (an embedded subprocess on Camunda); overruns become
   dead letters.</p>
+  <p class="note"><code>awaitMessage</code> parks an item until an event arrives. Locally the run
+  handle delivers it with <code>send(message, key)</code> (one item) or <code>broadcast(message)</code>
+  (all waiters). On Camunda it compiles to a message catch event; correlating the engine's message API
+  is wired per deployment.</p>
 </section>
 
 <section id="fan-out" class="block">

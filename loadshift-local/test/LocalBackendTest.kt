@@ -510,4 +510,34 @@ class LocalBackendTest {
         LocalBackend().run(wf).await()
         assertEquals(emptyList(), seen.toList())
     }
+
+    @Test
+    fun awaitMessageResumesOnTargetedSend() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("await-send") {
+            input(listOf(Cust("a"), Cust("b")))
+            task("before") { seen += "before:${it.id}" }
+            awaitMessage("go")
+            task("after") { seen += "after:${it.id}" }
+        }
+        val handle = LocalBackend().run(wf)
+        handle.send("go", "a")
+        handle.send("go", "b")
+        handle.await()
+        assertEquals(setOf("before:a", "before:b", "after:a", "after:b"), seen.toSet())
+    }
+
+    @Test
+    fun awaitMessageResumesAllOnBroadcast() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("await-broadcast") {
+            input(listOf(Cust("a"), Cust("b")))
+            awaitMessage("open")
+            task("after") { seen += it.id }
+        }
+        val handle = LocalBackend().run(wf)
+        handle.broadcast("open")
+        handle.await()
+        assertEquals(setOf("a", "b"), seen.toSet())
+    }
 }
