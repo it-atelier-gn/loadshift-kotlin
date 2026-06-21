@@ -7,7 +7,11 @@ sealed interface Step<W : WorkItem>
 
 class Sequence<W : WorkItem>(val steps: List<Step<W>>) : Step<W>
 
-class Execute<W : WorkItem>(val task: Task<W>, val options: TaskOptions) : Step<W>
+class Execute<W : WorkItem>(
+    val task: Task<W>,
+    val options: TaskOptions,
+    var compensation: (suspend (W) -> Unit)? = null,
+) : Step<W>
 
 class Conditional<W : WorkItem>(
     val id: String,

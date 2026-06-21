@@ -540,4 +540,29 @@ class LocalBackendTest {
         handle.await()
         assertEquals(setOf("a", "b"), seen.toSet())
     }
+
+    @Test
+    fun compensationsRunInReverseWhenAStepFails() = runTest {
+        val log = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("saga") {
+            input(listOf(Cust("a")))
+            task("charge") { log += "charge" } compensate { log += "refund" }
+            task("reserve") { log += "reserve" } compensate { log += "release" }
+            task("ship") { throw RuntimeException("boom") }
+        }
+        LocalBackend().run(wf, RunConfig(retry = RetryPolicy(maxAttempts = 1))).await()
+        assertEquals(listOf("charge", "reserve", "release", "refund"), log.toList())
+    }
+
+    @Test
+    fun compensationsSkippedWhenFlowSucceeds() = runTest {
+        val log = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("saga-ok") {
+            input(listOf(Cust("a")))
+            task("charge") { log += "charge" } compensate { log += "refund" }
+            task("ship") { log += "ship" }
+        }
+        LocalBackend().run(wf).await()
+        assertEquals(listOf("charge", "ship"), log.toList())
+    }
 }
