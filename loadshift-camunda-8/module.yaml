@@ -23,7 +23,7 @@ settings:
   publishing:
     enabled: true
     group: io.github.it-atelier-gn
-    version: 0.6.0
+    version: 0.5.0
 
 test-dependencies:
   - $libs.kotlinx.coroutines.test
