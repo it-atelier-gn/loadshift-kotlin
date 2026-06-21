@@ -29,6 +29,7 @@ import loadshift.core.CronSchedule
 import loadshift.core.Execute
 import loadshift.core.ExecutionContext
 import loadshift.core.FanOut
+import loadshift.core.FanIn
 import loadshift.core.Conditional
 import loadshift.core.ControllableBackend
 import loadshift.core.Loop
@@ -96,16 +97,26 @@ internal class ExpandHandler(
     val codec: WorkItemCodec<WorkItem>,
     val childCodec: WorkItemCodec<WorkItem>,
 )
+internal class ReduceHandler(
+    val id: String,
+    val codec: WorkItemCodec<WorkItem>,
+    val childCodec: WorkItemCodec<WorkItem>,
+    val initial: Any?,
+    val combine: (Any?, WorkItem) -> Any?,
+    val onComplete: suspend (WorkItem, Any?) -> Unit,
+    val parentCodecs: List<WorkItemCodec<WorkItem>> = emptyList(),
+)
 
 internal class Registry {
     val taskHandlers = mutableMapOf<String, TaskHandler>()
     val decisionHandlers = mutableMapOf<String, DecisionHandler>()
     val expandHandlers = mutableMapOf<String, ExpandHandler>()
+    val reduceHandlers = mutableMapOf<String, ReduceHandler>()
     val rootKey: String get() = rootKeyValue
     var rootKeyValue: String = ""
 
     val topics: List<String>
-        get() = (taskHandlers.keys + decisionHandlers.keys + expandHandlers.keys).toList()
+        get() = (taskHandlers.keys + decisionHandlers.keys + expandHandlers.keys + reduceHandlers.keys).toList()
 }
 
 @Suppress("UNCHECKED_CAST")
@@ -151,6 +162,23 @@ private fun collectFromStep(
                 ExpandHandler(fanOut.id, fanOut.expand, codec, fanOut.childCodec as WorkItemCodec<WorkItem>)
             val childParentCodecs = listOf(codec) + parentCodecs
             populateLevel(fanOut.body, childParentCodecs, registry)
+        }
+        is FanIn<*, *, *> -> {
+            val fanIn = step as FanIn<WorkItem, WorkItem, Any?>
+            registry.expandHandlers["expand_${fanIn.id}"] =
+                ExpandHandler(fanIn.id, fanIn.expand, codec, fanIn.childCodec as WorkItemCodec<WorkItem>)
+            registry.reduceHandlers["reduce_${fanIn.id}"] =
+                ReduceHandler(
+                    fanIn.id,
+                    codec,
+                    fanIn.childCodec as WorkItemCodec<WorkItem>,
+                    fanIn.initial,
+                    fanIn.combine,
+                    fanIn.onComplete,
+                    parentCodecs,
+                )
+            val childParentCodecs = listOf(codec) + parentCodecs
+            populateLevel(fanIn.body, childParentCodecs, registry)
         }
     }
 }
@@ -402,6 +430,31 @@ internal class Camunda7Run(
                 }
             }
             return mapOf("${handler.id}_items" to CamundaVariables.encode(childrenWithParents))
+        }
+        registry.reduceHandlers[topic]?.let { handler ->
+            val item = handler.codec.decode(variables)
+            val children = when (val r = variables["${handler.id}_items"]) {
+                is JsonArray -> r
+                is JsonPrimitive -> Json.parseToJsonElement(r.content).jsonArray
+                else -> JsonArray(emptyList())
+            }
+            var acc = handler.initial
+            for (el in children) {
+                acc = handler.combine(acc, handler.childCodec.decode(el.jsonObject))
+            }
+            val parentsStr = (variables["_ls_parents"] as? JsonPrimitive)?.content
+            val parentStack = if (handler.parentCodecs.isNotEmpty() && parentsStr != null) {
+                val arr = Json.parseToJsonElement(parentsStr).jsonArray
+                val parentItems = handler.parentCodecs.mapIndexedNotNull { i, pc ->
+                    arr.getOrNull(i)?.jsonObject?.let { pc.decode(it) }
+                }
+                if (parentItems.isNotEmpty()) ParentItemStack(parentItems) else null
+            } else null
+            val execCtx = ExecutionContext(runId, workflow.name, config.logSink, itemKey = item.key, topic = topic)
+            withContext(if (parentStack != null) execCtx + parentStack else execCtx) {
+                handler.onComplete(item, acc)
+            }
+            return CamundaVariables.toCamunda(handler.codec.encode(item))
         }
         error("no handler for topic '$topic'")
     }

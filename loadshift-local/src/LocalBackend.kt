@@ -14,7 +14,9 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.datetime.Clock
@@ -26,6 +28,7 @@ import loadshift.core.ErrorPolicy
 import loadshift.core.Execute
 import loadshift.core.ExecutionContext
 import loadshift.core.FanOut
+import loadshift.core.FanIn
 import loadshift.core.ControllableBackend
 import loadshift.core.Loop
 import loadshift.core.Parallel
@@ -261,6 +264,33 @@ private class LocalRun<W : WorkItem>(
                         }
                     }
                 }
+            }
+
+            is FanIn<*, *, *> -> {
+                val fanIn = step as FanIn<WorkItem, WorkItem, Any?>
+                val childFlow = fanIn.expand(item)
+                val semaphore = Semaphore(fanIn.concurrency ?: config.maxConcurrency)
+                val ctx = currentExecutionContext()
+                val parentStack = (currentCoroutineContext()[ParentItemStack.Key] ?: ParentItemStack(emptyList())).push(item)
+                var acc = fanIn.initial
+                val mutex = Mutex()
+                coroutineScope {
+                    childFlow.collect { child ->
+                        expanded.incrementAndGet()
+                        semaphore.acquire()
+                        launch {
+                            try {
+                                withContext(ctx.child(child.key ?: "?") + parentStack) {
+                                    runChild(fanIn.body.step, child)
+                                }
+                                mutex.withLock { acc = fanIn.combine(acc, child) }
+                            } finally {
+                                semaphore.release()
+                            }
+                        }
+                    }
+                }
+                fanIn.onComplete(item, acc)
             }
         }
     }

@@ -24,19 +24,20 @@ object BpmnCompiler {
 
     private fun gather(sub: SubFlow<*>, acc: MutableList<SubFlow<*>>) {
         acc += sub
-        walkFanOuts(sub.step) { fanOut -> gather(fanOut.body, acc) }
+        walkChildren(sub.step) { child -> gather(child, acc) }
     }
 
-    private fun walkFanOuts(step: Step<*>, action: (FanOut<*, *>) -> Unit) {
+    private fun walkChildren(step: Step<*>, action: (SubFlow<*>) -> Unit) {
         when (step) {
-            is Sequence -> step.steps.forEach { walkFanOuts(it, action) }
+            is Sequence -> step.steps.forEach { walkChildren(it, action) }
             is Conditional -> {
-                walkFanOuts(step.onTrue, action)
-                step.onFalse?.let { walkFanOuts(it, action) }
+                walkChildren(step.onTrue, action)
+                step.onFalse?.let { walkChildren(it, action) }
             }
-            is Loop -> walkFanOuts(step.body, action)
-            is Parallel -> step.branches.forEach { walkFanOuts(it, action) }
-            is FanOut<*, *> -> action(step)
+            is Loop -> walkChildren(step.body, action)
+            is Parallel -> step.branches.forEach { walkChildren(it, action) }
+            is FanOut<*, *> -> action(step.body)
+            is FanIn<*, *, *> -> action(step.body)
             is Execute -> {}
         }
     }
@@ -88,6 +89,25 @@ object BpmnCompiler {
                     .camundaCollection("\${$collection}")
                     .camundaElementVariable(element)
                     .multiInstanceDone()
+            }
+
+            is FanIn<*, *, *> -> {
+                val expandId = "expand_${step.id}"
+                refs += ServiceTaskRef(expandId, "expand_${step.id}")
+                val reduceId = "reduce_${step.id}"
+                val collection = "${step.id}_items"
+                val element = "${step.id}_item"
+                val withChildren = b.serviceTask(expandId).name("expand children")
+                    .callActivity("call_${step.id}")
+                    .name("for each child")
+                    .calledElement(step.childKey)
+                    .multiInstance()
+                    .parallel()
+                    .camundaCollection("\${$collection}")
+                    .camundaElementVariable(element)
+                    .multiInstanceDone()
+                refs += ServiceTaskRef(reduceId, "reduce_${step.id}")
+                withChildren.serviceTask(reduceId).name("reduce children")
             }
 
             is Conditional -> {

@@ -375,4 +375,47 @@ class LocalBackendTest {
         LocalBackend().run(wf).await()
         assertEquals(listOf("root-child-grandchild:root-child:root"), seen.toList())
     }
+
+    @Test
+    fun fanReduceAggregatesChildrenIntoParent() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("fan-reduce") {
+            input(listOf(Cust("a"), Cust("bb")))
+            fanOut(expand = { c -> List(c.id.length) { i -> Kid("${c.id}-$i") } }) {
+                task("touch") { }
+            }.reduce(0, combine = { acc, kid -> acc + kid.label.length }) { c, total ->
+                seen += "${c.id}:$total"
+            }
+        }
+        LocalBackend().run(wf).await()
+        assertEquals(setOf("a:3", "bb:8"), seen.toSet())
+    }
+
+    @Test
+    fun fanCollectGathersChildrenIntoParent() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("fan-collect") {
+            input(listOf(Cust("a"), Cust("bb")))
+            fanOut(expand = { c -> List(c.id.length) { i -> Kid("${c.id}-$i") } }) {
+                task("touch") { }
+            }.collect { c, kids -> seen += "${c.id}:${kids.size}" }
+        }
+        LocalBackend().run(wf).await()
+        assertEquals(setOf("a:1", "bb:2"), seen.toSet())
+    }
+
+    @Test
+    fun fanReduceChildSeesParentViaContext() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("fan-reduce-ctx") {
+            input(listOf(Cust("root", 5)))
+            fanOut(expand = { c -> listOf(Kid("${c.id}-1")) }, context = { it }) {
+                task("read") { kid -> seen += "${kid.label}->${context().id}" }
+            }.reduce(0, combine = { acc, _ -> acc + 1 }) { c, count ->
+                seen += "${c.id}:n=${c.n}:count=$count"
+            }
+        }
+        LocalBackend().run(wf).await()
+        assertEquals(setOf("root-1->root", "root:n=5:count=1"), seen.toSet())
+    }
 }
