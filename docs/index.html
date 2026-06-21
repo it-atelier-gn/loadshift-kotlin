@@ -250,9 +250,9 @@ task("fulfil") { fulfil(it) }</code></pre>
   block in an interrupting boundary timer (an embedded subprocess on Camunda); overruns become
   dead letters.</p>
   <p class="note"><code>awaitMessage</code> parks an item until an event arrives. The run handle delivers
-  it with <code>send(message, key)</code> (one item) or <code>broadcast(message)</code> (all waiters).
-  On Camunda this correlates through the engine's message API — a catch event keyed by item;
-  <code>send</code> works on both engines, <code>broadcast</code> on Camunda 7 (Zeebe correlates per key).</p>
+  it with <code>send(message, key)</code> (one item) or <code>broadcast(message)</code> (all waiters,
+  local). On Camunda, <code>send</code> correlates through the engine's message API — a catch event
+  keyed by item — and is the verified path on both Camunda 7 and 8.</p>
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>Saga.kt</span><button class="copy" type="button">COPY</button></div>
 <pre><code class="lang-kotlin">task("charge") { charge(it) } compensate { refund(it) }
