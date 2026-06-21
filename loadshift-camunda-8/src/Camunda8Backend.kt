@@ -87,6 +87,7 @@ internal class TaskHandler(
     val task: Task<WorkItem>,
     val codec: WorkItemCodec<WorkItem>,
     val parentCodecs: List<WorkItemCodec<WorkItem>> = emptyList(),
+    val compensation: (suspend (WorkItem) -> Unit)? = null,
 )
 internal class DecisionHandler(val id: String, val predicate: (WorkItem) -> Boolean, val codec: WorkItemCodec<WorkItem>)
 internal class ExpandHandler(
@@ -142,7 +143,7 @@ private fun collectFromStep(
         is Sequence -> step.steps.forEach { collectFromStep(it, codec, parentCodecs, registry) }
         is Execute<*> -> {
             val task = step.task as Task<WorkItem>
-            registry.taskHandlers[task.topic] = TaskHandler(task, codec, parentCodecs)
+            registry.taskHandlers[task.topic] = TaskHandler(task, codec, parentCodecs, step.compensation as (suspend (WorkItem) -> Unit)?)
         }
         is Conditional -> {
             collectFromStep(step.onTrue, codec, parentCodecs, registry)
@@ -197,6 +198,7 @@ internal class Camunda8Run(
     private val done = AtomicLong()
     private val failed = AtomicLong()
     private val seeded = AtomicLong()
+    private val compensations = java.util.concurrent.ConcurrentHashMap<String, MutableList<suspend () -> Unit>>()
 
     @Volatile private var running = true
     @Volatile private var runState = if (config.start is Start.Now) RunState.Running else RunState.Scheduled
@@ -349,11 +351,14 @@ internal class Camunda8Run(
     private suspend fun process(topic: String, job: ActivatedJob) {
         val result = try {
             val variables = unwrapItemVariables(C8Variables.fromJson(job.variables))
-            dispatch(topic, C8Variables.toJson(variables))
+            dispatch(topic, C8Variables.toJson(variables), job.processInstanceKey)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
             failed.incrementAndGet()
+            if ((config.retry.maxAttempts - 1).coerceAtLeast(0) == 0 && job.processInstanceKey != null) {
+                compensations.remove(job.processInstanceKey)?.asReversed()?.forEach { runCatching { it() } }
+            }
             runCatching {
                 client.failJob(
                     job.jobKey,
@@ -393,7 +398,7 @@ internal class Camunda8Run(
         }
     }
 
-    private suspend fun dispatch(topic: String, variables: JsonObject): JsonObject {
+    private suspend fun dispatch(topic: String, variables: JsonObject, instanceId: String?): JsonObject {
         registry.taskHandlers[topic]?.let { handler ->
             val item = handler.codec.decode(variables)
             val parentsStr = (variables["loadshiftParents"] as? JsonPrimitive)?.content
@@ -409,6 +414,9 @@ internal class Camunda8Run(
                 config.tracer.span("task $topic", mapOf("item" to (item.key ?: ""))) {
                     handler.task.execute(item)
                 }
+            }
+            handler.compensation?.let { comp ->
+                if (instanceId != null) compensations.getOrPut(instanceId) { java.util.Collections.synchronizedList(mutableListOf()) }.add { comp(item) }
             }
             return handler.codec.encode(item)
         }
