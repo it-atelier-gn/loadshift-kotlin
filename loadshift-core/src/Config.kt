@@ -47,6 +47,7 @@ data class RunConfig(
     val onError: ErrorPolicy = ErrorPolicy.DeadLetter,
     val dryRun: Boolean = false,
     val dedupe: Boolean = false,
+    val checkpoints: CheckpointStore? = null,
     val resume: Boolean = true,
     val lockDuration: Duration = 5.minutes,
     val maxLoopIterations: Int = 10_000,
