@@ -9,3 +9,5 @@ class FanFlowSpec<W : WorkItem, Ctx> @PublishedApi internal constructor(
 ) : FlowSpec<W>(codec, baseKey, idgen) {
     suspend fun context(): Ctx = contextProvider(0)
 }
+
+data class Parent<out W, out C>(val item: W, val parent: C)
