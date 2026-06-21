@@ -178,8 +178,14 @@ private class LocalRun<W : WorkItem>(
 
     private suspend fun execute() {
         val semaphore = Semaphore(config.maxConcurrency)
+        val seenKeys = if (config.dedupe) HashSet<String>() else null
         coroutineScope {
             workflow.seed().collect { item ->
+                val key = item.key
+                if (seenKeys != null && key != null && !seenKeys.add(key)) {
+                    skipped.incrementAndGet()
+                    return@collect
+                }
                 seeded.incrementAndGet()
                 semaphore.acquire()
                 launch {

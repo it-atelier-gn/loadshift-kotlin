@@ -278,8 +278,11 @@ internal class Camunda7Run(
     private suspend fun startRootInstances() {
         val rootCodec = workflow.root.codec as WorkItemCodec<WorkItem>
         val semaphore = Semaphore(config.maxConcurrency)
+        val seenKeys = if (config.dedupe) HashSet<String>() else null
         coroutineScope {
             workflow.seed().collectIndexed { index, item ->
+                val key = (item as WorkItem).key
+                if (seenKeys != null && key != null && !seenKeys.add(key)) return@collectIndexed
                 seeded.incrementAndGet()
                 semaphore.acquire()
                 launch {
