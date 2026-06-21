@@ -2,6 +2,7 @@ package loadshift.core
 
 import kotlinx.serialization.Serializable
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -89,5 +90,17 @@ class DslTest {
         val seq = wf.root.step as Sequence<Item>
         val w = assertIs<Wait<Item>>(seq.steps[0])
         assertEquals(5.minutes, w.duration)
+    }
+
+    @Test
+    fun timeoutWrapsBodyInTimeoutStep() {
+        val wf = workflow<Item>("to") {
+            input(Item(1))
+            timeout(30.seconds) { task("inner") { } }
+        }
+        val seq = wf.root.step as Sequence<Item>
+        val to = assertIs<Timeout<Item>>(seq.steps[0])
+        assertEquals(30.seconds, to.duration)
+        assertTrue("inner" in wf.root.tasks.keys)
     }
 }

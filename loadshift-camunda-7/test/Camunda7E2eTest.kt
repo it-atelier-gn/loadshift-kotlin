@@ -82,8 +82,10 @@ class Camunda7E2eTest {
         val key = "e2e7x${System.currentTimeMillis()}"
         val wf = workflow<EUser>(key) {
             input(listOf(EUser("a"), EUser("b")))
-            task("stamp") { it.note = "ok:${it.id}" }
-            wait(1.seconds)
+            timeout(60.seconds) {
+                task("stamp") { it.note = "ok:${it.id}" }
+                wait(1.seconds)
+            }
             fanOut(expand = { u -> listOf(EContact("${u.id}-1"), EContact("${u.id}-2")) }, context = { it }) {
                 task("process") { child ->
                     if (child.label.endsWith("1")) {

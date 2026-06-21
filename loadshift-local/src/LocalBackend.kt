@@ -28,6 +28,7 @@ import loadshift.core.ExecutionContext
 import loadshift.core.FanOut
 import loadshift.core.FanIn
 import loadshift.core.Wait
+import loadshift.core.Timeout
 import loadshift.core.ControllableBackend
 import loadshift.core.Loop
 import loadshift.core.Parallel
@@ -249,6 +250,15 @@ private class LocalRun<W : WorkItem>(
             }
 
             is Wait<*> -> delay(step.duration)
+
+            is Timeout<*> -> {
+                val t = step as Timeout<WorkItem>
+                try {
+                    withTimeout(t.duration) { interpret(t.body, item) }
+                } catch (e: TimeoutCancellationException) {
+                    throw DeadLetterSignal("timeout_${t.id}", "exceeded ${t.duration}")
+                }
+            }
 
             is FanOut<*, *> -> {
                 val fanOut = step as FanOut<WorkItem, WorkItem>

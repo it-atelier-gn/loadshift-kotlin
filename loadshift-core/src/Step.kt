@@ -26,6 +26,8 @@ class Parallel<W : WorkItem>(val branches: List<Step<W>>) : Step<W>
 
 class Wait<W : WorkItem>(val id: String, val duration: Duration) : Step<W>
 
+class Timeout<W : WorkItem>(val id: String, val duration: Duration, val body: Step<W>) : Step<W>
+
 class FanOut<W : WorkItem, C : WorkItem>(
     val id: String,
     val childKey: String,

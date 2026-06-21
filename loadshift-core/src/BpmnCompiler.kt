@@ -40,6 +40,7 @@ object BpmnCompiler {
             is FanIn<*, *, *> -> action(step.body)
             is Execute -> {}
             is Wait -> {}
+            is Timeout -> walkChildren(step.body, action)
         }
     }
 
@@ -160,6 +161,21 @@ object BpmnCompiler {
             is Wait -> b.intermediateCatchEvent("timer_${step.id}")
                 .name("wait ${step.duration}")
                 .timerWithDuration(step.duration.toIsoString())
+
+            is Timeout -> {
+                val scopeId = "scope_${step.id}"
+                var inner: AbstractFlowNodeBuilder<*, *> = b.subProcess(scopeId)
+                    .name("within ${step.duration}")
+                    .embeddedSubProcess()
+                    .startEvent("${scopeId}_start")
+                inner = compileStep(step.body, inner, refs, gw)
+                val scope = inner.endEvent("${scopeId}_end").subProcessDone()
+                scope.boundaryEvent("timeout_${step.id}")
+                    .cancelActivity(true)
+                    .timerWithDuration(step.duration.toIsoString())
+                    .endEvent("timeout_${step.id}_end")
+                b.moveToNode(scopeId)
+            }
         }
     }
 }

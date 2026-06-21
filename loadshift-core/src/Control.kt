@@ -135,6 +135,7 @@ private fun describeStep(step: Step<*>): FlowNode = when (step) {
     is Loop<*> -> FlowNode("loop", step.id, listOf(describeStep(step.body)))
     is Parallel<*> -> FlowNode("parallel", "", step.branches.map { describeStep(it) })
     is Wait<*> -> FlowNode("wait", step.id)
+    is Timeout<*> -> FlowNode("timeout", step.id, listOf(describeStep(step.body)))
     is FanOut<*, *> -> FlowNode("fanOut", step.id, listOf(describeStep(step.body.step)))
     is FanIn<*, *, *> -> FlowNode("fanIn", step.id, listOf(describeStep(step.body.step)))
 }
