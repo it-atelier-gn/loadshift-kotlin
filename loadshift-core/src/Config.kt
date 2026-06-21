@@ -46,6 +46,7 @@ data class RunConfig(
     val retry: RetryPolicy = RetryPolicy.Default,
     val onError: ErrorPolicy = ErrorPolicy.DeadLetter,
     val dryRun: Boolean = false,
+    val dedupe: Boolean = false,
     val resume: Boolean = true,
     val lockDuration: Duration = 5.minutes,
     val maxLoopIterations: Int = 10_000,

@@ -469,4 +469,15 @@ class LocalBackendTest {
         assertEquals(listOf("before", "after"), seen.toList())
         assertTrue(elapsed >= 100, "expected wait to delay, elapsed=$elapsed")
     }
+
+    @Test
+    fun dedupeSkipsDuplicateKeys() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("dedupe") {
+            input(listOf(Cust("a"), Cust("a"), Cust("b")))
+            task("t") { seen += it.id }
+        }
+        LocalBackend().run(wf, RunConfig(dedupe = true)).await()
+        assertEquals(listOf("a", "b"), seen.sorted())
+    }
 }
