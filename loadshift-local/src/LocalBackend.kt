@@ -14,9 +14,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.datetime.Clock
@@ -273,17 +271,16 @@ private class LocalRun<W : WorkItem>(
                 val ctx = currentExecutionContext()
                 val parentStack = (currentCoroutineContext()[ParentItemStack.Key] ?: ParentItemStack(emptyList())).push(item)
                 var acc = fanIn.initial
-                val mutex = Mutex()
                 coroutineScope {
                     childFlow.collect { child ->
                         expanded.incrementAndGet()
+                        acc = fanIn.combine(acc, child)
                         semaphore.acquire()
                         launch {
                             try {
                                 withContext(ctx.child(child.key ?: "?") + parentStack) {
                                     runChild(fanIn.body.step, child)
                                 }
-                                mutex.withLock { acc = fanIn.combine(acc, child) }
                             } finally {
                                 semaphore.release()
                             }

@@ -302,14 +302,15 @@ parallel {
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>FanReduce.kt</span><button class="copy" type="button">COPY</button></div>
 <pre><code class="lang-kotlin">fanOut(expand = { customer -&gt; fetchOrders(customer.id) }, concurrency = 8) {
-    task("price") { order -&gt; order.total = price(order) }
-}.reduce(0.0, combine = { sum, order -&gt; sum + order.total }) { customer, total -&gt;
-    customer.invoiceTotal = total
+    task("charge") { order -&gt; charge(order) }
+}.reduce(0.0, combine = { sum, order -&gt; sum + order.amount }) { customer, total -&gt;
+    customer.billed = total
 }</code></pre>
   </div>
-  <p class="note">On the local backend the fold sees each child after its tasks run. On Camunda the fold
-  runs over the children as produced by <code>expand</code> — mutations a child task makes to its own
-  item do not cross the call-activity boundary back into the aggregate.</p>
+  <p class="note"><code>reduce</code> and <code>collect</code> fold over the children as produced by
+  <code>expand</code> — identically on the local and Camunda backends. The child body runs per child for
+  its side effects; aggregate the values you need from the expanded items rather than from in-task
+  mutations.</p>
 </section>
 
 <section id="sources" class="block">
