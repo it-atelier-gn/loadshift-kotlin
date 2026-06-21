@@ -77,6 +77,10 @@ open class FlowSpec<W : WorkItem> internal constructor(
         steps += Timeout(idgen.next("to"), duration, bodySpec.toStep())
     }
 
+    fun awaitMessage(message: String) {
+        steps += AwaitMessage(idgen.next("msg"), message)
+    }
+
     internal fun replaceStep(index: Int, step: Step<W>) {
         steps[index] = step
     }

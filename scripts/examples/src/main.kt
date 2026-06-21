@@ -198,6 +198,25 @@ val examples = listOf(
             task("settle") { }
         },
     ),
+    Example(
+        id = "await",
+        title = "Wait for an event",
+        blurb = "awaitMessage parks the flow until an external event arrives. It compiles to an intermediate message catch event the engine correlates by key.",
+        dsl = """
+            workflow<Order>("await-payment") {
+                input(orders)
+                task("invoice") { invoice(it) }
+                awaitMessage("payment-confirmed")
+                task("fulfil") { fulfil(it) }
+            }
+        """.trimIndent(),
+        flow = workflow<Order>("await-payment") {
+            input(emptyList())
+            task("invoice") { }
+            awaitMessage("payment-confirmed")
+            task("fulfil") { }
+        },
+    ),
 )
 
 class Compiled(val dialect: String, val levels: List<CompiledProcess>, val xml: Map<String, String>)

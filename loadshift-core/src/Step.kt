@@ -28,6 +28,8 @@ class Wait<W : WorkItem>(val id: String, val duration: Duration) : Step<W>
 
 class Timeout<W : WorkItem>(val id: String, val duration: Duration, val body: Step<W>) : Step<W>
 
+class AwaitMessage<W : WorkItem>(val id: String, val message: String) : Step<W>
+
 class FanOut<W : WorkItem, C : WorkItem>(
     val id: String,
     val childKey: String,

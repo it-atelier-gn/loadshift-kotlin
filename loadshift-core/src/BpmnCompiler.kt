@@ -41,6 +41,7 @@ object BpmnCompiler {
             is Execute -> {}
             is Wait -> {}
             is Timeout -> walkChildren(step.body, action)
+            is AwaitMessage -> {}
         }
     }
 
@@ -176,6 +177,10 @@ object BpmnCompiler {
                     .endEvent("timeout_${step.id}_end")
                 b.moveToNode(scopeId)
             }
+
+            is AwaitMessage -> b.intermediateCatchEvent("msg_${step.id}")
+                .name(step.message)
+                .message(step.message)
         }
     }
 }
