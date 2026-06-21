@@ -453,4 +453,20 @@ class LocalBackendTest {
         LocalBackend().run(wf).await()
         assertEquals(setOf("k1:2", "k2:2"), seen.toSet())
     }
+
+    @Test
+    fun waitDelaysBetweenSteps() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("waiter") {
+            input(listOf(Cust("a")))
+            task("before") { seen += "before" }
+            wait(120.milliseconds)
+            task("after") { seen += "after" }
+        }
+        val start = System.currentTimeMillis()
+        LocalBackend().run(wf).await()
+        val elapsed = System.currentTimeMillis() - start
+        assertEquals(listOf("before", "after"), seen.toList())
+        assertTrue(elapsed >= 100, "expected wait to delay, elapsed=$elapsed")
+    }
 }

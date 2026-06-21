@@ -10,6 +10,7 @@ import loadshift.core.Workflow
 import loadshift.core.fanOut
 import loadshift.core.task
 import loadshift.core.workflow
+import kotlin.time.Duration.Companion.minutes
 import org.camunda.bpm.model.bpmn.Bpmn
 import org.camunda.bpm.model.bpmn.instance.CallActivity
 import org.camunda.bpm.model.bpmn.instance.ConditionExpression
@@ -176,6 +177,25 @@ val examples = listOf(
             }.reduce(0, combine = { sum, line -> sum + line.qty }) { order, units ->
                 order.total = units
             }
+        },
+    ),
+    Example(
+        id = "timer",
+        title = "Timed wait",
+        blurb = "wait pauses the flow for a fixed duration. It compiles to an intermediate timer catch event the engine schedules natively.",
+        dsl = """
+            workflow<Order>("retry-later") {
+                input(orders)
+                task("attempt") { charge(it) }
+                wait(15.minutes)
+                task("settle") { settle(it) }
+            }
+        """.trimIndent(),
+        flow = workflow<Order>("retry-later") {
+            input(emptyList())
+            task("attempt") { }
+            wait(15.minutes)
+            task("settle") { }
         },
     ),
 )

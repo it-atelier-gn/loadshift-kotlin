@@ -1,6 +1,7 @@
 package loadshift.core
 
 import kotlinx.coroutines.flow.Flow
+import kotlin.time.Duration
 
 sealed interface Step<W : WorkItem>
 
@@ -22,6 +23,8 @@ class Loop<W : WorkItem>(
 ) : Step<W>
 
 class Parallel<W : WorkItem>(val branches: List<Step<W>>) : Step<W>
+
+class Wait<W : WorkItem>(val id: String, val duration: Duration) : Step<W>
 
 class FanOut<W : WorkItem, C : WorkItem>(
     val id: String,

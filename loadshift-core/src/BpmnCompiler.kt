@@ -39,6 +39,7 @@ object BpmnCompiler {
             is FanOut<*, *> -> action(step.body)
             is FanIn<*, *, *> -> action(step.body)
             is Execute -> {}
+            is Wait -> {}
         }
     }
 
@@ -155,6 +156,10 @@ object BpmnCompiler {
                 }
                 b.moveToNode(join)
             }
+
+            is Wait -> b.intermediateCatchEvent("timer_${step.id}")
+                .name("wait ${step.duration}")
+                .timerWithDuration(step.duration.toIsoString())
         }
     }
 }

@@ -232,10 +232,14 @@ loop({ it.attempts &lt; 3 }) {
 parallel {
     branch { task("index") { index(it) } }
     branch { task("notify") { notify(it) } }
-}</code></pre>
+}
+
+wait(15.minutes)
+task("settle") { settle(it) }</code></pre>
   </div>
   <p class="note">Runaway loops are cut off by <code>RunConfig(maxLoopIterations = …)</code>
-  and turned into dead letters.</p>
+  and turned into dead letters. <code>wait</code> pauses the flow for a fixed duration —
+  a real timer catch event on Camunda, a suspending delay locally.</p>
 </section>
 
 <section id="fan-out" class="block">
