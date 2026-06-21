@@ -106,7 +106,7 @@ done=3 failed=0 deadLetters=3
   </div>
 
   <p>Or pull it into an existing project from Maven Central
-  (<code>io.github.it-atelier-gn</code>, version <code>0.4.0</code>):</p>
+  (<code>io.github.it-atelier-gn</code>, version <code>0.5.0</code>):</p>
   <div class="codecard">
     <div class="codecard-head">
       <div class="tabs">
@@ -117,50 +117,50 @@ done=3 failed=0 deadLetters=3
       <button class="copy" type="button">COPY</button>
     </div>
     <pre class="tab-panel active" data-tab="kts"><code class="lang-kotlin">dependencies {
-    implementation("io.github.it-atelier-gn:loadshift-core:0.4.0")
-    implementation("io.github.it-atelier-gn:loadshift-local:0.4.0")
-    implementation("io.github.it-atelier-gn:loadshift-camunda-7:0.4.0")
-    implementation("io.github.it-atelier-gn:loadshift-camunda-8:0.4.0")
-    implementation("io.github.it-atelier-gn:loadshift-web:0.4.0")
-    implementation("io.github.it-atelier-gn:loadshift-sqlite:0.4.0")
+    implementation("io.github.it-atelier-gn:loadshift-core:0.5.0")
+    implementation("io.github.it-atelier-gn:loadshift-local:0.5.0")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-7:0.5.0")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-8:0.5.0")
+    implementation("io.github.it-atelier-gn:loadshift-web:0.5.0")
+    implementation("io.github.it-atelier-gn:loadshift-sqlite:0.5.0")
 }</code></pre>
     <pre class="tab-panel" data-tab="groovy"><code class="lang-groovy">dependencies {
-    implementation 'io.github.it-atelier-gn:loadshift-core:0.4.0'
-    implementation 'io.github.it-atelier-gn:loadshift-local:0.4.0'
-    implementation 'io.github.it-atelier-gn:loadshift-camunda-7:0.4.0'
-    implementation 'io.github.it-atelier-gn:loadshift-camunda-8:0.4.0'
-    implementation 'io.github.it-atelier-gn:loadshift-web:0.4.0'
-    implementation 'io.github.it-atelier-gn:loadshift-sqlite:0.4.0'
+    implementation 'io.github.it-atelier-gn:loadshift-core:0.5.0'
+    implementation 'io.github.it-atelier-gn:loadshift-local:0.5.0'
+    implementation 'io.github.it-atelier-gn:loadshift-camunda-7:0.5.0'
+    implementation 'io.github.it-atelier-gn:loadshift-camunda-8:0.5.0'
+    implementation 'io.github.it-atelier-gn:loadshift-web:0.5.0'
+    implementation 'io.github.it-atelier-gn:loadshift-sqlite:0.5.0'
 }</code></pre>
     <pre class="tab-panel" data-tab="maven"><code class="lang-xml">&lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-core&lt;/artifactId&gt;
-    &lt;version&gt;0.4.0&lt;/version&gt;
+    &lt;version&gt;0.5.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-local&lt;/artifactId&gt;
-    &lt;version&gt;0.4.0&lt;/version&gt;
+    &lt;version&gt;0.5.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-camunda-7&lt;/artifactId&gt;
-    &lt;version&gt;0.4.0&lt;/version&gt;
+    &lt;version&gt;0.5.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-camunda-8&lt;/artifactId&gt;
-    &lt;version&gt;0.4.0&lt;/version&gt;
+    &lt;version&gt;0.5.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-web&lt;/artifactId&gt;
-    &lt;version&gt;0.4.0&lt;/version&gt;
+    &lt;version&gt;0.5.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-sqlite&lt;/artifactId&gt;
-    &lt;version&gt;0.4.0&lt;/version&gt;
+    &lt;version&gt;0.5.0&lt;/version&gt;
 &lt;/dependency&gt;</code></pre>
   </div>
   <p class="note">Pick the modules you need; see <a href="#modules">Modules</a> for what each one contains.</p>
@@ -258,24 +258,40 @@ parallel {
     }
 }</code></pre>
   </div>
-  <p>Tasks inside a fan-out can read their ancestor items as <strong>context parameters</strong>.
-  Reach a parent with <code>contextOf&lt;T&gt;()</code> (or any function declared with
-  <code>context(T)</code>); nested fan-out accumulates every ancestor, up to five levels deep.</p>
+  <p>Tasks inside a fan-out can read a parent-derived value through <code>context()</code>. Opt in by
+  passing a <code>context</code> transform; without it <code>context()</code> is <code>null</code>. Pass
+  <code>context = { it }</code> to expose the parent item itself.</p>
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>ParentAccess.kt</span><button class="copy" type="button">COPY</button></div>
-<pre><code class="lang-kotlin">fanOut(expand = { customer -&gt; fetchOrders(customer.id) }) {
-    fanOut(expand = { order -&gt; order.items }) {
-        task("ship") { item -&gt;
-            val order    = contextOf&lt;Order&gt;()
-            val customer = contextOf&lt;Customer&gt;()
-            ship(item, order.id, customer.address)
+<pre><code class="lang-kotlin">fanOut(
+    expand = { customer -&gt; fetchOrders(customer.id) },
+    context = { customer -&gt; customer.address },
+) {
+    task("ship") { order -&gt;
+        ship(order, context())
+    }
+}</code></pre>
+  </div>
+  <p><code>context()</code> resolves against the level it is called in and exposes the nearest parent.
+  To reach further up, a nested <code>fanOut</code> receives the enclosing <code>context</code> value as a
+  second argument, so you fold the chain into your own value as you descend.</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>CumulativeContext.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">fanOut(
+    expand = { customer -&gt; fetchOrders(customer.id) },
+    context = { customer -&gt; customer },
+) {
+    fanOut(
+        expand = { order -&gt; order.lines },
+        context = { order, customer -&gt; OrderCtx(customer, order) },
+    ) {
+        task("ship") { line -&gt;
+            val (customer, order) = context()
+            ship(line, order, customer)
         }
     }
 }</code></pre>
   </div>
-  <p class="note">Requires Kotlin 2.3 with <code>-Xcontext-parameters</code>. Ancestors are selected by
-  type, so two ancestors of the <em>same</em> type cannot be told apart: <code>contextOf&lt;T&gt;()</code>
-  is a compile error when the chain holds more than one <code>T</code>. Give such items distinct types.</p>
 </section>
 
 <section id="sources" class="block">
