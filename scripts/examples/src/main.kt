@@ -155,6 +155,29 @@ val examples = listOf(
             }
         },
     ),
+    Example(
+        id = "fanin",
+        title = "Fan-in to an aggregate",
+        blurb = "reduce folds the expanded children into one value and runs onComplete on the parent. It compiles to the fan-out plus a reduce service task after the multi-instance join.",
+        dsl = """
+            workflow<Order>("order-totals") {
+                input(orders)
+                fanOut(expand = { fetchLines(it.id) }, concurrency = 4) {
+                    task("price") { price(it) }
+                }.reduce(0, combine = { sum, line -> sum + line.qty }) { order, units ->
+                    order.total = units
+                }
+            }
+        """.trimIndent(),
+        flow = workflow<Order>("order-totals") {
+            input(emptyList())
+            fanOut(expand = { emptyList<Line>() }, concurrency = 4) {
+                task("price") { }
+            }.reduce(0, combine = { sum, line -> sum + line.qty }) { order, units ->
+                order.total = units
+            }
+        },
+    ),
 )
 
 class Compiled(val dialect: String, val levels: List<CompiledProcess>, val xml: Map<String, String>)

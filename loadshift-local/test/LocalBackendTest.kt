@@ -14,7 +14,9 @@ import loadshift.core.RunConfig
 import loadshift.core.Start
 import loadshift.core.WorkItem
 import loadshift.core.log
+import loadshift.core.Page
 import loadshift.core.fanOut
+import loadshift.core.paginateWith
 import loadshift.core.task
 import loadshift.core.workflow
 import java.util.Collections
@@ -417,5 +419,38 @@ class LocalBackendTest {
         }
         LocalBackend().run(wf).await()
         assertEquals(setOf("root-1->root", "root:n=5:count=1"), seen.toSet())
+    }
+
+    @Test
+    fun fanReduceOverPaginatedChildren() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("fan-paginate") {
+            input(listOf(Cust("a", 3)))
+            fanOut(paginateWith { c: Cust, cursor: Any? ->
+                val page = (cursor as? Int) ?: 0
+                if (page < c.n) Page(listOf(Kid("${c.id}-$page")), page + 1) else Page(emptyList(), null)
+            }) {
+                task("touch") { }
+            }.reduce(0, combine = { acc, _ -> acc + 1 }) { c, count -> seen += "${c.id}:$count" }
+        }
+        LocalBackend().run(wf).await()
+        assertEquals(setOf("a:3"), seen.toSet())
+    }
+
+    @Test
+    fun nestedFanReduceAggregatesPerInnerParent() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("nested-reduce") {
+            input(listOf(Cust("root", 0)))
+            fanOut(expand = { _ -> listOf(Kid("k1"), Kid("k2")) }, context = { it }) {
+                fanOut(expand = { k -> List(2) { i -> Kid("${k.label}-$i") } }) {
+                    task("touch") { }
+                }.reduce(0, combine = { acc, _ -> acc + 1 }) { kid, count ->
+                    seen += "${kid.label}:$count"
+                }
+            }
+        }
+        LocalBackend().run(wf).await()
+        assertEquals(setOf("k1:2", "k2:2"), seen.toSet())
     }
 }
