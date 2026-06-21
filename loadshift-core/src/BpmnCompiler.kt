@@ -139,7 +139,7 @@ object BpmnCompiler {
                 val split = gw.next("gw")
                 val resultExpr = "\${${step.id}_result}"
 
-                b.serviceTask(decisionId).name("loop guard").exclusiveGateway(split)
+                b.serviceTask(decisionId).name("loop condition").exclusiveGateway(split)
                 var bodyB = b.moveToNode(split).condition("repeat", resultExpr)
                 bodyB = compileStep(step.body, bodyB, refs, gw)
                 bodyB.connectTo(decisionId)

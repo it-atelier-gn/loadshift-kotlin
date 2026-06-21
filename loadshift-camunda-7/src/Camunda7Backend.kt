@@ -274,7 +274,7 @@ internal class Camunda7Run(
     override suspend fun await(): RunResult = completion.await()
 
     override suspend fun send(message: String, key: String) {
-        client.correlateMessage(MessageRequest(message, mapOf("_ls_key" to CamundaVariables.encode(key)), all = true))
+        client.correlateMessage(MessageRequest(message, mapOf("loadshiftKey" to CamundaVariables.encode(key)), all = true))
     }
 
     override suspend fun broadcast(message: String) {
@@ -302,7 +302,7 @@ internal class Camunda7Run(
                         client.startInstance(
                             processDefinitionKey = workflow.root.key,
                             variables = CamundaVariables.toCamunda(rootCodec.encode(item as WorkItem)) +
-                                ("_ls_key" to CamundaVariables.encode((item as WorkItem).key ?: index.toString())),
+                                ("loadshiftKey" to CamundaVariables.encode((item as WorkItem).key ?: index.toString())),
                             businessKey = index.toString(),
                         )
                     } finally {
@@ -410,7 +410,7 @@ internal class Camunda7Run(
     private suspend fun dispatch(topic: String, variables: JsonObject): Map<String, CamundaValue> {
         registry.taskHandlers[topic]?.let { handler ->
             val item = handler.codec.decode(variables)
-            val parentsStr = (variables["_ls_parents"] as? JsonPrimitive)?.content
+            val parentsStr = (variables["loadshiftParents"] as? JsonPrimitive)?.content
             val parentStack = if (handler.parentCodecs.isNotEmpty() && parentsStr != null) {
                 val arr = Json.parseToJsonElement(parentsStr).jsonArray
                 val parentItems = handler.parentCodecs.mapIndexedNotNull { i, pc ->
@@ -435,7 +435,7 @@ internal class Camunda7Run(
             val item = handler.codec.decode(variables)
             val children = handler.expand(item).toList()
             val currentParentJson = handler.codec.encode(item)
-            val existingParentsStr = (variables["_ls_parents"] as? JsonPrimitive)?.content
+            val existingParentsStr = (variables["loadshiftParents"] as? JsonPrimitive)?.content
             val existingParents = existingParentsStr?.let { Json.parseToJsonElement(it).jsonArray }
                 ?: JsonArray(emptyList())
             val newParentsJson = buildJsonArray {
@@ -446,7 +446,7 @@ internal class Camunda7Run(
             val childrenWithParents = children.map { child ->
                 buildJsonObject {
                     handler.childCodec.encode(child).forEach { (k, v) -> put(k, v) }
-                    put("_ls_parents", parentsStr)
+                    put("loadshiftParents", parentsStr)
                 }
             }
             return mapOf("${handler.id}_items" to CamundaVariables.encode(childrenWithParents))
@@ -462,7 +462,7 @@ internal class Camunda7Run(
             for (el in children) {
                 acc = handler.combine(acc, handler.childCodec.decode(el.jsonObject))
             }
-            val parentsStr = (variables["_ls_parents"] as? JsonPrimitive)?.content
+            val parentsStr = (variables["loadshiftParents"] as? JsonPrimitive)?.content
             val parentStack = if (handler.parentCodecs.isNotEmpty() && parentsStr != null) {
                 val arr = Json.parseToJsonElement(parentsStr).jsonArray
                 val parentItems = handler.parentCodecs.mapIndexedNotNull { i, pc ->
