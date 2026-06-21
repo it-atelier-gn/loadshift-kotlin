@@ -111,7 +111,7 @@ class BpmnLayoutTest {
         val root = BpmnCompiler.compile(wf)[0]
         val taskNames = root.model.getModelElementsByType(ServiceTask::class.java).map { it.name }.toSet()
         assertTrue("evaluate condition" in taskNames)
-        assertTrue("loop guard" in taskNames)
+        assertTrue("loop condition" in taskNames)
         assertTrue("expand children" in taskNames)
         assertTrue(root.model.getModelElementsByType(Gateway::class.java).all { it.name.isNullOrEmpty() })
     }

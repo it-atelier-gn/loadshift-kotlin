@@ -36,7 +36,7 @@ object Camunda8Dialect {
         }
         for (message in model.getModelElementsByType(Message::class.java)) {
             val subscription = ensureExtensions(model, message).addExtensionElement(ZEEBE_NS, "subscription")
-            subscription.domElement.setAttribute("correlationKey", "=_ls_key")
+            subscription.domElement.setAttribute("correlationKey", "=loadshiftKey")
         }
         for (condition in model.getModelElementsByType(ConditionExpression::class.java)) {
             condition.textContent = toFeel(condition.textContent.trim())

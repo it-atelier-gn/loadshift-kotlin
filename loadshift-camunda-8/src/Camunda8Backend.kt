@@ -294,7 +294,7 @@ internal class Camunda8Run(
                         val encoded = rootCodec.encode(item as WorkItem)
                         val withKey = buildJsonObject {
                             encoded.forEach { (k, v) -> put(k, v) }
-                            put("_ls_key", JsonPrimitive((item as WorkItem).key ?: ""))
+                            put("loadshiftKey", JsonPrimitive((item as WorkItem).key ?: ""))
                         }
                         client.createInstance(workflow.root.key, withKey)
                     } finally {
@@ -396,7 +396,7 @@ internal class Camunda8Run(
     private suspend fun dispatch(topic: String, variables: JsonObject): JsonObject {
         registry.taskHandlers[topic]?.let { handler ->
             val item = handler.codec.decode(variables)
-            val parentsStr = (variables["_ls_parents"] as? JsonPrimitive)?.content
+            val parentsStr = (variables["loadshiftParents"] as? JsonPrimitive)?.content
             val parentStack = if (handler.parentCodecs.isNotEmpty() && parentsStr != null) {
                 val arr = Json.parseToJsonElement(parentsStr).jsonArray
                 val parentItems = handler.parentCodecs.mapIndexedNotNull { i, pc ->
@@ -421,7 +421,7 @@ internal class Camunda8Run(
             val item = handler.codec.decode(variables)
             val children = handler.expand(item).toList()
             val currentParentJson = handler.codec.encode(item)
-            val existingParentsStr = (variables["_ls_parents"] as? JsonPrimitive)?.content
+            val existingParentsStr = (variables["loadshiftParents"] as? JsonPrimitive)?.content
             val existingParents = existingParentsStr?.let { Json.parseToJsonElement(it).jsonArray }
                 ?: JsonArray(emptyList())
             val newParentsJson = buildJsonArray {
@@ -432,7 +432,7 @@ internal class Camunda8Run(
             val array = JsonArray(children.map { child ->
                 buildJsonObject {
                     handler.childCodec.encode(child).forEach { (k, v) -> put(k, v) }
-                    put("_ls_parents", parentsStr)
+                    put("loadshiftParents", parentsStr)
                 }
             })
             return buildJsonObject { put("${handler.id}_items", array) }
@@ -448,7 +448,7 @@ internal class Camunda8Run(
             for (el in children) {
                 acc = handler.combine(acc, handler.childCodec.decode(el.jsonObject))
             }
-            val parentsStr = (variables["_ls_parents"] as? JsonPrimitive)?.content
+            val parentsStr = (variables["loadshiftParents"] as? JsonPrimitive)?.content
             val parentStack = if (handler.parentCodecs.isNotEmpty() && parentsStr != null) {
                 val arr = Json.parseToJsonElement(parentsStr).jsonArray
                 val parentItems = handler.parentCodecs.mapIndexedNotNull { i, pc ->
