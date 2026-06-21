@@ -96,14 +96,13 @@ class Camunda8E2eTest {
 
     @Test
     fun fullLoopThroughRealEngine() = runBlocking {
-        val base = Camunda8Engine.base
-        if (base == null) {
-            println("SKIP Camunda8E2eTest: Docker not available and LOADSHIFT_C8_BASE not set")
-            return@runBlocking
+        val base = requireNotNull(Camunda8Engine.base) {
+            "Camunda8E2eTest requires Docker or LOADSHIFT_C8_BASE"
         }
         purgeActiveInstances(base)
 
         val seen = Collections.synchronizedList(mutableListOf<String>())
+        val totals = Collections.synchronizedList(mutableListOf<String>())
         val key = "e2e8x${System.currentTimeMillis()}"
         val wf = workflow<EUser>(key) {
             input(listOf(EUser("a"), EUser("b")))
@@ -116,6 +115,8 @@ class Camunda8E2eTest {
                         seen += "second:${child.label}"
                     }
                 }
+            }.reduce(0, combine = { acc, c -> acc + c.label.length }) { u, total ->
+                totals += "${u.id}:$total"
             }
         }
 
@@ -124,11 +125,12 @@ class Camunda8E2eTest {
         val result = withTimeout(180_000) { handle.await() }
 
         assertEquals(0, result.failed)
-        assertEquals(8, result.done)
+        assertEquals(10, result.done)
         assertEquals(
             setOf("first:a-1:ok:a", "second:a-2", "first:b-1:ok:b", "second:b-2"),
             seen.toSet(),
         )
+        assertEquals(setOf("a:6", "b:6"), totals.toSet())
 
         val snap = backend.control.runs().single()
         assertEquals(RunState.Completed, snap.state)

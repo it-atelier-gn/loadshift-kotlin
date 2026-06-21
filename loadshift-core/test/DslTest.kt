@@ -64,4 +64,18 @@ class DslTest {
         val fanOut = seq.steps[4] as FanOut<Item, *>
         assertTrue("g" in fanOut.body.tasks.keys)
     }
+
+    @Test
+    fun fanOutReduceBuildsFanInStepWithSeparateChildLevel() {
+        val wf = workflow<Item>("fan-in") {
+            input(Item(1))
+            fanOut(expand = { listOf(Child(2), Child(3)) }) {
+                task("h") { }
+            }.reduce(0, combine = { acc, c -> acc + c.v }) { item, total -> item.n = total }
+        }
+        val seq = wf.root.step as Sequence<Item>
+        val fanIn = assertIs<FanIn<Item, *, *>>(seq.steps[0])
+        assertTrue("h" in fanIn.body.tasks.keys)
+        assertTrue("h" !in wf.root.tasks.keys)
+    }
 }

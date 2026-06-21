@@ -32,6 +32,18 @@ class FanOut<W : WorkItem, C : WorkItem>(
     val body: SubFlow<C>,
 ) : Step<W>
 
+class FanIn<W : WorkItem, C : WorkItem, A>(
+    val id: String,
+    val childKey: String,
+    val expand: suspend (W) -> Flow<C>,
+    val childCodec: WorkItemCodec<C>,
+    val concurrency: Int?,
+    val body: SubFlow<C>,
+    val initial: A,
+    val combine: (A, C) -> A,
+    val onComplete: suspend (W, A) -> Unit,
+) : Step<W>
+
 class SubFlow<W : WorkItem>(
     val key: String,
     val step: Step<W>,

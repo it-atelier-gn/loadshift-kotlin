@@ -67,13 +67,17 @@ open class FlowSpec<W : WorkItem> internal constructor(
         steps += Parallel(ps.branchSteps.toList())
     }
 
+    internal fun replaceStep(index: Int, step: Step<W>) {
+        steps[index] = step
+    }
+
     @PublishedApi
     internal fun <C : WorkItem> fanOutInternal(
         childCodec: WorkItemCodec<C>,
         expand: suspend (W) -> Flow<C>,
         concurrency: Int?,
         buildSpec: (WorkItemCodec<C>, String, IdGen) -> FlowSpec<C>,
-    ) {
+    ): Fan<W, C> {
         val id = idgen.next("f")
         val childKey = "${baseKey}_$id"
         val childSpec = buildSpec(childCodec, childKey, IdGen())
@@ -84,7 +88,9 @@ open class FlowSpec<W : WorkItem> internal constructor(
             childSpec.tasks.toMap(),
             childSpec.decisions.toMap(),
         )
+        val index = steps.size
         steps += FanOut(id, childKey, expand, childCodec, concurrency, sub)
+        return Fan(this, index, id, childKey, expand, childCodec, concurrency, sub)
     }
 
     internal fun setElse(
@@ -192,6 +198,30 @@ inline fun <W : WorkItem, Ctx, reified C : WorkItem, NewCtx> FanFlowSpec<W, Ctx>
         @Suppress("UNCHECKED_CAST")
         context(ancestorStack()[d] as W, parentProvider(d + 1))
     }.apply(body)
+}
+
+class Fan<W : WorkItem, C : WorkItem> internal constructor(
+    private val owner: FlowSpec<W>,
+    private val index: Int,
+    private val id: String,
+    private val childKey: String,
+    private val expand: suspend (W) -> Flow<C>,
+    private val childCodec: WorkItemCodec<C>,
+    private val concurrency: Int?,
+    private val body: SubFlow<C>,
+) {
+    fun join() {}
+
+    fun <A> reduce(initial: A, combine: (A, C) -> A, onComplete: suspend (W, A) -> Unit) {
+        owner.replaceStep(
+            index,
+            FanIn(id, childKey, expand, childCodec, concurrency, body, initial, combine, onComplete),
+        )
+    }
+
+    fun collect(onComplete: suspend (W, List<C>) -> Unit) {
+        reduce(emptyList(), { acc, c -> acc + c }, onComplete)
+    }
 }
 
 class ElseHandle<W : WorkItem> internal constructor(
