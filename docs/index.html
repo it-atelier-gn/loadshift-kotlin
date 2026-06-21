@@ -240,7 +240,7 @@ parallel {
 
 <section id="fan-out" class="block">
   <h2><span class="num">04</span>Fan-out</h2>
-  <p>The core move: expand one parent item into many children and process them with
+  <p>Expand one parent item into many children and process them with
   bounded concurrency. The child block is a full workflow scope: tasks, branching,
   even nested fan-out. On Camunda each fan-out level becomes its own process,
   invoked as a call activity.</p>
@@ -274,7 +274,9 @@ parallel {
   </div>
   <p><code>context()</code> resolves against the level it is called in and exposes the nearest parent.
   To reach further up, a nested <code>fanOut</code> receives the enclosing <code>context</code> value as a
-  second argument, so you fold the chain into your own value as you descend.</p>
+  second argument, so you fold the chain into your own value as you descend. Use the built-in
+  <code>Parent(item, parent)</code> carrier to keep both levels without declaring a type, or compose
+  your own.</p>
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>CumulativeContext.kt</span><button class="copy" type="button">COPY</button></div>
 <pre><code class="lang-kotlin">fanOut(
@@ -283,10 +285,10 @@ parallel {
 ) {
     fanOut(
         expand = { order -&gt; order.lines },
-        context = { order, customer -&gt; OrderCtx(customer, order) },
+        context = { order, customer -&gt; Parent(order, customer) },
     ) {
         task("ship") { line -&gt;
-            val (customer, order) = context()
+            val (order, customer) = context()
             ship(line, order, customer)
         }
     }

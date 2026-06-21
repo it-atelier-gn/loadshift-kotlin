@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import loadshift.core.ErrorPolicy
 import loadshift.core.LogEntry
 import loadshift.core.LogSink
+import loadshift.core.Parent
 import loadshift.core.RetryPolicy
 import loadshift.core.RunConfig
 import loadshift.core.Start
@@ -352,5 +353,26 @@ class LocalBackendTest {
         }
         LocalBackend().run(wf).await()
         assertEquals(listOf("root-l1-l2-l3:root>root-l1>root-l1-l2"), seen.toList())
+    }
+
+    @Test
+    fun cumulativeContextWithParentCarrier() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("parent-carrier") {
+            input(listOf(Cust("root", 1)))
+            fanOut(expand = { c -> listOf(Kid("${c.id}-child")) }, context = { it }) {
+                fanOut(
+                    expand = { k -> listOf(Cust("${k.label}-grandchild", 99)) },
+                    context = { kid, cust -> Parent(kid, cust) },
+                ) {
+                    task("read") { child ->
+                        val (kid, cust) = context()
+                        seen += "${child.id}:${kid.label}:${cust.id}"
+                    }
+                }
+            }
+        }
+        LocalBackend().run(wf).await()
+        assertEquals(listOf("root-child-grandchild:root-child:root"), seen.toList())
     }
 }
