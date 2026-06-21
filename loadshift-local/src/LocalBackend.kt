@@ -32,6 +32,7 @@ import loadshift.core.FanIn
 import loadshift.core.Wait
 import loadshift.core.Timeout
 import loadshift.core.AwaitMessage
+import kotlin.coroutines.CoroutineContext
 import loadshift.core.ControllableBackend
 import loadshift.core.Loop
 import loadshift.core.Parallel
@@ -94,6 +95,11 @@ private class RateLimiter(rate: Rate) {
 private sealed class UnitSignal(val topic: String, val reason: String) : Exception()
 private class DeadLetterSignal(topic: String, reason: String) : UnitSignal(topic, reason)
 private class SkipSignal(topic: String) : UnitSignal(topic, "skipped")
+
+private class CompensationStack(val actions: MutableList<suspend () -> Unit>) : CoroutineContext.Element {
+    companion object Key : CoroutineContext.Key<CompensationStack>
+    override val key get() = Key
+}
 
 private class LocalRun<W : WorkItem>(
     private val workflow: Workflow<W>,
@@ -227,16 +233,22 @@ private class LocalRun<W : WorkItem>(
 
     private suspend fun runTopItem(item: W) {
         val ctx = ExecutionContext(runId, workflow.name, config.logSink, itemKey = item.key)
-        withContext(ctx) {
+        val comps = mutableListOf<suspend () -> Unit>()
+        withContext(ctx + CompensationStack(comps)) {
             try {
                 interpret(workflow.root.step, item)
                 done.incrementAndGet()
             } catch (e: DeadLetterSignal) {
+                runCompensations(comps)
                 deadLetters += DeadLetter(item.key, e.topic, e.reason)
             } catch (e: SkipSignal) {
                 skipped.incrementAndGet()
             }
         }
+    }
+
+    private suspend fun runCompensations(comps: List<suspend () -> Unit>) {
+        for (compensate in comps.asReversed()) runCatching { compensate() }
     }
 
     private suspend fun currentExecutionContext(): ExecutionContext =
@@ -251,6 +263,9 @@ private class LocalRun<W : WorkItem>(
                 val e = step as Execute<WorkItem>
                 withContext(currentExecutionContext().withTopic(e.task.topic)) {
                     runTask(e.task, e.options, item)
+                }
+                e.compensation?.let { comp ->
+                    currentCoroutineContext()[CompensationStack.Key]?.actions?.add { comp(item) }
                 }
             }
 
@@ -352,12 +367,16 @@ private class LocalRun<W : WorkItem>(
     }
 
     private suspend fun runChild(step: Step<*>, child: WorkItem) {
-        try {
-            interpret(step, child)
-        } catch (e: DeadLetterSignal) {
-            deadLetters += DeadLetter(child.key, e.topic, e.reason)
-        } catch (e: SkipSignal) {
-            skipped.incrementAndGet()
+        val comps = mutableListOf<suspend () -> Unit>()
+        withContext(currentCoroutineContext() + CompensationStack(comps)) {
+            try {
+                interpret(step, child)
+            } catch (e: DeadLetterSignal) {
+                runCompensations(comps)
+                deadLetters += DeadLetter(child.key, e.topic, e.reason)
+            } catch (e: SkipSignal) {
+                skipped.incrementAndGet()
+            }
         }
     }
 

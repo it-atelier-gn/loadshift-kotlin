@@ -31,9 +31,11 @@ open class FlowSpec<W : WorkItem> internal constructor(
         retry: RetryPolicy? = null,
         timeout: Duration? = null,
         rateLimit: Rate? = null,
-    ) {
+    ): TaskHandle<W> {
         tasks[t.topic] = t
-        steps += Execute(t, TaskOptions(retry, timeout, rateLimit))
+        val e = Execute(t, TaskOptions(retry, timeout, rateLimit))
+        steps += e
+        return TaskHandle(e)
     }
 
     fun task(
@@ -135,11 +137,17 @@ fun <W : WorkItem> FlowSpec<W>.task(
     timeout: Duration? = null,
     rateLimit: Rate? = null,
     body: suspend (W) -> Unit,
-) {
+): TaskHandle<W> {
     val t = object : Task<W>(topic) {
         override suspend fun execute(item: W) = body(item)
     }
-    task(t, retry, timeout, rateLimit)
+    return task(t, retry, timeout, rateLimit)
+}
+
+class TaskHandle<W : WorkItem> internal constructor(private val step: Execute<W>) {
+    infix fun compensate(block: suspend (W) -> Unit) {
+        step.compensation = block
+    }
 }
 
 inline fun <W : WorkItem, reified C : WorkItem> FlowSpec<W>.fanOut(
