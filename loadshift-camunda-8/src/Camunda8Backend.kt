@@ -32,6 +32,7 @@ import loadshift.core.ExecutionContext
 import loadshift.core.FanOut
 import loadshift.core.FanIn
 import loadshift.core.Wait
+import loadshift.core.Timeout
 import loadshift.core.ControllableBackend
 import loadshift.core.Loop
 import loadshift.core.Parallel
@@ -173,6 +174,7 @@ private fun collectFromStep(
             populateLevel(fanIn.body, childParentCodecs, registry)
         }
         is Wait -> {}
+        is Timeout -> collectFromStep(step.body, codec, parentCodecs, registry)
     }
 }
 

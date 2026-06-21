@@ -235,11 +235,17 @@ parallel {
 }
 
 wait(15.minutes)
-task("settle") { settle(it) }</code></pre>
+task("settle") { settle(it) }
+
+timeout(10.minutes) {
+    task("call-vendor") { callVendor(it) }
+}</code></pre>
   </div>
   <p class="note">Runaway loops are cut off by <code>RunConfig(maxLoopIterations = …)</code>
   and turned into dead letters. <code>wait</code> pauses the flow for a fixed duration —
-  a real timer catch event on Camunda, a suspending delay locally.</p>
+  a real timer catch event on Camunda, a suspending delay locally. <code>timeout</code> wraps a
+  block in an interrupting boundary timer (an embedded subprocess on Camunda); overruns become
+  dead letters.</p>
 </section>
 
 <section id="fan-out" class="block">

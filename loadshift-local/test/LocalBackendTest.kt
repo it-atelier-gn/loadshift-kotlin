@@ -27,6 +27,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 @Serializable
 private data class Cust(var id: String, var n: Int = 0) : WorkItem {
@@ -479,5 +480,34 @@ class LocalBackendTest {
         }
         LocalBackend().run(wf, RunConfig(dedupe = true)).await()
         assertEquals(listOf("a", "b"), seen.sorted())
+    }
+
+    @Test
+    fun timeoutAllowsScopeThatFinishesInTime() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("timeout-ok") {
+            input(listOf(Cust("a")))
+            timeout(2.seconds) {
+                task("quick") { seen += "quick" }
+            }
+            task("after") { seen += "after" }
+        }
+        LocalBackend().run(wf).await()
+        assertEquals(listOf("quick", "after"), seen.toList())
+    }
+
+    @Test
+    fun timeoutDeadLettersScopeThatExceedsDuration() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("timeout-exceed") {
+            input(listOf(Cust("a")))
+            timeout(50.milliseconds) {
+                wait(2.seconds)
+                task("never") { seen += "never" }
+            }
+            task("after") { seen += "after" }
+        }
+        LocalBackend().run(wf).await()
+        assertEquals(emptyList(), seen.toList())
     }
 }

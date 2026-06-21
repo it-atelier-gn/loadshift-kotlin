@@ -71,6 +71,12 @@ open class FlowSpec<W : WorkItem> internal constructor(
         steps += Wait(idgen.next("w"), duration)
     }
 
+    fun timeout(duration: Duration, build: FlowSpec<W>.() -> Unit) {
+        val bodySpec = child().apply(build)
+        absorb(bodySpec)
+        steps += Timeout(idgen.next("to"), duration, bodySpec.toStep())
+    }
+
     internal fun replaceStep(index: Int, step: Step<W>) {
         steps[index] = step
     }
