@@ -107,7 +107,8 @@ class Camunda7E2eTest {
         val result = withTimeout(180_000) {
             val done = async { handle.await() }
             while (done.isActive) {
-                handle.broadcast("proceed")
+                handle.send("proceed", "a")
+                handle.send("proceed", "b")
                 delay(500)
             }
             done.await()
