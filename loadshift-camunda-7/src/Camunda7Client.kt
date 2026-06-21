@@ -110,5 +110,14 @@ class Camunda7Client(
         return response.body<CountDto>().count
     }
 
+    suspend fun correlateMessage(request: MessageRequest) {
+        runCatching {
+            http.post("$base/message") {
+                contentType(ContentType.Application.Json)
+                setBody(request)
+            }
+        }
+    }
+
     fun close() = http.close()
 }

@@ -10,6 +10,13 @@ data class CreateInstanceRequest(
 )
 
 @Serializable
+data class PublishMessageRequest(
+    val name: String,
+    val correlationKey: String,
+    val timeToLive: Long = 10000,
+)
+
+@Serializable
 data class ActivateJobsRequest(
     val type: String,
     val worker: String,
