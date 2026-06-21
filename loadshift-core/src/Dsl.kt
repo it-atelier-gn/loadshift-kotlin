@@ -67,6 +67,10 @@ open class FlowSpec<W : WorkItem> internal constructor(
         steps += Parallel(ps.branchSteps.toList())
     }
 
+    fun wait(duration: Duration) {
+        steps += Wait(idgen.next("w"), duration)
+    }
+
     internal fun replaceStep(index: Int, step: Step<W>) {
         steps[index] = step
     }

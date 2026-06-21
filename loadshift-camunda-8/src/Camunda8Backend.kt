@@ -31,6 +31,7 @@ import loadshift.core.Execute
 import loadshift.core.ExecutionContext
 import loadshift.core.FanOut
 import loadshift.core.FanIn
+import loadshift.core.Wait
 import loadshift.core.ControllableBackend
 import loadshift.core.Loop
 import loadshift.core.Parallel
@@ -171,6 +172,7 @@ private fun collectFromStep(
             val childParentCodecs = listOf(codec) + parentCodecs
             populateLevel(fanIn.body, childParentCodecs, registry)
         }
+        is Wait -> {}
     }
 }
 

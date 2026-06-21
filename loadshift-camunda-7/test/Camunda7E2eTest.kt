@@ -12,6 +12,7 @@ import loadshift.core.RunState
 import loadshift.core.WorkItem
 import loadshift.core.fanOut
 import loadshift.core.task
+import kotlin.time.Duration.Companion.seconds
 import loadshift.core.workflow
 import org.testcontainers.DockerClientFactory
 import org.testcontainers.containers.GenericContainer
@@ -82,6 +83,7 @@ class Camunda7E2eTest {
         val wf = workflow<EUser>(key) {
             input(listOf(EUser("a"), EUser("b")))
             task("stamp") { it.note = "ok:${it.id}" }
+            wait(1.seconds)
             fanOut(expand = { u -> listOf(EContact("${u.id}-1"), EContact("${u.id}-2")) }, context = { it }) {
                 task("process") { child ->
                     if (child.label.endsWith("1")) {

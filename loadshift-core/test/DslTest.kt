@@ -1,6 +1,7 @@
 package loadshift.core
 
 import kotlinx.serialization.Serializable
+import kotlin.time.Duration.Companion.minutes
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -77,5 +78,16 @@ class DslTest {
         val fanIn = assertIs<FanIn<Item, *, *>>(seq.steps[0])
         assertTrue("h" in fanIn.body.tasks.keys)
         assertTrue("h" !in wf.root.tasks.keys)
+    }
+
+    @Test
+    fun waitBuildsWaitStepWithDuration() {
+        val wf = workflow<Item>("waiter") {
+            input(Item(1))
+            wait(5.minutes)
+        }
+        val seq = wf.root.step as Sequence<Item>
+        val w = assertIs<Wait<Item>>(seq.steps[0])
+        assertEquals(5.minutes, w.duration)
     }
 }
