@@ -52,6 +52,7 @@ data class RunConfig(
     val lockDuration: Duration = 5.minutes,
     val maxLoopIterations: Int = 10_000,
     val logSink: LogSink = NoopLogSink,
+    val tracer: Tracer = NoopTracer,
 )
 
 data class Progress(

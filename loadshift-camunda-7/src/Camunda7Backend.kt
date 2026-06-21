@@ -411,7 +411,9 @@ internal class Camunda7Run(
             } else null
             val execCtx = ExecutionContext(runId, workflow.name, config.logSink, itemKey = item.key, topic = topic)
             withContext(if (parentStack != null) execCtx + parentStack else execCtx) {
-                handler.task.execute(item)
+                config.tracer.span("task $topic", mapOf("item" to (item.key ?: ""))) {
+                    handler.task.execute(item)
+                }
             }
             return CamundaVariables.toCamunda(handler.codec.encode(item))
         }

@@ -266,8 +266,10 @@ private class LocalRun<W : WorkItem>(
 
             is Execute<*> -> {
                 val e = step as Execute<WorkItem>
-                withContext(currentExecutionContext().withTopic(e.task.topic)) {
-                    runTask(e.task, e.options, item)
+                config.tracer.span("task ${e.task.topic}", mapOf("item" to (item.key ?: ""))) {
+                    withContext(currentExecutionContext().withTopic(e.task.topic)) {
+                        runTask(e.task, e.options, item)
+                    }
                 }
                 e.compensation?.let { comp ->
                     currentCoroutineContext()[CompensationStack.Key]?.actions?.add { comp(item) }
