@@ -4,6 +4,7 @@ modules:
   - ./loadshift-core
   - ./loadshift-demo
   - ./loadshift-local
+  - ./loadshift-otel
   - ./loadshift-sqlite
   - ./loadshift-web
   - ./scripts/engine

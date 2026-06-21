@@ -1,0 +1,23 @@
+product: jvm/lib
+
+settings:
+  publishing:
+    enabled: true
+    group: io.github.it-atelier-gn
+    version: 0.5.0
+
+repositories:
+  - id: mavenLocal
+    url: mavenLocal
+    resolve: false
+    publish: true
+
+dependencies:
+  - ../loadshift-core
+  - $libs.kotlinx.coroutines.core
+  - io.opentelemetry:opentelemetry-api:1.43.0
+
+test-dependencies:
+  - $libs.kotlinx.coroutines.test
+  - io.opentelemetry:opentelemetry-sdk:1.43.0
+  - io.opentelemetry:opentelemetry-sdk-testing:1.43.0

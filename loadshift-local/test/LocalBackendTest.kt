@@ -13,6 +13,7 @@ import loadshift.core.Parent
 import loadshift.core.RetryPolicy
 import loadshift.core.RunConfig
 import loadshift.core.Start
+import loadshift.core.Tracer
 import loadshift.core.WorkItem
 import loadshift.core.log
 import loadshift.core.Page
@@ -586,5 +587,23 @@ class LocalBackendTest {
         }
         LocalBackend().run(second, RunConfig(checkpoints = store)).await()
         assertEquals(listOf("b"), processed.toList())
+    }
+
+    @Test
+    fun tracerReceivesSpanPerTask() = runTest {
+        val spans = Collections.synchronizedList(mutableListOf<String>())
+        val tracer = object : Tracer {
+            override suspend fun <T> span(name: String, attributes: Map<String, String>, body: suspend () -> T): T {
+                spans += name
+                return body()
+            }
+        }
+        val wf = workflow<Cust>("traced") {
+            input(listOf(Cust("a")))
+            task("one") { }
+            task("two") { }
+        }
+        LocalBackend().run(wf, RunConfig(tracer = tracer)).await()
+        assertEquals(listOf("task one", "task two"), spans.toList())
     }
 }
