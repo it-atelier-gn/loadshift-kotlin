@@ -5,7 +5,7 @@
 [![Kotlin Toolchain](https://img.shields.io/badge/build-kotlin--toolchain-blue)](https://github.com/JetBrains/kotlin-toolchain)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A Kotlin DSL for durable execution.
+A Kotlin DSL for durable execution with Camunda.
 
 Full examples and reference: **[it-atelier-gn.github.io/loadshift-kotlin](https://it-atelier-gn.github.io/loadshift-kotlin/)**
 
