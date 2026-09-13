@@ -70,6 +70,7 @@ data class RunConfig(
     val dedupe: Boolean = false,
     val checkpoints: CheckpointStore? = null,
     val resume: Boolean = true,
+    val deadLetters: DeadLetterStore? = null,
     val lockDuration: Duration = 5.minutes,
     val maxLoopIterations: Int = 10_000,
     val logSink: LogSink = NoopLogSink,
