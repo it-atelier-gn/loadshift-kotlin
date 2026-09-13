@@ -25,7 +25,12 @@ import loadshift.core.Conditional
 import loadshift.core.ControllableBackend
 import loadshift.core.CronSchedule
 import loadshift.core.DeadLetter
+import loadshift.core.DeadLetterRecord
 import loadshift.core.EngineNames
+import loadshift.core.WorkItemCodec
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import loadshift.core.ErrorPolicy
 import loadshift.core.Execute
 import loadshift.core.ExecutionContext
@@ -91,7 +96,34 @@ private fun Throwable.unwrapRunFailure(): Throwable {
     return error
 }
 
-private class Compensation(val topic: String, val key: String?, val action: suspend () -> Unit)
+private class Compensation(val topic: String, val item: WorkItem, val action: suspend () -> Unit)
+
+private class Level(
+    val levelKey: String,
+    val itemVariable: String?,
+    val codec: WorkItemCodec<WorkItem>,
+    val parents: List<Pair<WorkItem, WorkItemCodec<WorkItem>>>,
+) : CoroutineContext.Element {
+    companion object Key : CoroutineContext.Key<Level>
+    override val key get() = Key
+
+    fun snapshot(item: WorkItem): JsonObject {
+        val extras = buildMap {
+            put(EngineNames.ITEM_KEY, JsonPrimitive(item.key.orEmpty()))
+            if (parents.isNotEmpty()) {
+                val lineage = JsonArray(parents.map { (parent, parentCodec) -> parentCodec.encode(parent) })
+                put(EngineNames.PARENTS, JsonPrimitive(lineage.toString()))
+            }
+        }
+        return JsonObject(codec.encode(item) + extras)
+    }
+
+    fun childOf(item: WorkItem, body: SubFlow<*>, fanId: String): Level {
+        @Suppress("UNCHECKED_CAST")
+        val childCodec = body.codec as WorkItemCodec<WorkItem>
+        return Level(body.key, EngineNames.item(fanId), childCodec, listOf(item to codec) + parents)
+    }
+}
 
 private class CompensationStack(val actions: MutableList<Compensation>) : CoroutineContext.Element {
     companion object Key : CoroutineContext.Key<CompensationStack>
@@ -251,13 +283,16 @@ private class LocalRun<W : WorkItem>(
     private suspend fun runTopItem(item: W) {
         val ctx = ExecutionContext(runId, workflow.name, config.logSink, itemKey = item.key)
         val comps = Collections.synchronizedList(mutableListOf<Compensation>())
-        withContext(ctx + CompensationStack(comps)) {
+        @Suppress("UNCHECKED_CAST")
+        val level = config.deadLetters?.let { Level(workflow.root.key, null, workflow.root.codec as WorkItemCodec<WorkItem>, emptyList()) }
+        val context = ctx + CompensationStack(comps)
+        withContext(if (level == null) context else context + level) {
             try {
                 interpret(workflow.root.step, item)
                 done.incrementAndGet()
                 item.key?.let { config.checkpoints?.markComplete(workflow.key, it) }
             } catch (e: DeadLetterSignal) {
-                deadLetters += DeadLetter(item.key, e.topic, e.reason)
+                recordDeadLetter(item, DeadLetter(item.key, e.topic, e.reason))
                 runCompensations(comps)
             } catch (e: SkipSignal) {
                 skipped.incrementAndGet()
@@ -271,7 +306,7 @@ private class LocalRun<W : WorkItem>(
             try {
                 interpret(step, child)
             } catch (e: DeadLetterSignal) {
-                deadLetters += DeadLetter(child.key, e.topic, e.reason)
+                recordDeadLetter(child, DeadLetter(child.key, e.topic, e.reason))
                 runCompensations(comps)
             } catch (e: SkipSignal) {
                 skipped.incrementAndGet()
@@ -286,9 +321,27 @@ private class LocalRun<W : WorkItem>(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                deadLetters += DeadLetter(compensation.key, EngineNames.compensate(compensation.topic), e.message ?: e.toString())
+                val letter = DeadLetter(compensation.item.key, EngineNames.compensate(compensation.topic), e.message ?: e.toString())
+                recordDeadLetter(compensation.item, letter)
             }
         }
+    }
+
+    private suspend fun recordDeadLetter(item: WorkItem, letter: DeadLetter) {
+        deadLetters += letter
+        val store = config.deadLetters ?: return
+        val level = currentCoroutineContext()[Level.Key] ?: return
+        store.record(
+            DeadLetterRecord(
+                id = UUID.randomUUID().toString(),
+                workflowKey = workflow.key,
+                level = level.levelKey,
+                itemVariable = level.itemVariable,
+                deadLetter = letter,
+                item = level.snapshot(item),
+                recordedAt = Clock.System.now(),
+            ),
+        )
     }
 
     private suspend fun currentExecutionContext(): ExecutionContext =
@@ -307,7 +360,7 @@ private class LocalRun<W : WorkItem>(
                     }
                 }
                 e.compensation?.let { comp ->
-                    currentCoroutineContext()[CompensationStack.Key]?.actions?.add(Compensation(e.task.topic, item.key) { comp(item) })
+                    currentCoroutineContext()[CompensationStack.Key]?.actions?.add(Compensation(e.task.topic, item) { comp(item) })
                 }
             }
 
@@ -383,6 +436,7 @@ private class LocalRun<W : WorkItem>(
         val semaphore = Semaphore(concurrency ?: config.maxConcurrency)
         val ctx = currentExecutionContext()
         val parentStack = (currentCoroutineContext()[ParentItemStack.Key] ?: ParentItemStack(emptyList())).push(item)
+        val childLevel = currentCoroutineContext()[Level.Key]?.childOf(item, body, id)
         guarded(EngineNames.expand(id)) {
             coroutineScope {
                 expand(item).collect { child ->
@@ -391,7 +445,8 @@ private class LocalRun<W : WorkItem>(
                     semaphore.acquire()
                     launch {
                         try {
-                            withContext(ctx.child(child.key ?: "?") + parentStack) {
+                            val childContext = ctx.child(child.key ?: "?") + parentStack
+                            withContext(if (childLevel == null) childContext else childContext + childLevel) {
                                 runChild(body.step, child)
                             }
                         } finally {

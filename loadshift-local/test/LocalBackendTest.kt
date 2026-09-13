@@ -5,9 +5,15 @@ import kotlinx.coroutines.test.runTest
 import kotlin.time.Clock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import loadshift.core.DeadLetter
+import loadshift.core.EngineNames
 import loadshift.core.ErrorPolicy
 import loadshift.core.InMemoryCheckpointStore
+import loadshift.core.InMemoryDeadLetterStore
 import loadshift.core.RunInspector
 import loadshift.core.RunResult
 import loadshift.core.RunState
@@ -730,6 +736,53 @@ class LocalBackendTest {
             listOf(DeadLetter("x", "ship", "no carrier"), DeadLetter("x", "compensate_charge", "refund unavailable")),
             result.deadLetters,
         )
+    }
+
+    @Test
+    fun deadLettersAreRecordedWithPayloadLevelAndLineage() = runTest {
+        val store = InMemoryDeadLetterStore()
+        val wf = workflow<Cust>("recorded") {
+            input(listOf(Cust("root-bad", 1), Cust("parent", 2)))
+            task("check", retry = RetryPolicy.None) { if (it.id == "root-bad") error("root failure") }
+            fanOut(expand = { c -> listOf(Kid("${c.id}-kid")) }) {
+                task("child-check", retry = RetryPolicy.None) { error("child failure") }
+            }
+        }
+
+        LocalBackend().run(wf, RunConfig(deadLetters = store)).await()
+
+        val records = store.list(wf.key).records.associateBy { it.deadLetter.key }
+        val root = records.getValue("root-bad")
+        assertEquals(wf.key, root.level)
+        assertEquals(null, root.itemVariable)
+        assertEquals(DeadLetter("root-bad", "check", "root failure"), root.deadLetter)
+        assertEquals(JsonPrimitive("root-bad"), root.item["id"])
+        assertEquals(JsonPrimitive(1), root.item["n"])
+        assertEquals(JsonPrimitive("root-bad"), root.item[EngineNames.ITEM_KEY])
+        assertFalse(EngineNames.PARENTS in root.item)
+
+        val child = records.getValue("parent-kid")
+        assertTrue(child.level.startsWith("${wf.key}_f"), child.level)
+        assertTrue(child.itemVariable!!.endsWith("_item"), child.itemVariable)
+        assertEquals(JsonPrimitive("parent-kid"), child.item["label"])
+        val lineage = Json.parseToJsonElement(child.item.getValue(EngineNames.PARENTS).jsonPrimitive.content).jsonArray
+        assertEquals(JsonPrimitive("parent"), lineage.single().jsonObject["id"])
+        assertEquals(2, records.size)
+    }
+
+    @Test
+    fun failedCompensationsAreRecordedWithTheCompensatedItem() = runTest {
+        val store = InMemoryDeadLetterStore()
+        val wf = workflow<Cust>("recorded-compensation") {
+            input(listOf(Cust("x", 7)))
+            task("charge") { } compensate { error("refund unavailable") }
+            task("ship", retry = RetryPolicy.None) { error("no carrier") }
+        }
+
+        LocalBackend().run(wf, RunConfig(deadLetters = store)).await()
+
+        val topics = store.list(wf.key).records.map { it.deadLetter.topic to it.item["n"] }
+        assertEquals(setOf("ship" to JsonPrimitive(7), "compensate_charge" to JsonPrimitive(7)), topics.toSet())
     }
 
     @Test
