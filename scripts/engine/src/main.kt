@@ -58,7 +58,7 @@ fun main(args: Array<String>) {
     val (runCode, runOutput) = if (engine == "c7") {
         container("run", "-d", "--name", name, "-p", "$port:8080", "camunda/camunda-bpm-platform:run-7.24.0")
     } else if (engine == "cib7") {
-        container("run", "-d", "--name", name, "-p", "$port:8080", "cibseven/cibseven:run-latest")
+        container("run", "-d", "--name", name, "-p", "$port:8080", "cibseven/cibseven:run-2.2.0")
     } else {
         val config = Paths.get("scripts/engine/c8-application.yaml").toAbsolutePath()
         if (!Files.exists(config)) {
@@ -69,7 +69,7 @@ fun main(args: Array<String>) {
             "run", "-d", "--name", name,
             "-p", "$port:8080", "-p", "26500:26500",
             "-v", "$config:/usr/local/camunda/config/application.yaml:ro",
-            "camunda/camunda:8.9.8",
+            "camunda/camunda:8.9.19",
         )
     }
 
