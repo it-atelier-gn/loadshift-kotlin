@@ -1,43 +1,41 @@
 package loadshift.local
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
-import kotlin.time.Clock
+import kotlinx.coroutines.withTimeoutOrNull
+import loadshift.core.AwaitMessage
 import loadshift.core.Conditional
+import loadshift.core.ControllableBackend
 import loadshift.core.CronSchedule
-import loadshift.core.awaitNext
 import loadshift.core.DeadLetter
+import loadshift.core.EngineNames
 import loadshift.core.ErrorPolicy
 import loadshift.core.Execute
 import loadshift.core.ExecutionContext
-import loadshift.core.FanOut
 import loadshift.core.FanIn
-import loadshift.core.Wait
-import loadshift.core.Timeout
-import loadshift.core.AwaitMessage
-import kotlin.coroutines.CoroutineContext
-import loadshift.core.ControllableBackend
+import loadshift.core.FanOut
 import loadshift.core.Loop
 import loadshift.core.Parallel
+import loadshift.core.ParentItemStack
 import loadshift.core.Progress
-import loadshift.core.Rate
+import loadshift.core.RateLimiter
 import loadshift.core.RetryPolicy
 import loadshift.core.RunConfig
 import loadshift.core.RunHandle
@@ -48,16 +46,22 @@ import loadshift.core.RunTracker
 import loadshift.core.Sequence
 import loadshift.core.Start
 import loadshift.core.Step
-import loadshift.core.ParentItemStack
+import loadshift.core.SubFlow
 import loadshift.core.Task
 import loadshift.core.TaskOptions
+import loadshift.core.Timeout
+import loadshift.core.Wait
 import loadshift.core.WorkItem
 import loadshift.core.Workflow
+import loadshift.core.awaitNext
+import loadshift.core.backoff
+import loadshift.core.withTaskTimeout
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
-import kotlin.random.Random
+import kotlin.coroutines.CoroutineContext
+import kotlin.time.Clock
 import kotlin.time.Duration
 
 class LocalBackend : ControllableBackend {
@@ -76,27 +80,20 @@ class LocalBackend : ControllableBackend {
     }
 }
 
-private class RateLimiter(rate: Rate) {
-    private val intervalNanos = rate.per.inWholeNanoseconds / rate.permits
-    private val lock = Any()
-    private var next = 0L
-
-    suspend fun acquire() {
-        val waitNanos = synchronized(lock) {
-            val now = System.nanoTime()
-            val at = maxOf(now, next)
-            next = at + intervalNanos
-            at - now
-        }
-        if (waitNanos > 0) delay(waitNanos / 1_000_000)
-    }
-}
-
-private sealed class UnitSignal(val topic: String, val reason: String) : Exception()
+private sealed class UnitSignal(val topic: String, val reason: String) : Exception(reason)
 private class DeadLetterSignal(topic: String, reason: String) : UnitSignal(topic, reason)
 private class SkipSignal(topic: String) : UnitSignal(topic, "skipped")
+private class RunFailure(cause: Throwable) : Exception(cause)
 
-private class CompensationStack(val actions: MutableList<suspend () -> Unit>) : CoroutineContext.Element {
+private fun Throwable.unwrapRunFailure(): Throwable {
+    var error = this
+    while (error is RunFailure) error = error.cause ?: return error
+    return error
+}
+
+private class Compensation(val topic: String, val key: String?, val action: suspend () -> Unit)
+
+private class CompensationStack(val actions: MutableList<Compensation>) : CoroutineContext.Element {
     companion object Key : CoroutineContext.Key<CompensationStack>
     override val key get() = Key
 }
@@ -109,6 +106,8 @@ private class LocalRun<W : WorkItem>(
     private val runId = UUID.randomUUID().toString()
     private val startSignal = CompletableDeferred<Unit>()
     private val completion = CompletableDeferred<RunResult>()
+    private val paused = MutableStateFlow(false)
+    private val stateLock = Any()
 
     private val seeded = AtomicLong()
     private val expanded = AtomicLong()
@@ -126,39 +125,32 @@ private class LocalRun<W : WorkItem>(
     private val broadcasted = mutableSetOf<String>()
     private val waitersMutex = Mutex()
 
-    @Volatile private var paused = false
     @Volatile private var runState = if (config.start is Start.Now) RunState.Running else RunState.Scheduled
 
     init {
-        scope.launch {
-            try {
-                when (val s = config.start) {
-                    is Start.Manual -> startSignal.await()
-                    is Start.At -> {
-                        val waitMs = s.time.toEpochMilliseconds() - Clock.System.now().toEpochMilliseconds()
-                        if (waitMs > 0) delay(waitMs)
-                    }
-                    else -> {}
-                }
-                runState = RunState.Running
-                val cron = config.start as? Start.Cron
-                if (cron != null) {
-                    while (true) {
-                        execute()
-                        CronSchedule.awaitNext(cron.expr)
-                    }
-                } else {
-                    execute()
-                }
-                runState = RunState.Completed
-                completion.complete(snapshotResult())
-            } catch (e: CancellationException) {
-                runState = RunState.Cancelled
-                completion.complete(snapshotResult())
-            } catch (e: Throwable) {
-                runState = RunState.Failed
-                completion.completeExceptionally(e)
+        scope.launch { lifecycle() }
+    }
+
+    private suspend fun lifecycle() {
+        try {
+            when (val start = config.start) {
+                Start.Manual -> startSignal.await()
+                is Start.At -> delay(start.time - Clock.System.now())
+                else -> Unit
             }
+            synchronized(stateLock) {
+                if (runState == RunState.Scheduled) runState = if (paused.value) RunState.Paused else RunState.Running
+            }
+            val cron = config.start as? Start.Cron
+            do {
+                execute()
+                if (cron != null) CronSchedule.awaitNext(cron.expr, cron.zone)
+            } while (cron != null)
+            finish(RunState.Completed)
+        } catch (e: CancellationException) {
+            finish(RunState.Cancelled)
+        } catch (e: Throwable) {
+            finishExceptionally(e.unwrapRunFailure())
         }
     }
 
@@ -170,14 +162,18 @@ private class LocalRun<W : WorkItem>(
         Progress(seeded.get(), expanded.get(), done.get(), failed.get(), skipped.get())
 
     override suspend fun pause() {
-        paused = true
-        if (runState == RunState.Running) runState = RunState.Paused
+        paused.value = true
+        transition(RunState.Running, RunState.Paused)
+    }
+
+    override suspend fun resume() {
+        paused.value = false
+        transition(RunState.Paused, RunState.Running)
     }
 
     override suspend fun cancel() {
-        runState = RunState.Cancelled
         scope.cancel()
-        if (!completion.isCompleted) completion.complete(snapshotResult())
+        finish(RunState.Cancelled)
     }
 
     override suspend fun await(): RunResult = completion.await()
@@ -205,8 +201,23 @@ private class LocalRun<W : WorkItem>(
 
     fun trace(): List<String> = synchronized(traceTopics) { traceTopics.toList() }
 
-    private fun snapshotResult(): RunResult =
-        RunResult(done.get(), failed.get(), skipped.get(), synchronized(deadLetters) { deadLetters.toList() })
+    private fun snapshotResult(): RunResult = RunResult(done.get(), failed.get(), skipped.get(), deadLetters())
+
+    private fun transition(from: RunState, to: RunState) {
+        synchronized(stateLock) { if (runState == from) runState = to }
+    }
+
+    private fun finish(state: RunState): Boolean = synchronized(stateLock) {
+        if (completion.isCompleted) return false
+        runState = state
+        completion.complete(snapshotResult())
+    }
+
+    private fun finishExceptionally(cause: Throwable): Boolean = synchronized(stateLock) {
+        if (completion.isCompleted) return false
+        runState = RunState.Failed
+        completion.completeExceptionally(cause)
+    }
 
     private suspend fun execute() {
         val semaphore = Semaphore(config.maxConcurrency)
@@ -214,11 +225,11 @@ private class LocalRun<W : WorkItem>(
         coroutineScope {
             workflow.seed().collect { item ->
                 val key = item.key
-                if (seenKeys != null && key != null && !seenKeys.add(key)) {
+                if (key != null && seenKeys != null && !seenKeys.add(key)) {
                     skipped.incrementAndGet()
                     return@collect
                 }
-                if (key != null && config.checkpoints?.isComplete(workflow.key, key) == true) {
+                if (key != null && config.resume && config.checkpoints?.isComplete(workflow.key, key) == true) {
                     skipped.incrementAndGet()
                     return@collect
                 }
@@ -237,23 +248,45 @@ private class LocalRun<W : WorkItem>(
 
     private suspend fun runTopItem(item: W) {
         val ctx = ExecutionContext(runId, workflow.name, config.logSink, itemKey = item.key)
-        val comps = mutableListOf<suspend () -> Unit>()
+        val comps = Collections.synchronizedList(mutableListOf<Compensation>())
         withContext(ctx + CompensationStack(comps)) {
             try {
                 interpret(workflow.root.step, item)
                 done.incrementAndGet()
                 item.key?.let { config.checkpoints?.markComplete(workflow.key, it) }
             } catch (e: DeadLetterSignal) {
-                runCompensations(comps)
                 deadLetters += DeadLetter(item.key, e.topic, e.reason)
+                runCompensations(comps)
             } catch (e: SkipSignal) {
                 skipped.incrementAndGet()
             }
         }
     }
 
-    private suspend fun runCompensations(comps: List<suspend () -> Unit>) {
-        for (compensate in comps.asReversed()) runCatching { compensate() }
+    private suspend fun runChild(step: Step<*>, child: WorkItem) {
+        val comps = Collections.synchronizedList(mutableListOf<Compensation>())
+        withContext(currentCoroutineContext() + CompensationStack(comps)) {
+            try {
+                interpret(step, child)
+            } catch (e: DeadLetterSignal) {
+                deadLetters += DeadLetter(child.key, e.topic, e.reason)
+                runCompensations(comps)
+            } catch (e: SkipSignal) {
+                skipped.incrementAndGet()
+            }
+        }
+    }
+
+    private suspend fun runCompensations(comps: List<Compensation>) {
+        for (compensation in synchronized(comps) { comps.toList() }.asReversed()) {
+            try {
+                compensation.action()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                deadLetters += DeadLetter(compensation.key, EngineNames.compensate(compensation.topic), e.message ?: e.toString())
+            }
+        }
     }
 
     private suspend fun currentExecutionContext(): ExecutionContext =
@@ -266,27 +299,28 @@ private class LocalRun<W : WorkItem>(
 
             is Execute<*> -> {
                 val e = step as Execute<WorkItem>
-                config.tracer.span("task ${e.task.topic}", mapOf("item" to (item.key ?: ""))) {
+                config.tracer.span("task ${e.task.topic}", mapOf("item" to item.key.orEmpty())) {
                     withContext(currentExecutionContext().withTopic(e.task.topic)) {
                         runTask(e.task, e.options, item)
                     }
                 }
                 e.compensation?.let { comp ->
-                    currentCoroutineContext()[CompensationStack.Key]?.actions?.add { comp(item) }
+                    currentCoroutineContext()[CompensationStack.Key]?.actions?.add(Compensation(e.task.topic, item.key) { comp(item) })
                 }
             }
 
             is Conditional<*> -> {
                 val c = step as Conditional<WorkItem>
-                if (c.predicate(item)) interpret(c.onTrue, item) else c.onFalse?.let { interpret(it, item) }
+                val matched = guarded(EngineNames.decision(c.id)) { c.predicate(item) }
+                if (matched) interpret(c.onTrue, item) else c.onFalse?.let { interpret(it, item) }
             }
 
             is Loop<*> -> {
                 val l = step as Loop<WorkItem>
                 var iterations = 0
-                while (l.predicate(item)) {
+                while (guarded(EngineNames.decision(l.id)) { l.predicate(item) }) {
                     if (++iterations > config.maxLoopIterations) {
-                        throw DeadLetterSignal("loop_${l.id}", "exceeded maxLoopIterations=${config.maxLoopIterations}")
+                        throw DeadLetterSignal(EngineNames.loop(l.id), "exceeded maxLoopIterations=${config.maxLoopIterations}")
                     }
                     interpret(l.body, item)
                 }
@@ -315,80 +349,82 @@ private class LocalRun<W : WorkItem>(
 
             is Timeout<*> -> {
                 val t = step as Timeout<WorkItem>
-                try {
-                    withTimeout(t.duration) { interpret(t.body, item) }
-                } catch (e: TimeoutCancellationException) {
-                    throw DeadLetterSignal("timeout_${t.id}", "exceeded ${t.duration}")
-                }
+                withTimeoutOrNull(t.duration) { interpret(t.body, item); true }
+                    ?: throw DeadLetterSignal(EngineNames.timeout(t.id), "exceeded ${t.duration}")
             }
 
             is FanOut<*, *> -> {
                 val fanOut = step as FanOut<WorkItem, WorkItem>
-                val childFlow = fanOut.expand(item)
-                val semaphore = Semaphore(fanOut.concurrency ?: config.maxConcurrency)
-                val ctx = currentExecutionContext()
-                val parentStack = (currentCoroutineContext()[ParentItemStack.Key] ?: ParentItemStack(emptyList())).push(item)
-                coroutineScope {
-                    childFlow.collect { child ->
-                        expanded.incrementAndGet()
-                        semaphore.acquire()
-                        launch {
-                            try {
-                                withContext(ctx.child(child.key ?: "?") + parentStack) {
-                                    runChild(fanOut.body.step, child)
-                                }
-                            } finally {
-                                semaphore.release()
-                            }
-                        }
-                    }
-                }
+                fan(fanOut.id, fanOut.expand, fanOut.concurrency, fanOut.body, item) { }
             }
 
             is FanIn<*, *, *> -> {
                 val fanIn = step as FanIn<WorkItem, WorkItem, Any?>
-                val childFlow = fanIn.expand(item)
-                val semaphore = Semaphore(fanIn.concurrency ?: config.maxConcurrency)
-                val ctx = currentExecutionContext()
-                val parentStack = (currentCoroutineContext()[ParentItemStack.Key] ?: ParentItemStack(emptyList())).push(item)
+                val reduce = EngineNames.reduce(fanIn.id)
                 var acc = fanIn.initial
-                coroutineScope {
-                    childFlow.collect { child ->
-                        expanded.incrementAndGet()
-                        acc = fanIn.combine(acc, child)
-                        semaphore.acquire()
-                        launch {
-                            try {
-                                withContext(ctx.child(child.key ?: "?") + parentStack) {
-                                    runChild(fanIn.body.step, child)
-                                }
-                            } finally {
-                                semaphore.release()
+                fan(fanIn.id, fanIn.expand, fanIn.concurrency, fanIn.body, item) { child ->
+                    acc = guarded(reduce) { fanIn.combine(acc, child) }
+                }
+                guarded(reduce) { fanIn.onComplete(item, acc) }
+            }
+        }
+    }
+
+    private suspend fun fan(
+        id: String,
+        expand: suspend (WorkItem) -> Flow<WorkItem>,
+        concurrency: Int?,
+        body: SubFlow<*>,
+        item: WorkItem,
+        onChild: suspend (WorkItem) -> Unit,
+    ) {
+        val semaphore = Semaphore(concurrency ?: config.maxConcurrency)
+        val ctx = currentExecutionContext()
+        val parentStack = (currentCoroutineContext()[ParentItemStack.Key] ?: ParentItemStack(emptyList())).push(item)
+        guarded(EngineNames.expand(id)) {
+            coroutineScope {
+                expand(item).collect { child ->
+                    expanded.incrementAndGet()
+                    onChild(child)
+                    semaphore.acquire()
+                    launch {
+                        try {
+                            withContext(ctx.child(child.key ?: "?") + parentStack) {
+                                runChild(body.step, child)
                             }
+                        } finally {
+                            semaphore.release()
                         }
                     }
                 }
-                fanIn.onComplete(item, acc)
             }
         }
     }
 
-    private suspend fun runChild(step: Step<*>, child: WorkItem) {
-        val comps = mutableListOf<suspend () -> Unit>()
-        withContext(currentCoroutineContext() + CompensationStack(comps)) {
-            try {
-                interpret(step, child)
-            } catch (e: DeadLetterSignal) {
-                runCompensations(comps)
-                deadLetters += DeadLetter(child.key, e.topic, e.reason)
-            } catch (e: SkipSignal) {
-                skipped.incrementAndGet()
-            }
+    private inline fun <T> guarded(topic: String, block: () -> T): T =
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: UnitSignal) {
+            throw e
+        } catch (e: RunFailure) {
+            throw e
+        } catch (e: Throwable) {
+            throw failureSignal(topic, e)
         }
+
+    private fun failureSignal(topic: String, error: Throwable): Throwable = when (config.onError) {
+        ErrorPolicy.Fail -> {
+            failed.incrementAndGet()
+            RunFailure(error)
+        }
+        ErrorPolicy.DeadLetter -> DeadLetterSignal(topic, error.message ?: error.toString())
+        ErrorPolicy.Skip -> SkipSignal(topic)
     }
 
     private suspend fun runTask(task: Task<WorkItem>, options: TaskOptions, item: WorkItem) {
-        while (paused) delay(50)
+        paused.first { !it }
 
         if (config.dryRun) {
             traceTopics += task.topic
@@ -405,11 +441,7 @@ private class LocalRun<W : WorkItem>(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
-            when (config.onError) {
-                ErrorPolicy.Fail -> throw e
-                ErrorPolicy.DeadLetter -> throw DeadLetterSignal(task.topic, e.message ?: e.toString())
-                ErrorPolicy.Skip -> throw SkipSignal(task.topic)
-            }
+            throw failureSignal(task.topic, e)
         }
     }
 
@@ -418,24 +450,14 @@ private class LocalRun<W : WorkItem>(
         while (true) {
             attempt++
             try {
-                if (timeout != null) withTimeout(timeout) { block() } else block()
+                withTaskTimeout(timeout, block)
                 return
-            } catch (e: TimeoutCancellationException) {
-                if (attempt >= policy.maxAttempts) throw e
-                delay(backoffMillis(policy, attempt))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
                 if (attempt >= policy.maxAttempts || !policy.retryOn(e)) throw e
-                delay(backoffMillis(policy, attempt))
+                delay(policy.backoff(attempt))
             }
         }
-    }
-
-    private fun backoffMillis(policy: RetryPolicy, attempt: Int): Long {
-        val base = policy.baseDelay.inWholeMilliseconds
-        val raw = base shl (attempt - 1).coerceAtMost(20)
-        val capped = minOf(raw, policy.maxDelay.inWholeMilliseconds)
-        return if (policy.jitter) (capped * Random.nextDouble(0.5, 1.0)).toLong() else capped
     }
 }

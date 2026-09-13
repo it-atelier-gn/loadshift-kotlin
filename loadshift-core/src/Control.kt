@@ -40,6 +40,7 @@ interface Control {
     fun structure(id: String): FlowNode?
     suspend fun start(id: String): Boolean
     suspend fun pause(id: String): Boolean
+    suspend fun resume(id: String): Boolean
     suspend fun cancel(id: String): Boolean
 }
 
@@ -97,6 +98,8 @@ class RunTracker(override val backendType: String, private val maxEntries: Int =
     override suspend fun start(id: String): Boolean = withControl(id) { it.start() }
 
     override suspend fun pause(id: String): Boolean = withControl(id) { it.pause() }
+
+    override suspend fun resume(id: String): Boolean = withControl(id) { it.resume() }
 
     override suspend fun cancel(id: String): Boolean = withControl(id) { it.cancel() }
 

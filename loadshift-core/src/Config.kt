@@ -18,7 +18,12 @@ sealed interface Start {
     }
 }
 
-data class Rate(val permits: Int, val per: Duration)
+data class Rate(val permits: Int, val per: Duration) {
+    init {
+        require(permits > 0) { "permits must be positive, was $permits" }
+        require(per.isPositive()) { "per must be positive, was $per" }
+    }
+}
 
 fun perSecond(permits: Int): Rate = Rate(permits, 1.seconds)
 
@@ -30,6 +35,13 @@ data class RetryPolicy(
     val retryOn: (Throwable) -> Boolean = { true },
     val timeout: Duration? = null,
 ) {
+    init {
+        require(maxAttempts >= 1) { "maxAttempts must be at least 1, was $maxAttempts" }
+        require(!baseDelay.isNegative()) { "baseDelay must not be negative, was $baseDelay" }
+        require(maxDelay >= baseDelay) { "maxDelay ($maxDelay) must not be shorter than baseDelay ($baseDelay)" }
+        require(timeout == null || timeout.isPositive()) { "timeout must be positive, was $timeout" }
+    }
+
     companion object {
         val Default = RetryPolicy()
         val None = RetryPolicy(maxAttempts = 1)
@@ -42,7 +54,11 @@ class TaskOptions(
     val retry: RetryPolicy? = null,
     val timeout: Duration? = null,
     val rateLimit: Rate? = null,
-)
+) {
+    init {
+        require(timeout == null || timeout.isPositive()) { "timeout must be positive, was $timeout" }
+    }
+}
 
 data class RunConfig(
     val start: Start = Start.Now,
@@ -58,7 +74,13 @@ data class RunConfig(
     val maxLoopIterations: Int = 10_000,
     val logSink: LogSink = NoopLogSink,
     val tracer: Tracer = NoopTracer,
-)
+) {
+    init {
+        require(maxConcurrency >= 1) { "maxConcurrency must be at least 1, was $maxConcurrency" }
+        require(lockDuration.isPositive()) { "lockDuration must be positive, was $lockDuration" }
+        require(maxLoopIterations >= 1) { "maxLoopIterations must be at least 1, was $maxLoopIterations" }
+    }
+}
 
 data class Progress(
     val seeded: Long = 0,
@@ -81,8 +103,9 @@ interface RunHandle {
     suspend fun start()
     fun progress(): Progress
     suspend fun pause()
+    suspend fun resume()
     suspend fun cancel()
     suspend fun await(): RunResult
-    suspend fun send(message: String, key: String) {}
-    suspend fun broadcast(message: String) {}
+    suspend fun send(message: String, key: String)
+    suspend fun broadcast(message: String)
 }

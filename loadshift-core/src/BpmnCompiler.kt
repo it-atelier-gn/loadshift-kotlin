@@ -5,7 +5,7 @@ import org.camunda.bpm.model.bpmn.BpmnModelInstance
 import org.camunda.bpm.model.bpmn.builder.AbstractFlowNodeBuilder
 import org.camunda.bpm.model.bpmn.instance.Gateway
 
-class ServiceTaskRef(val id: String, val topic: String)
+class ServiceTaskRef(val id: String, val topic: String, val jobType: String)
 
 class CompiledProcess(
     val key: String,
@@ -15,11 +15,12 @@ class CompiledProcess(
 )
 
 object BpmnCompiler {
+    const val TERMINATE_SCOPE_ID = "on_terminate"
 
     fun compile(workflow: Workflow<*>): List<CompiledProcess> {
         val levels = mutableListOf<SubFlow<*>>()
         gather(workflow.root, levels)
-        return levels.map { compileLevel(it) }
+        return levels.map { LevelCompiler(workflow.key).compile(it) }
     }
 
     private fun gather(sub: SubFlow<*>, acc: MutableList<SubFlow<*>>) {
@@ -38,122 +39,71 @@ object BpmnCompiler {
             is Parallel -> step.branches.forEach { walkChildren(it, action) }
             is FanOut<*, *> -> action(step.body)
             is FanIn<*, *, *> -> action(step.body)
-            is Execute -> {}
-            is Wait -> {}
             is Timeout -> walkChildren(step.body, action)
-            is AwaitMessage -> {}
+            is Execute, is Wait, is AwaitMessage -> Unit
         }
     }
 
-    private fun compileLevel(sub: SubFlow<*>): CompiledProcess {
-        val refs = mutableListOf<ServiceTaskRef>()
-        val gateways = IdGen()
+    private class LevelCompiler(private val workflowKey: String) {
+        private val refs = mutableListOf<ServiceTaskRef>()
+        private val ids = IdGen()
 
-        val process = Bpmn.createExecutableProcess(sub.key).name(sub.key)
-        var builder: AbstractFlowNodeBuilder<*, *> = process.startEvent("start").name("Start")
+        fun compile(sub: SubFlow<*>): CompiledProcess {
+            val process = Bpmn.createExecutableProcess(sub.key).name(sub.key)
+            val exit = step(sub.step, process.startEvent("start").name("Start"))
+            exit.endEvent("end").name("End")
+            process.eventSubProcess(TERMINATE_SCOPE_ID).name("on terminate")
+                .startEvent("${TERMINATE_SCOPE_ID}_start").name("terminated").error(EngineNames.TERMINATE_ERROR)
+                .endEvent("${TERMINATE_SCOPE_ID}_end").name("End")
+            val model = process.done()
+            for (gateway in model.getModelElementsByType(Gateway::class.java)) gateway.name = null
+            BpmnLayout.apply(model, sub.key)
+            return CompiledProcess(sub.key, sub.key, model, refs.toList())
+        }
 
-        builder = compileStep(sub.step, builder, refs, gateways)
-        val model = builder.endEvent("end").name("End").done()
-        for (gateway in model.getModelElementsByType(Gateway::class.java)) gateway.name = null
-        BpmnLayout.apply(model, sub.key)
-        return CompiledProcess(sub.key, sub.key, model, refs)
-    }
+        private fun service(b: AbstractFlowNodeBuilder<*, *>, id: String, topic: String, label: String) =
+            b.serviceTask(id).name(label).also { refs += ServiceTaskRef(id, topic, EngineNames.jobType(workflowKey, topic)) }
 
-    private fun compileStep(
-        step: Step<*>,
-        b: AbstractFlowNodeBuilder<*, *>,
-        refs: MutableList<ServiceTaskRef>,
-        gw: IdGen,
-    ): AbstractFlowNodeBuilder<*, *> {
-        return when (step) {
-            is Sequence -> {
-                var cur = b
-                for (s in step.steps) cur = compileStep(s, cur, refs, gw)
-                cur
-            }
+        private fun step(step: Step<*>, b: AbstractFlowNodeBuilder<*, *>): AbstractFlowNodeBuilder<*, *> = when (step) {
+            is Sequence -> step.steps.fold(b) { current, next -> step(next, current) }
 
-            is Execute -> {
-                val id = "ext_${sanitizeId(step.task.topic)}_${gw.next("t")}"
-                refs += ServiceTaskRef(id, step.task.topic)
-                b.serviceTask(id).name(step.task.topic)
-            }
+            is Execute -> service(b, "ext_${sanitizeId(step.task.topic)}_${ids.next("t")}", step.task.topic, step.task.topic)
 
-            is FanOut<*, *> -> {
-                val expandId = "expand_${step.id}"
-                refs += ServiceTaskRef(expandId, "expand_${step.id}")
-                val collection = "${step.id}_items"
-                val element = "${step.id}_item"
-                b.serviceTask(expandId).name("expand children")
-                    .callActivity("call_${step.id}")
-                    .name("for each child")
-                    .calledElement(step.childKey)
-                    .multiInstance()
-                    .parallel()
-                    .camundaCollection("\${$collection}")
-                    .camundaElementVariable(element)
-                    .multiInstanceDone()
-            }
+            is FanOut<*, *> -> forEachChild(b, step.id, step.childKey)
 
             is FanIn<*, *, *> -> {
-                val expandId = "expand_${step.id}"
-                refs += ServiceTaskRef(expandId, "expand_${step.id}")
-                val reduceId = "reduce_${step.id}"
-                val collection = "${step.id}_items"
-                val element = "${step.id}_item"
-                val withChildren = b.serviceTask(expandId).name("expand children")
-                    .callActivity("call_${step.id}")
-                    .name("for each child")
-                    .calledElement(step.childKey)
-                    .multiInstance()
-                    .parallel()
-                    .camundaCollection("\${$collection}")
-                    .camundaElementVariable(element)
-                    .multiInstanceDone()
-                refs += ServiceTaskRef(reduceId, "reduce_${step.id}")
-                withChildren.serviceTask(reduceId).name("reduce children")
+                val joined = forEachChild(b, step.id, step.childKey)
+                service(joined, EngineNames.reduce(step.id), EngineNames.reduce(step.id), "reduce children")
             }
 
             is Conditional -> {
-                val decisionId = "decision_${step.id}"
-                refs += ServiceTaskRef(decisionId, "decision_${step.id}")
-                val split = gw.next("gw")
-                val join = gw.next("gw")
-                val resultExpr = "\${${step.id}_result}"
-
-                var trueB: AbstractFlowNodeBuilder<*, *> = b.serviceTask(decisionId).name("evaluate condition")
-                    .exclusiveGateway(split)
-                    .condition("yes", resultExpr)
-                trueB = compileStep(step.onTrue, trueB, refs, gw)
-                trueB.exclusiveGateway(join)
-
-                val falseB = b.moveToNode(split).condition("no", "\${!(${step.id}_result)}")
-                val falseExit = step.onFalse?.let { compileStep(it, falseB, refs, gw) } ?: falseB
-                falseExit.connectTo(join)
-
+                val decision = EngineNames.decision(step.id)
+                val split = ids.next("gw")
+                val join = ids.next("gw")
+                val result = EngineNames.result(step.id)
+                val yes = service(b, decision, decision, "evaluate condition").exclusiveGateway(split)
+                    .condition("yes", "\${$result}")
+                step(step.onTrue, yes).exclusiveGateway(join)
+                val no = b.moveToNode(split).condition("no", "\${!($result)}")
+                (step.onFalse?.let { step(it, no) } ?: no).connectTo(join)
                 b.moveToNode(join)
             }
 
             is Loop -> {
-                val decisionId = "decision_${step.id}"
-                refs += ServiceTaskRef(decisionId, "decision_${step.id}")
-                val split = gw.next("gw")
-                val resultExpr = "\${${step.id}_result}"
-
-                b.serviceTask(decisionId).name("loop condition").exclusiveGateway(split)
-                var bodyB = b.moveToNode(split).condition("repeat", resultExpr)
-                bodyB = compileStep(step.body, bodyB, refs, gw)
-                bodyB.connectTo(decisionId)
-
-                b.moveToNode(split).condition("done", "\${!(${step.id}_result)}")
+                val decision = EngineNames.decision(step.id)
+                val split = ids.next("gw")
+                val result = EngineNames.result(step.id)
+                service(b, decision, decision, "loop condition").exclusiveGateway(split)
+                step(step.body, b.moveToNode(split).condition("repeat", "\${$result}")).connectTo(decision)
+                b.moveToNode(split).condition("done", "\${!($result)}")
             }
 
             is Parallel -> {
-                val fork = gw.next("gw")
-                val join = gw.next("gw")
+                val fork = ids.next("gw")
+                val join = ids.next("gw")
                 b.parallelGateway(fork)
                 step.branches.forEachIndexed { index, branch ->
-                    val branchB = b.moveToNode(fork)
-                    val exit = compileStep(branch, branchB, refs, gw)
+                    val exit = step(branch, b.moveToNode(fork))
                     if (index == 0) exit.parallelGateway(join) else exit.connectTo(join)
                 }
                 b.moveToNode(join)
@@ -165,15 +115,16 @@ object BpmnCompiler {
 
             is Timeout -> {
                 val scopeId = "scope_${step.id}"
-                var inner: AbstractFlowNodeBuilder<*, *> = b.subProcess(scopeId)
-                    .name("within ${step.duration}")
-                    .embeddedSubProcess()
-                    .startEvent("${scopeId}_start")
-                inner = compileStep(step.body, inner, refs, gw)
+                val inner = step(
+                    step.body,
+                    b.subProcess(scopeId).name("within ${step.duration}").embeddedSubProcess().startEvent("${scopeId}_start"),
+                )
                 val scope = inner.endEvent("${scopeId}_end").subProcessDone()
-                scope.boundaryEvent("timeout_${step.id}")
+                val expired = scope.boundaryEvent("timeout_${step.id}")
+                    .name("after ${step.duration}")
                     .cancelActivity(true)
                     .timerWithDuration(step.duration.toIsoString())
+                service(expired, "record_${step.id}", EngineNames.timeout(step.id), "record timeout")
                     .endEvent("timeout_${step.id}_end")
                 b.moveToNode(scopeId)
             }
@@ -182,5 +133,16 @@ object BpmnCompiler {
                 .name(step.message)
                 .message(step.message)
         }
+
+        private fun forEachChild(b: AbstractFlowNodeBuilder<*, *>, stepId: String, childKey: String) =
+            service(b, EngineNames.expand(stepId), EngineNames.expand(stepId), "expand children")
+                .callActivity("call_$stepId")
+                .name("for each child")
+                .calledElement(childKey)
+                .multiInstance()
+                .parallel()
+                .camundaCollection("\${${EngineNames.items(stepId)}}")
+                .camundaElementVariable(EngineNames.item(stepId))
+                .multiInstanceDone()
     }
 }

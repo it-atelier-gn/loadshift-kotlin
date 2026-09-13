@@ -41,6 +41,12 @@ class WorkItemTest {
     }
 
     @Test
+    fun encodingIncludesDefaultValues() {
+        val encoded = workItemCodec<Job>().encode(Job("j1"))
+        assertEquals(JsonPrimitive(0), encoded["attempts"])
+    }
+
+    @Test
     fun keyOverrideReturnsCorrectValue() {
         assertEquals("j1", Job("j1").key)
     }

@@ -5,6 +5,7 @@ import loadshift.camunda7.Camunda7Dialect
 import loadshift.camunda8.Camunda8Dialect
 import loadshift.core.BpmnCompiler
 import loadshift.core.CompiledProcess
+import loadshift.core.EngineNames
 import loadshift.core.WorkItem
 import loadshift.core.Workflow
 import loadshift.core.fanOut
@@ -15,11 +16,14 @@ import org.camunda.bpm.model.bpmn.Bpmn
 import org.camunda.bpm.model.bpmn.instance.CallActivity
 import org.camunda.bpm.model.bpmn.instance.ConditionExpression
 import org.camunda.bpm.model.bpmn.instance.EndEvent
+import org.camunda.bpm.model.bpmn.instance.ErrorEventDefinition
 import org.camunda.bpm.model.bpmn.instance.FlowNode
 import org.camunda.bpm.model.bpmn.instance.MultiInstanceLoopCharacteristics
+import org.camunda.bpm.model.bpmn.instance.Process
 import org.camunda.bpm.model.bpmn.instance.SequenceFlow
 import org.camunda.bpm.model.bpmn.instance.ServiceTask
 import org.camunda.bpm.model.bpmn.instance.StartEvent
+import org.camunda.bpm.model.bpmn.instance.SubProcess
 import org.camunda.bpm.model.bpmn.instance.bpmndi.BpmnEdge
 import org.camunda.bpm.model.bpmn.instance.bpmndi.BpmnShape
 import java.io.File
@@ -252,8 +256,17 @@ fun verify(example: Example, compiled: Compiled): Pair<Int, List<Failure>> {
             .onFailure { failures += Failure(example.id, compiled.dialect, key, "model validation: ${it.message}") }
         checks++
 
-        check(key, model.getModelElementsByType(StartEvent::class.java).size == 1, "expected exactly one start event")
+        val process = model.getModelElementById<Process>(key)
+        check(key, process.getChildElementsByType(StartEvent::class.java).size == 1, "expected exactly one process start event")
         check(key, model.getModelElementsByType(EndEvent::class.java).isNotEmpty(), "expected at least one end event")
+
+        val terminate = model.getModelElementById<SubProcess>(BpmnCompiler.TERMINATE_SCOPE_ID)
+        check(key, terminate?.triggeredByEvent() == true, "missing terminate event subprocess")
+        val caught = terminate?.getChildElementsByType(StartEvent::class.java)
+            ?.flatMap { it.eventDefinitions }
+            ?.filterIsInstance<ErrorEventDefinition>()
+            ?.mapNotNull { it.error?.errorCode }
+        check(key, caught == listOf(EngineNames.TERMINATE_ERROR), "terminate event subprocess must catch '${EngineNames.TERMINATE_ERROR}'")
 
         for (ref in level.serviceTasks) {
             val task = model.getModelElementById<ServiceTask>(ref.id)
@@ -262,14 +275,14 @@ fun verify(example: Example, compiled: Compiled): Pair<Int, List<Failure>> {
             when (compiled.dialect) {
                 "camunda7" -> {
                     check(key, task.camundaType == "external", "'${ref.id}' not camunda:type=external")
-                    check(key, task.camundaTopic == ref.topic, "'${ref.id}' topic != '${ref.topic}'")
+                    check(key, task.camundaTopic == ref.jobType, "'${ref.id}' topic != '${ref.jobType}'")
                 }
                 "camunda8" -> {
                     val type = task.extensionElements
                         ?.domElement?.childElements
                         ?.firstOrNull { it.localName == "taskDefinition" }
                         ?.getAttribute("type")
-                    check(key, type == ref.topic, "'${ref.id}' zeebe taskDefinition type != '${ref.topic}'")
+                    check(key, type == ref.jobType, "'${ref.id}' zeebe taskDefinition type != '${ref.jobType}'")
                 }
             }
         }
@@ -282,14 +295,25 @@ fun verify(example: Example, compiled: Compiled): Pair<Int, List<Failure>> {
             when (compiled.dialect) {
                 "camunda7" -> {
                     check(key, mi.camundaCollection?.endsWith(".elements()}") == true, "MI collection not iterating Spin elements()")
-                    val hasIn = call.extensionElements?.domElement?.childElements?.any { it.localName == "in" } == true
-                    check(key, hasIn, "callActivity '${call.id}' missing camunda:in mapping")
+                    val targets = call.extensionElements?.domElement?.childElements
+                        ?.filter { it.localName == "in" }
+                        ?.map { it.getAttribute("target") }
+                        .orEmpty()
+                    check(key, mi.camundaElementVariable in targets, "callActivity '${call.id}' does not map the child item")
+                    check(key, EngineNames.ITEM_KEY in targets, "callActivity '${call.id}' does not map '${EngineNames.ITEM_KEY}'")
+                    check(key, EngineNames.RUN_ID in targets, "callActivity '${call.id}' does not map '${EngineNames.RUN_ID}'")
                 }
                 "camunda8" -> {
                     val loop = mi.extensionElements?.domElement?.childElements?.firstOrNull { it.localName == "loopCharacteristics" }
                     check(key, loop?.getAttribute("inputCollection")?.startsWith("=") == true, "MI missing zeebe inputCollection FEEL expr")
                     val called = call.extensionElements?.domElement?.childElements?.firstOrNull { it.localName == "calledElement" }
                     check(key, called?.getAttribute("processId") in keys, "zeebe calledElement processId not a compiled process")
+                    val inputs = call.extensionElements?.domElement?.childElements
+                        ?.filter { it.localName == "ioMapping" }
+                        ?.flatMap { mapping -> mapping.childElements.filter { it.localName == "input" } }
+                        ?.map { it.getAttribute("target") }
+                        .orEmpty()
+                    check(key, EngineNames.ITEM_KEY in inputs, "callActivity '${call.id}' does not map '${EngineNames.ITEM_KEY}'")
                 }
             }
         }

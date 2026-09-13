@@ -1,5 +1,6 @@
 package loadshift.camunda7
 
+import loadshift.core.EngineNames
 import loadshift.core.ServiceTaskRef
 import org.camunda.bpm.model.bpmn.BpmnModelInstance
 import org.camunda.bpm.model.bpmn.instance.BaseElement
@@ -14,7 +15,7 @@ object Camunda7Dialect {
         for (ref in serviceTasks) {
             val task = model.getModelElementById(ref.id) as? ServiceTask ?: continue
             task.camundaType = "external"
-            task.camundaTopic = ref.topic
+            task.camundaTopic = ref.jobType
         }
         for (call in model.getModelElementsByType(CallActivity::class.java)) {
             val mi = call.loopCharacteristics as? MultiInstanceLoopCharacteristics ?: continue
@@ -22,10 +23,25 @@ object Camunda7Dialect {
                 mi.camundaCollection = collection.removeSuffix("}") + ".elements()}"
             }
             val element = mi.camundaElementVariable ?: continue
-            val input = model.newInstance(CamundaIn::class.java)
-            input.camundaSource = element
-            input.camundaTarget = element
-            ensureExtensions(model, call).addChildElement(input)
+            val extensions = ensureExtensions(model, call)
+            extensions.addChildElement(
+                model.newInstance(CamundaIn::class.java).apply {
+                    camundaSource = element
+                    camundaTarget = element
+                },
+            )
+            extensions.addChildElement(
+                model.newInstance(CamundaIn::class.java).apply {
+                    camundaSource = EngineNames.RUN_ID
+                    camundaTarget = EngineNames.RUN_ID
+                },
+            )
+            extensions.addChildElement(
+                model.newInstance(CamundaIn::class.java).apply {
+                    camundaSourceExpression = "\${$element.prop('${EngineNames.ITEM_KEY}').stringValue()}"
+                    camundaTarget = EngineNames.ITEM_KEY
+                },
+            )
         }
     }
 

@@ -32,6 +32,7 @@ open class FlowSpec<W : WorkItem> internal constructor(
         timeout: Duration? = null,
         rateLimit: Rate? = null,
     ): TaskHandle<W> {
+        require(t.topic.isNotBlank()) { "task topic must not be blank" }
         tasks[t.topic] = t
         val e = Execute(t, TaskOptions(retry, timeout, rateLimit))
         steps += e
@@ -96,7 +97,7 @@ open class FlowSpec<W : WorkItem> internal constructor(
     ): Fan<W, C> {
         val id = idgen.next("f")
         val childKey = "${baseKey}_$id"
-        val childSpec = buildSpec(childCodec, childKey, IdGen())
+        val childSpec = buildSpec(childCodec, childKey, idgen)
         val sub = SubFlow(
             childKey,
             childSpec.toStep(),
@@ -293,12 +294,12 @@ class WorkflowSpec<W : WorkItem> @PublishedApi internal constructor(
     @PublishedApi
     internal fun build(): Workflow<W> {
         val key = sanitizeId(wfName)
-        return Workflow(
-            key = key,
-            name = wfName,
-            seed = seed,
-            root = SubFlow(key, toStep(), codec, tasks.toMap(), decisions.toMap()),
-        )
+        require(WORKFLOW_KEY.matches(key)) {
+            "workflow name '$wfName' must start with a letter or underscore to form a valid process id"
+        }
+        val root = SubFlow(key, toStep(), codec, tasks.toMap(), decisions.toMap())
+        validateTopics(wfName, root)
+        return Workflow(key = key, name = wfName, seed = seed, root = root)
     }
 }
 
@@ -306,3 +307,36 @@ inline fun <reified W : WorkItem> workflow(
     name: String,
     build: WorkflowSpec<W>.() -> Unit,
 ): Workflow<W> = WorkflowSpec<W>(workItemCodec<W>(), name).apply(build).build()
+
+private val WORKFLOW_KEY = Regex("^[a-z_][a-z0-9_\\-]*$")
+
+private val RESERVED_TOPIC = Regex("^(decision_[cl]|expand_f|reduce_f|timeout_to|loop_l)\\d+$")
+
+private fun validateTopics(workflowName: String, root: SubFlow<*>) {
+    val seen = HashSet<String>()
+    fun visit(step: Step<*>) {
+        when (step) {
+            is Sequence<*> -> step.steps.forEach(::visit)
+            is Execute<*> -> {
+                val topic = step.task.topic
+                require(!RESERVED_TOPIC.matches(topic)) {
+                    "topic '$topic' in workflow '$workflowName' uses a name reserved for generated steps"
+                }
+                require(seen.add(topic)) {
+                    "topic '$topic' is used by more than one task in workflow '$workflowName'; topics must be unique within a workflow"
+                }
+            }
+            is Conditional<*> -> {
+                visit(step.onTrue)
+                step.onFalse?.let(::visit)
+            }
+            is Loop<*> -> visit(step.body)
+            is Parallel<*> -> step.branches.forEach(::visit)
+            is Timeout<*> -> visit(step.body)
+            is FanOut<*, *> -> visit(step.body.step)
+            is FanIn<*, *, *> -> visit(step.body.step)
+            is Wait<*>, is AwaitMessage<*> -> Unit
+        }
+    }
+    visit(root.step)
+}

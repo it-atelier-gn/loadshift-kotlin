@@ -20,6 +20,7 @@ data class MessageRequest(
     val messageName: String,
     val correlationKeys: Map<String, CamundaValue>? = null,
     val all: Boolean = true,
+    val resultEnabled: Boolean = false,
 )
 
 @Serializable
@@ -72,9 +73,28 @@ data class FailureRequest(
 )
 
 @Serializable
+data class BpmnErrorRequest(
+    val workerId: String,
+    val errorCode: String,
+    val errorMessage: String? = null,
+)
+
+@Serializable
 data class ExtendLockRequest(
     val workerId: String,
     val newDuration: Long,
+)
+
+@Serializable
+data class HistoricProcessInstanceQuery(
+    val processInstanceIds: List<String>,
+    val finished: Boolean = true,
+)
+
+@Serializable
+data class HistoricProcessInstanceDto(
+    val id: String,
+    val state: String? = null,
 )
 
 @Serializable

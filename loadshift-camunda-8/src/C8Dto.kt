@@ -10,11 +10,7 @@ data class CreateInstanceRequest(
 )
 
 @Serializable
-data class PublishMessageRequest(
-    val name: String,
-    val correlationKey: String,
-    val timeToLive: Long = 10000,
-)
+data class CreateInstanceResponse(val processInstanceKey: String)
 
 @Serializable
 data class ActivateJobsRequest(
@@ -28,7 +24,8 @@ data class ActivateJobsRequest(
 @Serializable
 data class ActivatedJob(
     val jobKey: String,
-    val processInstanceKey: String? = null,
+    val processInstanceKey: String,
+    val retries: Int? = null,
     val variables: JsonObject = JsonObject(emptyMap()),
 )
 
@@ -44,6 +41,42 @@ data class FailJobRequest(
     val errorMessage: String? = null,
     val retryBackOff: Long = 0,
 )
+
+@Serializable
+data class JobErrorRequest(
+    val errorCode: String,
+    val errorMessage: String? = null,
+)
+
+@Serializable
+data class JobChangeset(
+    val retries: Int? = null,
+    val timeout: Long? = null,
+)
+
+@Serializable
+data class JobUpdateRequest(val changeset: JobChangeset)
+
+@Serializable
+data class MessageCorrelationRequest(
+    val name: String,
+    val correlationKey: String,
+)
+
+@Serializable
+data class ProcessInstanceItem(
+    val processInstanceKey: String,
+    val state: String,
+)
+
+@Serializable
+data class ProcessInstanceSearchResponse(val items: List<ProcessInstanceItem> = emptyList())
+
+@Serializable
+data class MessageSubscriptionItem(val correlationKey: String? = null)
+
+@Serializable
+data class MessageSubscriptionSearchResponse(val items: List<MessageSubscriptionItem> = emptyList())
 
 @Serializable
 data class SearchFilter(val processDefinitionId: String, val state: String? = null)

@@ -5,8 +5,12 @@ import kotlinx.coroutines.test.runTest
 import kotlin.time.Clock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonPrimitive
+import loadshift.core.DeadLetter
 import loadshift.core.ErrorPolicy
 import loadshift.core.InMemoryCheckpointStore
+import loadshift.core.RunInspector
+import loadshift.core.RunResult
+import loadshift.core.RunState
 import loadshift.core.LogEntry
 import loadshift.core.LogSink
 import loadshift.core.Parent
@@ -605,5 +609,126 @@ class LocalBackendTest {
         }
         LocalBackend().run(wf, RunConfig(tracer = tracer)).await()
         assertEquals(listOf("task one", "task two"), spans.toList())
+    }
+
+    private fun eventually(condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + 5000
+        while (!condition()) {
+            check(System.currentTimeMillis() < deadline) { "condition not met within 5s" }
+            Thread.sleep(10)
+        }
+    }
+
+    @Test
+    fun pausedRunHoldsTasksUntilResumed() = runTest {
+        val ran = AtomicBoolean(false)
+        val wf = workflow<Cust>("pause") {
+            input(listOf(Cust("x")))
+            task("t") { ran.set(true) }
+        }
+        val handle = LocalBackend().run(wf, RunConfig(start = Start.Manual))
+        val inspector = handle as RunInspector
+
+        handle.pause()
+        handle.start()
+        eventually { inspector.state() == RunState.Paused }
+        Thread.sleep(100)
+        assertFalse(ran.get())
+
+        handle.resume()
+        handle.await()
+        assertTrue(ran.get())
+        assertEquals(RunState.Completed, inspector.state())
+    }
+
+    @Test
+    fun failPolicyCountsTheFailedItem() = runTest {
+        val wf = workflow<Cust>("fail-count") {
+            input(listOf(Cust("x")))
+            task("t", retry = RetryPolicy.None) { error("boom") }
+        }
+        val handle = LocalBackend().run(wf, RunConfig(onError = ErrorPolicy.Fail))
+        val failure = runCatching { handle.await() }.exceptionOrNull()
+        assertEquals("boom", failure?.message)
+        assertEquals(1, handle.progress().failed)
+        assertEquals(RunState.Failed, (handle as RunInspector).state())
+    }
+
+    @Test
+    fun dedupedAndCheckpointedItemsCountAsSkipped() = runTest {
+        val store = InMemoryCheckpointStore().apply { markComplete("skips", "done") }
+        val wf = workflow<Cust>("skips") {
+            input(listOf(Cust("a"), Cust("a"), Cust("done")))
+            task("t") { }
+        }
+        val result = LocalBackend().run(wf, RunConfig(dedupe = true, checkpoints = store)).await()
+        assertEquals(RunResult(done = 1, failed = 0, skipped = 2, deadLetters = emptyList()), result)
+    }
+
+    @Test
+    fun checkpointsAreIgnoredWhenResumeIsDisabled() = runTest {
+        val store = InMemoryCheckpointStore().apply { markComplete("no-resume", "a") }
+        val processed = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("no-resume") {
+            input(listOf(Cust("a")))
+            task("t") { processed += it.id }
+        }
+        LocalBackend().run(wf, RunConfig(checkpoints = store, resume = false)).await()
+        assertEquals(listOf("a"), processed.toList())
+    }
+
+    @Test
+    fun failingConditionFollowsTheErrorPolicy() = runTest {
+        val wf = workflow<Cust>("bad-condition") {
+            input(listOf(Cust("x")))
+            condition({ error("cannot decide") }) { task("t") { } }
+        }
+        val letter = LocalBackend().run(wf).await().deadLetters.single()
+        assertEquals("x", letter.key)
+        assertTrue(letter.topic.startsWith("decision_"), letter.topic)
+        assertEquals("cannot decide", letter.error)
+    }
+
+    @Test
+    fun taskTimeoutInsideAScopeIsReportedForTheTask() = runTest {
+        val wf = workflow<Cust>("task-timeout") {
+            input(listOf(Cust("x")))
+            timeout(10.seconds) {
+                task("slow", timeout = 50.milliseconds, retry = RetryPolicy.None) { delay(5.seconds) }
+            }
+        }
+        val result = LocalBackend().run(wf).await()
+        assertEquals(listOf(DeadLetter("x", "slow", "exceeded timeout 50ms")), result.deadLetters)
+    }
+
+    @Test
+    fun scopeTimeoutIsNotRetriedAsATaskFailure() = runTest {
+        val attempts = AtomicInteger()
+        val wf = workflow<Cust>("scope-timeout") {
+            input(listOf(Cust("x")))
+            timeout(100.milliseconds) {
+                task("slow", timeout = 5.seconds, retry = RetryPolicy(maxAttempts = 3, baseDelay = 1.milliseconds)) {
+                    attempts.incrementAndGet()
+                    delay(2.seconds)
+                }
+            }
+        }
+        val result = LocalBackend().run(wf).await()
+        assertEquals(1, attempts.get())
+        assertTrue(result.deadLetters.single().topic.startsWith("timeout_"))
+    }
+
+    @Test
+    fun failingCompensationIsRecordedAsADeadLetter() = runTest {
+        val wf = workflow<Cust>("compensation-failure") {
+            input(listOf(Cust("x")))
+            task("charge") { } compensate { error("refund unavailable") }
+            task("ship", retry = RetryPolicy.None) { error("no carrier") }
+        }
+        val result = LocalBackend().run(wf).await()
+        assertEquals(
+            listOf(DeadLetter("x", "ship", "no carrier"), DeadLetter("x", "compensate_charge", "refund unavailable")),
+            result.deadLetters,
+        )
     }
 }

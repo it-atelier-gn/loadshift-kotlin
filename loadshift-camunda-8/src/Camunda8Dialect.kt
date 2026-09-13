@@ -1,5 +1,6 @@
 package loadshift.camunda8
 
+import loadshift.core.EngineNames
 import loadshift.core.ServiceTaskRef
 import org.camunda.bpm.model.bpmn.BpmnModelInstance
 import org.camunda.bpm.model.bpmn.instance.BaseElement
@@ -14,17 +15,29 @@ object Camunda8Dialect {
     const val ZEEBE_NS = "http://camunda.org/schema/zeebe/1.0"
     private const val CAMUNDA_NS = "http://camunda.org/schema/1.0/bpmn"
 
-    fun decorate(model: BpmnModelInstance, serviceTasks: List<ServiceTaskRef>) {
+    fun decorate(
+        model: BpmnModelInstance,
+        serviceTasks: List<ServiceTaskRef>,
+        maxAttempts: (ServiceTaskRef) -> Int? = { null },
+    ) {
         for (ref in serviceTasks) {
             val task = model.getModelElementById(ref.id) as? ServiceTask ?: continue
             val definition = ensureExtensions(model, task).addExtensionElement(ZEEBE_NS, "taskDefinition")
-            definition.domElement.setAttribute("type", ref.topic)
+            definition.domElement.setAttribute("type", ref.jobType)
+            maxAttempts(ref)?.let { definition.domElement.setAttribute("retries", it.toString()) }
         }
         for (call in model.getModelElementsByType(CallActivity::class.java)) {
             val childId = call.calledElement ?: continue
-            val called = ensureExtensions(model, call).addExtensionElement(ZEEBE_NS, "calledElement")
+            val extensions = ensureExtensions(model, call)
+            val called = extensions.addExtensionElement(ZEEBE_NS, "calledElement")
             called.domElement.setAttribute("processId", childId)
             called.domElement.setAttribute("propagateAllChildVariables", "false")
+            val element = (call.loopCharacteristics as? MultiInstanceLoopCharacteristics)?.camundaElementVariable ?: continue
+            val mapping = extensions.addExtensionElement(ZEEBE_NS, "ioMapping")
+            val input = model.document.createElement(ZEEBE_NS, "input")
+            input.setAttribute("source", "=$element.${EngineNames.ITEM_KEY}")
+            input.setAttribute("target", EngineNames.ITEM_KEY)
+            mapping.domElement.appendChild(input)
         }
         for (mi in model.getModelElementsByType(MultiInstanceLoopCharacteristics::class.java)) {
             val collection = mi.camundaCollection?.removeSurrounding("\${", "}") ?: continue
@@ -36,7 +49,10 @@ object Camunda8Dialect {
         }
         for (message in model.getModelElementsByType(Message::class.java)) {
             val subscription = ensureExtensions(model, message).addExtensionElement(ZEEBE_NS, "subscription")
-            subscription.domElement.setAttribute("correlationKey", "=loadshiftKey")
+            subscription.domElement.setAttribute(
+                "correlationKey",
+                "=${EngineNames.RUN_ID} + \":\" + ${EngineNames.ITEM_KEY}",
+            )
         }
         for (condition in model.getModelElementsByType(ConditionExpression::class.java)) {
             condition.textContent = toFeel(condition.textContent.trim())
