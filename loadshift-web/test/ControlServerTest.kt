@@ -8,7 +8,9 @@ import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.statement.bodyAsText
 import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import loadshift.core.RunConfig
 import loadshift.core.Start
@@ -20,6 +22,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 @Serializable
 private data class Doc(var id: String) : WorkItem {
@@ -95,6 +99,39 @@ class ControlServerTest {
 
             val after: List<RunDto> = client.get("http://127.0.0.1:$port/api/runs").body()
             assertEquals("Completed", after.single().state)
+        } finally {
+            client.close()
+            server.stop()
+        }
+    }
+
+    @Test
+    fun pauseAndResumeEndpointsControlARun() = runBlocking {
+        val backend = LocalBackend()
+        val wf = workflow<Doc>("pause-flow") {
+            input(listOf(Doc("a")))
+            task("noop") {}
+        }
+        val handle = backend.run(wf, RunConfig(start = Start.Manual))
+
+        val server = ControlServer(backend, port = 0).start()
+        val port = server.boundPort()
+        val client = HttpClient(CIO) {
+            install(ContentNegotiation) { json() }
+        }
+        suspend fun state(): String = client.get("http://127.0.0.1:$port/api/runs").body<List<RunDto>>().single().state
+        try {
+            val id = client.get("http://127.0.0.1:$port/api/runs").body<List<RunDto>>().single().id
+
+            assertEquals(200, client.post("http://127.0.0.1:$port/api/runs/$id/pause").status.value)
+            assertEquals(200, client.post("http://127.0.0.1:$port/api/runs/$id/start").status.value)
+            withTimeout(5.seconds) { while (state() != "Paused") delay(20.milliseconds) }
+
+            assertEquals(404, client.post("http://127.0.0.1:$port/api/runs/missing/resume").status.value)
+            assertEquals(200, client.post("http://127.0.0.1:$port/api/runs/$id/resume").status.value)
+            handle.await()
+
+            assertEquals("Completed", state())
         } finally {
             client.close()
             server.stop()

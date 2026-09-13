@@ -68,6 +68,10 @@ internal fun Application.console(backend: ControllableBackend) {
                 val id = call.parameters["id"].orEmpty()
                 if (backend.control.pause(id)) call.respond(HttpStatusCode.OK) else call.respond(HttpStatusCode.NotFound)
             }
+            post("/runs/{id}/resume") {
+                val id = call.parameters["id"].orEmpty()
+                if (backend.control.resume(id)) call.respond(HttpStatusCode.OK) else call.respond(HttpStatusCode.NotFound)
+            }
             post("/runs/{id}/cancel") {
                 val id = call.parameters["id"].orEmpty()
                 if (backend.control.cancel(id)) call.respond(HttpStatusCode.OK) else call.respond(HttpStatusCode.NotFound)

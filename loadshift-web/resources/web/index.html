@@ -130,6 +130,7 @@ main { padding: 1.6rem 2rem; display: grid; gap: 1.2rem; max-width: 1100px; }
 .controls button:hover { color: var(--ink); border-color: var(--dim); }
 .controls button.start:hover { color: var(--green); border-color: var(--green); }
 .controls button.pause:hover { color: var(--amber); border-color: var(--amber); }
+.controls button.resume:hover { color: var(--green); border-color: var(--green); }
 .controls button.cancel:hover { color: var(--red); border-color: var(--red); }
 .controls button:disabled { opacity: .35; cursor: default; }
 .bar {
@@ -252,6 +253,7 @@ function renderRun(run) {
   const controls = `<div class="controls">
     <button class="start" data-action="start" data-run="${esc(run.id)}" ${run.state === "Scheduled" ? "" : "disabled"}>start</button>
     <button class="pause" data-action="pause" data-run="${esc(run.id)}" ${run.state === "Running" ? "" : "disabled"}>pause</button>
+    <button class="resume" data-action="resume" data-run="${esc(run.id)}" ${run.state === "Paused" ? "" : "disabled"}>resume</button>
     <button class="cancel" data-action="cancel" data-run="${esc(run.id)}" ${terminal ? "disabled" : ""}>cancel</button>
   </div>`;
   return `<section class="run" data-state="${esc(run.state)}">
