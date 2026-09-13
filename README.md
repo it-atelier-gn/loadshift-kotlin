@@ -344,7 +344,7 @@ The server listens on `127.0.0.1` unless `host` is set. With `credentials`, ever
 | `POST` | `/api/runs/{id}/cancel` | `cancel()` |
 | `POST` | `/api/runs/{id}/detach` | `detach()` |
 
-Unknown run ids return `404`. Engine backends also report the number of active process instances per run.
+Unknown run ids return `404`. For engine backends, each run also shows the number of active process instances of its workflow on the engine.
 
 ---
 
