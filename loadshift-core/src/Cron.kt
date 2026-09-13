@@ -1,65 +1,120 @@
 package loadshift.core
 
 import kotlinx.coroutines.delay
-import kotlinx.datetime.Clock
-import kotlinx.datetime.Instant
+import kotlinx.datetime.DateTimeUnit
+import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
+import kotlinx.datetime.LocalTime
 import kotlinx.datetime.TimeZone
+import kotlinx.datetime.isoDayNumber
+import kotlinx.datetime.number
+import kotlinx.datetime.plus
 import kotlinx.datetime.toInstant
 import kotlinx.datetime.toLocalDateTime
-import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Clock
+import kotlin.time.Instant
+
+class CronExpression private constructor(
+    val expr: String,
+    private val minutes: List<Int>,
+    private val hours: List<Int>,
+    private val daysOfMonth: Set<Int>,
+    private val months: Set<Int>,
+    private val daysOfWeek: Set<Int>,
+    private val dayOfMonthRestricted: Boolean,
+    private val dayOfWeekRestricted: Boolean,
+) {
+    fun matches(date: LocalDate): Boolean {
+        if (date.month.number !in months) return false
+        val domMatch = date.day in daysOfMonth
+        val dowMatch = date.dayOfWeek.isoDayNumber % 7 in daysOfWeek
+        return if (dayOfMonthRestricted && dayOfWeekRestricted) domMatch || dowMatch else domMatch && dowMatch
+    }
+
+    fun next(after: Instant, zone: TimeZone): Instant {
+        var date = after.toLocalDateTime(zone).date
+        repeat(MAX_DAYS) {
+            if (matches(date)) {
+                for (hour in hours) for (minute in minutes) {
+                    val candidate = LocalDateTime(date, LocalTime(hour, minute)).toInstant(zone)
+                    if (candidate > after) return candidate
+                }
+            }
+            date = date.plus(1, DateTimeUnit.DAY)
+        }
+        throw IllegalArgumentException("cron expression '$expr' never matches")
+    }
+
+    companion object {
+        private const val MAX_DAYS = 8 * 366
+        private val MONTH_NAMES = listOf("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+        private val DAY_NAMES = listOf("SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT")
+
+        fun parse(expr: String): CronExpression {
+            val fields = expr.trim().split(Regex("\\s+"))
+            require(fields.size == 5) { "cron expression must have 5 space-separated fields: '$expr'" }
+            val months = parseField(expr, fields[3], 1, 12) { MONTH_NAMES.indexOf(it).takeIf { i -> i >= 0 }?.plus(1) }
+            val daysOfMonth = parseField(expr, fields[2], 1, 31, null)
+            val daysOfWeek = parseField(expr, fields[4], 0, 7) { DAY_NAMES.indexOf(it).takeIf { i -> i >= 0 } }
+            return CronExpression(
+                expr = expr,
+                minutes = parseField(expr, fields[0], 0, 59, null).sorted(),
+                hours = parseField(expr, fields[1], 0, 23, null).sorted(),
+                daysOfMonth = daysOfMonth,
+                months = months,
+                daysOfWeek = daysOfWeek.map { it % 7 }.toSet(),
+                dayOfMonthRestricted = !isWildcard(fields[2]),
+                dayOfWeekRestricted = !isWildcard(fields[4]),
+            )
+        }
+
+        private fun isWildcard(field: String) = field == "*" || field == "?"
+
+        private fun parseField(
+            expr: String,
+            field: String,
+            min: Int,
+            max: Int,
+            name: ((String) -> Int?)?,
+        ): Set<Int> {
+            fun value(token: String): Int {
+                val v = token.toIntOrNull() ?: name?.invoke(token.uppercase())
+                    ?: throw IllegalArgumentException("invalid value '$token' in cron expression '$expr'")
+                require(v in min..max) { "value $v out of range $min-$max in cron expression '$expr'" }
+                return v
+            }
+
+            val result = mutableSetOf<Int>()
+            for (part in field.split(",")) {
+                require(part.isNotEmpty()) { "empty list entry in cron expression '$expr'" }
+                val segments = part.split("/")
+                require(segments.size <= 2) { "invalid step '$part' in cron expression '$expr'" }
+                val range = segments[0]
+                val step = segments.getOrNull(1)?.let {
+                    it.toIntOrNull()?.takeIf { s -> s > 0 }
+                        ?: throw IllegalArgumentException("invalid step '$it' in cron expression '$expr'")
+                }
+                val (start, end) = when {
+                    isWildcard(range) -> min to max
+                    "-" in range -> range.split("-", limit = 2).let { value(it[0]) to value(it[1]) }
+                    step != null -> value(range) to max
+                    else -> value(range).let { it to it }
+                }
+                require(start <= end) { "range $start-$end is reversed in cron expression '$expr'" }
+                var v = start
+                while (v <= end) {
+                    result += v
+                    v += step ?: 1
+                }
+            }
+            return result
+        }
+    }
+}
 
 object CronSchedule {
-    private const val MAX_TICKS = 4 * 366 * 24 * 60
-
-    fun next(expr: String, after: Instant, zone: TimeZone = TimeZone.currentSystemDefault()): Instant {
-        val fields = expr.trim().split(Regex("\\s+"))
-        require(fields.size == 5) { "cron expression must have 5 space-separated fields: '$expr'" }
-
-        val minutes = parseField(fields[0], 0, 59)
-        val hours = parseField(fields[1], 0, 23)
-        val daysOfMonth = parseField(fields[2], 1, 31)
-        val months = parseField(fields[3], 1, 12)
-        val daysOfWeek = parseField(fields[4], 0, 7).map { it % 7 }.toSet()
-
-        var candidate = truncateToMinute(after + 1.minutes, zone)
-        repeat(MAX_TICKS) {
-            val dt = candidate.toLocalDateTime(zone)
-            val dow = (dt.dayOfWeek.ordinal + 1) % 7
-            if (dt.minute in minutes && dt.hour in hours && dt.dayOfMonth in daysOfMonth &&
-                dt.monthNumber in months && dow in daysOfWeek
-            ) {
-                return candidate
-            }
-            candidate += 1.minutes
-        }
-        error("no matching time found for cron expression '$expr'")
-    }
-
-    private fun truncateToMinute(instant: Instant, zone: TimeZone): Instant {
-        val dt = instant.toLocalDateTime(zone)
-        return LocalDateTime(dt.year, dt.monthNumber, dt.dayOfMonth, dt.hour, dt.minute).toInstant(zone)
-    }
-
-    private fun parseField(field: String, min: Int, max: Int): Set<Int> {
-        val result = mutableSetOf<Int>()
-        for (part in field.split(",")) {
-            val segments = part.split("/")
-            val range = segments[0]
-            val step = segments.getOrNull(1)?.toInt() ?: 1
-            val (start, end) = when {
-                range == "*" -> min to max
-                "-" in range -> range.split("-").let { it[0].toInt() to it[1].toInt() }
-                else -> range.toInt().let { it to it }
-            }
-            var v = start
-            while (v <= end) {
-                result += v
-                v += step
-            }
-        }
-        return result
-    }
+    fun next(expr: String, after: Instant, zone: TimeZone = TimeZone.currentSystemDefault()): Instant =
+        CronExpression.parse(expr).next(after, zone)
 }
 
 suspend fun CronSchedule.awaitNext(expr: String, zone: TimeZone = TimeZone.currentSystemDefault()) {

@@ -1,16 +1,21 @@
 package loadshift.core
 
-import kotlinx.datetime.Instant
+import kotlinx.datetime.TimeZone
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
 
 sealed interface Start {
     data object Now : Start
     data object Manual : Start
     data class At(val time: Instant) : Start
-    data class Cron(val expr: String) : Start
+    data class Cron(val expr: String, val zone: TimeZone = TimeZone.currentSystemDefault()) : Start {
+        init {
+            CronExpression.parse(expr)
+        }
+    }
 }
 
 data class Rate(val permits: Int, val per: Duration)

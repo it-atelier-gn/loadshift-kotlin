@@ -1,7 +1,7 @@
 package loadshift.sqlite
 
 import kotlinx.coroutines.test.runTest
-import kotlinx.datetime.Clock
+import kotlin.time.Clock
 import kotlinx.serialization.json.JsonPrimitive
 import loadshift.core.LogEntry
 import java.nio.file.Files

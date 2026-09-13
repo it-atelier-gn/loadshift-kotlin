@@ -15,9 +15,9 @@ repositories:
 dependencies:
   - ../loadshift-core
   - $libs.kotlinx.coroutines.core
-  - io.opentelemetry:opentelemetry-api:1.43.0
+  - $libs.opentelemetry.api
 
 test-dependencies:
   - $libs.kotlinx.coroutines.test
-  - io.opentelemetry:opentelemetry-sdk:1.43.0
-  - io.opentelemetry:opentelemetry-sdk-testing:1.43.0
+  - $libs.opentelemetry.sdk
+  - $libs.opentelemetry.sdk.testing

@@ -1,9 +1,12 @@
 [versions]
-kotlinx-coroutines = "1.9.0"
-kotlinx-serialization = "1.7.3"
-kotlinx-datetime = "0.6.1"
-ktor = "3.0.3"
-testcontainers = "1.21.3"
+kotlinx-coroutines = "1.11.0"
+kotlinx-serialization = "1.11.0"
+kotlinx-datetime = "0.8.0"
+ktor = "3.5.2"
+testcontainers = "2.0.5"
+opentelemetry = "1.66.0"
+sqlite-jdbc = "3.53.4.0"
+camunda-bpmn-model = "7.24.0"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
@@ -18,3 +21,8 @@ ktor-server-core = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
 ktor-server-cio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
 ktor-server-content-negotiation = { module = "io.ktor:ktor-server-content-negotiation", version.ref = "ktor" }
 testcontainers = { module = "org.testcontainers:testcontainers", version.ref = "testcontainers" }
+opentelemetry-api = { module = "io.opentelemetry:opentelemetry-api", version.ref = "opentelemetry" }
+opentelemetry-sdk = { module = "io.opentelemetry:opentelemetry-sdk", version.ref = "opentelemetry" }
+opentelemetry-sdk-testing = { module = "io.opentelemetry:opentelemetry-sdk-testing", version.ref = "opentelemetry" }
+sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite-jdbc" }
+camunda-bpmn-model = { module = "org.camunda.bpm.model:camunda-bpmn-model", version.ref = "camunda-bpmn-model" }

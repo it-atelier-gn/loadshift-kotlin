@@ -19,7 +19,7 @@ dependencies:
   - $libs.kotlinx.coroutines.core
   - $libs.kotlinx.datetime
   - $libs.kotlinx.serialization.json
-  - org.xerial:sqlite-jdbc:3.46.1.3
+  - $libs.sqlite.jdbc
 
 test-dependencies:
   - $libs.kotlinx.coroutines.test

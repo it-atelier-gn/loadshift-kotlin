@@ -19,7 +19,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import kotlinx.datetime.Clock
+import kotlin.time.Clock
 import loadshift.core.Conditional
 import loadshift.core.CronSchedule
 import loadshift.core.awaitNext

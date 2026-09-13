@@ -23,7 +23,7 @@ dependencies:
       exported: true
   - $libs.kotlinx.serialization.json:
       exported: true
-  - org.camunda.bpm.model:camunda-bpmn-model:7.24.0:
+  - $libs.camunda.bpmn.model:
       exported: true
 
 test-dependencies:

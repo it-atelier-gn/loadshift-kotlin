@@ -2,7 +2,7 @@ package loadshift.local
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
-import kotlinx.datetime.Clock
+import kotlin.time.Clock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonPrimitive
 import loadshift.core.ErrorPolicy
