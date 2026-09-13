@@ -4,6 +4,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.request.basicAuth
 import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.statement.bodyAsText
@@ -20,6 +21,7 @@ import loadshift.core.workflow
 import loadshift.local.LocalBackend
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
@@ -132,6 +134,50 @@ class ControlServerTest {
             handle.await()
 
             assertEquals("Completed", state())
+        } finally {
+            client.close()
+            server.stop()
+        }
+    }
+
+    @Test
+    fun credentialsProtectTheDashboardAndApi() = runBlocking {
+        val credentials = ConsoleCredentials("ops", "s3cret")
+        val server = ControlServer(LocalBackend(), port = 0, credentials = credentials).start()
+        val port = server.boundPort()
+        val client = HttpClient(CIO)
+        try {
+            assertEquals(401, client.get("http://127.0.0.1:$port/").status.value)
+            assertEquals(401, client.get("http://127.0.0.1:$port/api/runs").status.value)
+            assertEquals(401, client.get("http://127.0.0.1:$port/api/runs") { basicAuth("ops", "wrong") }.status.value)
+            assertEquals(200, client.get("http://127.0.0.1:$port/api/runs") { basicAuth("ops", "s3cret") }.status.value)
+            assertFalse("s3cret" in credentials.toString())
+        } finally {
+            client.close()
+            server.stop()
+        }
+    }
+
+    @Test
+    fun detachEndpointStopsARun() = runBlocking {
+        val backend = LocalBackend()
+        val wf = workflow<Doc>("detach-flow") {
+            input(listOf(Doc("a")))
+            task("noop") {}
+        }
+        val handle = backend.run(wf, RunConfig(start = Start.Manual))
+
+        val server = ControlServer(backend, port = 0).start()
+        val port = server.boundPort()
+        val client = HttpClient(CIO) {
+            install(ContentNegotiation) { json() }
+        }
+        try {
+            val id = client.get("http://127.0.0.1:$port/api/runs").body<List<RunDto>>().single().id
+            assertEquals(404, client.post("http://127.0.0.1:$port/api/runs/missing/detach").status.value)
+            assertEquals(200, client.post("http://127.0.0.1:$port/api/runs/$id/detach").status.value)
+            handle.await()
+            assertEquals("Cancelled", client.get("http://127.0.0.1:$port/api/runs").body<List<RunDto>>().single().state)
         } finally {
             client.close()
             server.stop()
