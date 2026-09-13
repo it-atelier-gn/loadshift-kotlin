@@ -81,8 +81,12 @@ private class FakeDriver : EngineDriver {
         terminated += job.id
     }
 
+    @Volatile
+    var extendLatency: Duration = Duration.ZERO
+
     override suspend fun extendLock(job: EngineJob, lock: Duration) {
         lockExtensions.incrementAndGet()
+        delay(extendLatency)
     }
 
     override suspend fun release(job: EngineJob) {
@@ -379,6 +383,18 @@ class EngineRunnerTest {
         assertEquals(listOf("job-pi-1"), driver.completed.toList())
         assertTrue(driver.cancelled.isEmpty())
         assertEquals(RunResult(done = 0, failed = 0, skipped = 0, deadLetters = emptyList()), handle.await())
+    }
+
+    @Test
+    fun slowLockExtensionsDoNotDelayTheNextExtension() = runBlocking {
+        val wf = flow("slow-extend", "a") { delay(1.seconds) }
+        val driver = FakeDriver().apply { extendLatency = 250.milliseconds }
+        val (handle, _) = launch(wf, RunConfig(lockDuration = 300.milliseconds), driver)
+        eventually { driver.started.size == 1 }
+        driver.enqueueWork(wf)
+        eventually { driver.completed.size == 1 }
+        assertTrue(driver.lockExtensions.get() >= 8, "lock extensions: ${driver.lockExtensions.get()}")
+        handle.cancel()
     }
 
     @Test

@@ -23,6 +23,7 @@ import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 @EngineApi
 class EngineRunner(
@@ -221,6 +222,7 @@ class EngineRunner(
             }
             var slots = 1
             while (slots < MAX_BATCH && workSlots.tryAcquire()) slots++
+            val fetchedAt = TimeSource.Monotonic.markNow()
             val jobs = try {
                 driver.fetch(jobTypes, slots, config.lockDuration, wait)
             } catch (e: CancellationException) {
@@ -241,7 +243,7 @@ class EngineRunner(
             for (job in accepted) {
                 scope.launch {
                     try {
-                        process(job)
+                        process(job, fetchedAt)
                     } finally {
                         workSlots.release()
                     }
@@ -256,11 +258,14 @@ class EngineRunner(
         }
     }
 
-    private suspend fun process(job: EngineJob) {
+    private suspend fun process(job: EngineJob, lockedAt: TimeSource.Monotonic.ValueTimeMark) {
         val heartbeat = scope.launch {
+            val interval = config.lockDuration / 3
+            var tick = 1
             while (true) {
-                delay(config.lockDuration / 3)
-                attempt { driver.extendLock(job, config.lockDuration) }
+                delay(interval * tick - lockedAt.elapsedNow())
+                tick++
+                launch { attempt { driver.extendLock(job, config.lockDuration) } }
             }
         }
         try {

@@ -278,11 +278,11 @@ abstract class Camunda7Scenarios internal constructor(private val engine: Camund
             input(listOf(Customer("long")))
             task("slow") {
                 executions.incrementAndGet()
-                delay(7.seconds)
+                delay(15.seconds)
             }
         }
 
-        val result = Camunda7Backend(base).run(wf, RunConfig(lockDuration = 3.seconds, maxConcurrency = 2)).await()
+        val result = Camunda7Backend(base).run(wf, RunConfig(lockDuration = 6.seconds, maxConcurrency = 2)).await()
 
         assertEquals(1, executions.get())
         assertEquals(1, result.done)

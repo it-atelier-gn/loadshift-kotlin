@@ -294,11 +294,11 @@ class Camunda8E2eTest {
             input(listOf(Customer("long")))
             task("slow") {
                 executions.incrementAndGet()
-                delay(7.seconds)
+                delay(15.seconds)
             }
         }
 
-        val result = Camunda8Backend(base).run(wf, RunConfig(lockDuration = 3.seconds, maxConcurrency = 2)).await()
+        val result = Camunda8Backend(base).run(wf, RunConfig(lockDuration = 6.seconds, maxConcurrency = 2)).await()
 
         assertEquals(1, executions.get())
         assertEquals(1, result.done)
