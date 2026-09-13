@@ -5,9 +5,9 @@ import kotlin.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
-enum class RunState { Scheduled, Running, Paused, Completed, Failed, Cancelled }
+enum class RunState { Scheduled, Running, Paused, Completed, Failed, Cancelled, Detached }
 
-private val TERMINAL_STATES = setOf(RunState.Completed, RunState.Failed, RunState.Cancelled)
+private val TERMINAL_STATES = setOf(RunState.Completed, RunState.Failed, RunState.Cancelled, RunState.Detached)
 
 data class FlowNode(
     val type: String,
@@ -42,10 +42,15 @@ interface Control {
     suspend fun pause(id: String): Boolean
     suspend fun resume(id: String): Boolean
     suspend fun cancel(id: String): Boolean
+    suspend fun detach(id: String): Boolean
 }
 
 interface ControllableBackend : Backend {
     val control: Control
+}
+
+interface EngineBackend : ControllableBackend {
+    suspend fun <W : WorkItem> attach(workflow: Workflow<W>, config: RunConfig = RunConfig()): RunHandle
 }
 
 class RunTracker(override val backendType: String, private val maxEntries: Int = 1000) : Control {
@@ -102,6 +107,8 @@ class RunTracker(override val backendType: String, private val maxEntries: Int =
     override suspend fun resume(id: String): Boolean = withControl(id) { it.resume() }
 
     override suspend fun cancel(id: String): Boolean = withControl(id) { it.cancel() }
+
+    override suspend fun detach(id: String): Boolean = withControl(id) { it.detach() }
 
     private suspend fun withControl(id: String, action: suspend (RunHandle) -> Unit): Boolean {
         val control = entries[id]?.control ?: return false

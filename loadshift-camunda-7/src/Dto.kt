@@ -1,6 +1,8 @@
 package loadshift.camunda7
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 
 @Serializable
 data class DeploymentDto(
@@ -28,6 +30,25 @@ data class StartInstanceResponse(
     val id: String,
     val definitionId: String,
     val businessKey: String? = null,
+)
+
+@Serializable
+data class ProcessInstanceDto(
+    val id: String,
+    val businessKey: String? = null,
+)
+
+@Serializable
+data class VariableInstanceQuery(
+    val variableName: String,
+    val processInstanceIdIn: List<String>,
+)
+
+@Serializable
+data class VariableInstanceDto(
+    val processInstanceId: String? = null,
+    val value: JsonElement = JsonNull,
+    val type: String? = null,
 )
 
 @Serializable
@@ -77,6 +98,7 @@ data class BpmnErrorRequest(
     val workerId: String,
     val errorCode: String,
     val errorMessage: String? = null,
+    val variables: Map<String, CamundaValue>? = null,
 )
 
 @Serializable

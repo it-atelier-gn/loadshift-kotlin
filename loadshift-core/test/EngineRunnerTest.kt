@@ -1,6 +1,7 @@
 package loadshift.core
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -8,11 +9,13 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -43,7 +46,11 @@ private class FakeDriver : EngineDriver {
     var heldFetch: CompletableDeferred<List<EngineJob>>? = null
     private val ids = AtomicInteger()
 
+    val roots = CopyOnWriteArrayList<RootInstance>()
+
     override fun pollGroups(jobTypes: List<String>): List<List<String>> = listOf(jobTypes)
+
+    override suspend fun activeRoots(processId: String): List<RootInstance> = roots.filter { finished[it.id] == null }
 
     override suspend fun startInstance(processId: String, variables: JsonObject, businessKey: String?): String {
         val id = "pi-${ids.incrementAndGet()}"
@@ -70,7 +77,7 @@ private class FakeDriver : EngineDriver {
         failures += Failure(job.id, retries, backoff)
     }
 
-    override suspend fun terminate(job: EngineJob, message: String) {
+    override suspend fun terminate(job: EngineJob, message: String, variables: JsonObject) {
         terminated += job.id
     }
 
@@ -90,7 +97,7 @@ private class FakeDriver : EngineDriver {
         finished[instanceId] = false
     }
 
-    override suspend fun correlate(message: String, runId: String, itemKey: String?): Boolean {
+    override suspend fun correlate(message: String, workflowKey: String, itemKey: String?): Boolean {
         correlationAttempts.incrementAndGet()
         return waiting.remove(message to itemKey)
     }
@@ -121,12 +128,14 @@ class EngineRunnerTest {
         workflow: Workflow<*>,
         config: RunConfig = RunConfig(),
         driver: FakeDriver = FakeDriver(),
+        attach: Boolean = false,
     ): Pair<EngineRunner, FakeDriver> {
         val runner = EngineRunner(
             run = EngineRun(workflow, config),
             driver = driver,
             rootProcessId = workflow.root.key,
             processIds = listOf(workflow.root.key),
+            attach = attach,
             pollInterval = 20.milliseconds,
             fetchWait = 20.milliseconds,
         ).begin()
@@ -313,6 +322,63 @@ class EngineRunnerTest {
         assertEquals(1, handle.await().done)
         assertEquals(listOf("stray"), driver.released.toList())
         assertTrue(driver.completed.isEmpty())
+    }
+
+    @Test
+    fun attachedRunWorksExistingInstancesUntilNoneRemain() = runBlocking {
+        val wf = flow("attached", "unused")
+        val driver = FakeDriver().apply {
+            roots += RootInstance("pi-old-1", "a")
+            roots += RootInstance("pi-old-2", "b")
+        }
+        val (handle, _) = launch(wf, driver = driver, attach = true)
+        eventually { handle.progress().seeded == 2L }
+
+        driver.jobs.trySend(
+            EngineJob("job-old-1", EngineNames.jobType(wf.key, "work"), "pi-old-1", JsonObject(mapOf("id" to JsonPrimitive("a"))), null),
+        )
+        eventually { driver.completed.size == 1 }
+        driver.finished["pi-old-1"] = true
+        driver.roots += RootInstance("pi-late", "c")
+        delay(100.milliseconds)
+        driver.finished["pi-old-2"] = true
+        eventually { handle.progress().seeded == 3L }
+        driver.finished["pi-late"] = true
+
+        assertEquals(3, handle.await().done)
+        assertTrue(driver.started.isEmpty())
+    }
+
+    @Test
+    fun attachRejectsCronStarts() {
+        assertFailsWith<IllegalArgumentException> {
+            launch(flow("attach-cron", "a"), RunConfig(start = Start.Cron("* * * * *")), attach = true)
+        }
+    }
+
+    @Test
+    fun detachWaitsForRunningTasksAndLeavesInstancesAlone() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val running = CompletableDeferred<Unit>()
+        val wf = flow("detach", "a") {
+            running.complete(Unit)
+            gate.await()
+        }
+        val (handle, driver) = launch(wf)
+        eventually { driver.started.size == 1 }
+        driver.enqueueWork(wf)
+        running.await()
+
+        val detaching = async { handle.detach() }
+        delay(150.milliseconds)
+        assertTrue(detaching.isActive)
+        gate.complete(Unit)
+        detaching.await()
+
+        assertEquals(RunState.Detached, handle.state())
+        assertEquals(listOf("job-pi-1"), driver.completed.toList())
+        assertTrue(driver.cancelled.isEmpty())
+        assertEquals(RunResult(done = 0, failed = 0, skipped = 0, deadLetters = emptyList()), handle.await())
     }
 
     @Test

@@ -15,12 +15,15 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.CoroutineContext
+import kotlin.time.Clock
 
 @EngineApi
 class EngineRun(
@@ -34,12 +37,19 @@ class EngineRun(
     private val failed = AtomicLong()
     private val skipped = AtomicLong()
     private val deadLetters = Collections.synchronizedList(mutableListOf<DeadLetter>())
-    private class Compensation(val topic: String, val key: String?, val action: suspend () -> Unit)
-
-    private val compensations = ConcurrentHashMap<String, MutableList<Compensation>>()
     private val terminated: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val globalLimiter = config.rateLimit?.let { RateLimiter(it) }
+    private val compensable = mutableListOf<TaskHandler>()
     private val handlers: Map<String, JobHandler> = buildMap { register(workflow.root, null, emptyList(), null) }
+    private val compensators: Map<String, TaskHandler> = compensable.associateBy { EngineNames.compensation(it.topic) }
+
+    init {
+        for ((variable, tasks) in compensable.groupBy { EngineNames.compensation(it.topic) }) {
+            require(tasks.size == 1) {
+                "topics ${tasks.joinToString { "'${it.topic}'" }} share the compensation variable '$variable'; rename one of them"
+            }
+        }
+    }
 
     val jobTypes: List<String> = handlers.keys.toList()
 
@@ -66,26 +76,28 @@ class EngineRun(
         return true
     }
 
+    fun recordAttached(count: Int) {
+        seeded.addAndGet(count.toLong())
+    }
+
     @Suppress("UNCHECKED_CAST")
     fun rootVariables(item: WorkItem): JsonObject {
         val codec = workflow.root.codec as WorkItemCodec<WorkItem>
         return JsonObject(
             codec.encode(item) + mapOf(
                 EngineNames.ITEM_KEY to JsonPrimitive(item.key.orEmpty()),
-                EngineNames.RUN_ID to JsonPrimitive(runId),
+                EngineNames.WORKFLOW to JsonPrimitive(workflow.key),
             ),
         )
     }
 
     suspend fun rootFinished(instanceId: String, itemKey: String?, completed: Boolean) {
-        compensations.remove(instanceId)
         if (terminated.remove(instanceId) || !completed) return
         done.incrementAndGet()
         if (itemKey != null) config.checkpoints?.markComplete(workflow.key, itemKey)
     }
 
     fun clearInstanceState() {
-        compensations.clear()
         terminated.clear()
     }
 
@@ -111,12 +123,11 @@ class EngineRun(
         }
         val key = runCatching { handler.key(handler.source(job.variables)) }.getOrNull()
         return when (config.onError) {
-            ErrorPolicy.DeadLetter -> terminate(job.instanceId, DeadLetter(key, handler.topic, message))
+            ErrorPolicy.DeadLetter -> deadLetter(job, DeadLetter(key, handler.topic, message))
             ErrorPolicy.Skip -> {
                 skipped.incrementAndGet()
                 terminated += job.instanceId
-                compensations.remove(job.instanceId)
-                JobOutcome.Terminate(message)
+                JobOutcome.Terminate(message, outcome(ErrorPolicy.Skip, handler.topic, message))
             }
             ErrorPolicy.Fail -> {
                 failed.incrementAndGet()
@@ -125,25 +136,49 @@ class EngineRun(
         }
     }
 
-    private suspend fun terminate(instanceId: String, letter: DeadLetter): JobOutcome.Terminate {
-        record(instanceId, letter)
-        return JobOutcome.Terminate(letter.error)
+    private suspend fun deadLetter(job: EngineJob, letter: DeadLetter): JobOutcome.Terminate {
+        record(job, letter)
+        return JobOutcome.Terminate(letter.error, outcome(ErrorPolicy.DeadLetter, letter.topic, letter.error))
     }
 
-    private suspend fun record(instanceId: String, letter: DeadLetter) {
+    private suspend fun record(job: EngineJob, letter: DeadLetter) {
         deadLetters += letter
-        terminated += instanceId
-        val pending = compensations.remove(instanceId) ?: return
-        for (compensation in synchronized(pending) { pending.toList() }.asReversed()) {
+        terminated += job.instanceId
+        compensate(job.variables)
+    }
+
+    private suspend fun compensate(variables: JsonObject) {
+        val pending = variables.mapNotNull { (name, value) ->
+            val handler = compensators[name] ?: return@mapNotNull null
+            val entry = value as? JsonObject ?: return@mapNotNull null
+            val snapshot = entry[SNAPSHOT_ITEM] as? JsonObject ?: return@mapNotNull null
+            val at = (entry[SNAPSHOT_AT] as? JsonPrimitive)?.longOrNull ?: 0L
+            PendingCompensation(handler, at, snapshot)
+        }.sortedWith(compareByDescending<PendingCompensation> { it.at }.thenByDescending { it.handler.order })
+        for (compensation in pending) {
             try {
-                compensation.action()
+                compensation.handler.compensate(compensation.snapshot)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                deadLetters += DeadLetter(compensation.key, EngineNames.compensate(compensation.topic), e.message ?: e.toString())
+                deadLetters += DeadLetter(
+                    compensation.handler.key(compensation.snapshot),
+                    EngineNames.compensate(compensation.handler.topic),
+                    e.message ?: e.toString(),
+                )
             }
         }
     }
+
+    private fun outcome(policy: ErrorPolicy, topic: String, error: String): JsonObject = buildJsonObject {
+        putJsonObject(EngineNames.OUTCOME) {
+            put("policy", policy.name)
+            put("topic", topic)
+            put("error", error)
+        }
+    }
+
+    private class PendingCompensation(val handler: TaskHandler, val at: Long, val snapshot: JsonObject)
 
     private fun MutableMap<String, JobHandler>.register(
         level: SubFlow<*>,
@@ -231,6 +266,9 @@ class EngineRun(
             }
         }
 
+        fun lineage(source: JsonObject): Map<String, kotlinx.serialization.json.JsonElement> =
+            source.filterKeys { it == EngineNames.ITEM_KEY || it == EngineNames.PARENTS }
+
         fun context(item: WorkItem, parents: List<WorkItem>, topic: String?): CoroutineContext {
             val path = parents.asReversed().map { it.key ?: "?" }
             val execution = ExecutionContext(runId, workflow.name, config.logSink, path, item.key, topic)
@@ -251,19 +289,32 @@ class EngineRun(
         parentCodecs: List<WorkItemCodec<WorkItem>>,
         private val levelLimit: Semaphore?,
     ) : JobHandler(step.task.topic, codec, itemVariable, parentCodecs, step.options.retry ?: config.retry) {
+        val order = compensable.size
         private val limiter = step.options.rateLimit?.let { RateLimiter(it) }
         private val timeout = step.options.timeout ?: retry.timeout
+
+        init {
+            if (step.compensation != null) compensable += this
+        }
 
         override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
             val source = source(variables)
             val item = codec.decode(source)
             val parents = parents(source)
             if (levelLimit == null) invoke(item, parents) else levelLimit.withPermit { invoke(item, parents) }
-            step.compensation?.let { compensate ->
-                compensations.computeIfAbsent(job.instanceId) { Collections.synchronizedList(mutableListOf()) }
-                    .add(Compensation(topic, item.key) { compensate(item) })
+            val written = write(source, item)
+            if (step.compensation == null) return JobOutcome.Complete(written)
+            val entry = buildJsonObject {
+                put(SNAPSHOT_AT, Clock.System.now().toEpochMilliseconds())
+                put(SNAPSHOT_ITEM, JsonObject(lineage(source) + codec.encode(item)))
             }
-            return JobOutcome.Complete(write(source, item))
+            return JobOutcome.Complete(JsonObject(written + (EngineNames.compensation(topic) to entry)))
+        }
+
+        suspend fun compensate(snapshot: JsonObject) {
+            val action = step.compensation ?: return
+            val item = codec.decode(snapshot)
+            withContext(context(item, parents(snapshot), null)) { action(item) }
         }
 
         private suspend fun invoke(item: WorkItem, parents: List<WorkItem>) {
@@ -303,7 +354,7 @@ class EngineRun(
                     EngineNames.loop(step.id),
                     "exceeded maxLoopIterations=${config.maxLoopIterations}",
                 )
-                return terminate(job.instanceId, letter)
+                return deadLetter(job, letter)
             }
             return complete(repeat = true, iterations = iterations + 1)
         }
@@ -323,8 +374,8 @@ class EngineRun(
     ) : JobHandler(EngineNames.timeout(step.id), codec, itemVariable, emptyList(), RetryPolicy.None) {
         override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
             val letter = DeadLetter(key(source(variables)), topic, "exceeded ${step.duration}")
-            record(job.instanceId, letter)
-            return JobOutcome.Complete(JsonObject(emptyMap()))
+            record(job, letter)
+            return JobOutcome.Complete(outcome(ErrorPolicy.DeadLetter, topic, letter.error))
         }
     }
 
@@ -375,5 +426,10 @@ class EngineRun(
             withContext(context(item, parents(source), null)) { step.onComplete(item, accumulator) }
             return JobOutcome.Complete(write(source, item))
         }
+    }
+
+    private companion object {
+        const val SNAPSHOT_AT = "at"
+        const val SNAPSHOT_ITEM = "item"
     }
 }

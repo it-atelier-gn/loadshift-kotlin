@@ -2,20 +2,22 @@ package loadshift.camunda8
 
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.engine.HttpClientEngine
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.forms.MultiPartFormDataContent
 import io.ktor.client.request.forms.formData
 import io.ktor.client.request.header
-import io.ktor.client.request.patch
-import io.ktor.client.request.post
+import io.ktor.client.request.request
 import io.ktor.client.request.setBody
+import io.ktor.client.request.url
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
@@ -28,10 +30,16 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
-class Camunda8Client(
-    base: String = "http://localhost:8080",
-    private val token: String? = null,
+class Camunda8Client internal constructor(
+    base: String,
+    private val auth: Camunda8Auth,
+    private val engine: HttpClientEngine,
 ) {
+    constructor(
+        base: String = "http://localhost:8080",
+        auth: Camunda8Auth = Camunda8Auth.None,
+    ) : this(base, auth, CIO.create())
+
     private val v2 = "$base/v2"
 
     private val json = Json {
@@ -40,13 +48,16 @@ class Camunda8Client(
         encodeDefaults = true
     }
 
-    private val http = HttpClient(CIO) {
+    private val http = HttpClient(engine) {
         install(ContentNegotiation) { json(json) }
     }
 
+    private val tokens = (auth as? Camunda8Auth.ClientCredentials)?.let { TokenCache(http, it) }
+
     suspend fun deploy(resources: List<Pair<String, ByteArray>>) {
-        val response = http.post("$v2/deployments") {
-            auth()
+        val response = execute {
+            method = HttpMethod.Post
+            url("$v2/deployments")
             setBody(
                 MultiPartFormDataContent(
                     formData {
@@ -92,8 +103,9 @@ class Camunda8Client(
     }
 
     suspend fun updateJob(jobKey: String, request: JobUpdateRequest) {
-        val response = http.patch("$v2/jobs/$jobKey") {
-            auth()
+        val response = execute {
+            method = HttpMethod.Patch
+            url("$v2/jobs/$jobKey")
             contentType(ContentType.Application.Json)
             setBody(request)
         }
@@ -113,6 +125,38 @@ class Camunda8Client(
         val response = postJson("$v2/process-instances/search", query)
         response.ensureSuccess("searchProcessInstances")
         return response.body<ProcessInstanceSearchResponse>().items
+    }
+
+    suspend fun activeInstances(processDefinitionId: String, after: String?, limit: Int): ProcessInstanceSearchResponse {
+        val query = buildJsonObject {
+            putJsonObject("filter") {
+                put("processDefinitionId", processDefinitionId)
+                put("state", "ACTIVE")
+            }
+            putJsonObject("page") {
+                put("limit", limit)
+                if (after != null) put("after", after)
+            }
+        }
+        val response = postJson("$v2/process-instances/search", query)
+        response.ensureSuccess("activeInstances")
+        return response.body()
+    }
+
+    suspend fun variables(name: String, processInstanceKeys: List<String>): List<VariableItem> {
+        if (processInstanceKeys.isEmpty()) return emptyList()
+        val query = buildJsonObject {
+            putJsonObject("filter") {
+                put("name", name)
+                putJsonObject("processInstanceKey") {
+                    putJsonArray("\$in") { processInstanceKeys.forEach { add(it) } }
+                }
+            }
+            putJsonObject("page") { put("limit", processInstanceKeys.size) }
+        }
+        val response = postJson("$v2/variables/search?truncateValues=false", query)
+        response.ensureSuccess("variables")
+        return response.body<VariableSearchResponse>().items
     }
 
     suspend fun cancelInstance(processInstanceKey: String) {
@@ -142,15 +186,37 @@ class Camunda8Client(
         return response.body<SearchResponse>().page.totalItems
     }
 
-    fun close() = http.close()
+    fun close() {
+        http.close()
+        engine.close()
+    }
 
-    private fun HttpRequestBuilder.auth() {
-        token?.let { header(HttpHeaders.Authorization, "Bearer $it") }
+    private suspend fun authorization(): String? = when (auth) {
+        Camunda8Auth.None -> null
+        is Camunda8Auth.Bearer -> "Bearer ${auth.token}"
+        is Camunda8Auth.ClientCredentials -> "Bearer ${checkNotNull(tokens).token()}"
+    }
+
+    private suspend fun execute(block: HttpRequestBuilder.() -> Unit): HttpResponse {
+        val first = authorization()
+        val response = http.request {
+            block()
+            first?.let { header(HttpHeaders.Authorization, it) }
+        }
+        val cache = tokens
+        if (cache == null || response.status != HttpStatusCode.Unauthorized) return response
+        cache.invalidate()
+        val refreshed = authorization()
+        return http.request {
+            block()
+            refreshed?.let { header(HttpHeaders.Authorization, it) }
+        }
     }
 
     private suspend inline fun <reified T> postJson(url: String, body: T): HttpResponse =
-        http.post(url) {
-            auth()
+        execute {
+            method = HttpMethod.Post
+            url(url)
             contentType(ContentType.Application.Json)
             setBody(body)
         }

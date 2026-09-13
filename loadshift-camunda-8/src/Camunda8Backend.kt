@@ -1,8 +1,8 @@
 package loadshift.camunda8
 
 import loadshift.core.BpmnCompiler
-import loadshift.core.ControllableBackend
 import loadshift.core.EngineApi
+import loadshift.core.EngineBackend
 import loadshift.core.EngineRun
 import loadshift.core.EngineRunner
 import loadshift.core.RunConfig
@@ -15,14 +15,20 @@ import java.io.ByteArrayOutputStream
 
 class Camunda8Backend(
     base: String = "http://localhost:8080",
-    token: String? = null,
-    private val client: Camunda8Client = Camunda8Client(base, token),
-) : ControllableBackend {
+    auth: Camunda8Auth = Camunda8Auth.None,
+    private val client: Camunda8Client = Camunda8Client(base, auth),
+) : EngineBackend {
 
     override val control = RunTracker("camunda8")
 
+    override suspend fun <W : WorkItem> run(workflow: Workflow<W>, config: RunConfig): RunHandle =
+        launch(workflow, config, attach = false)
+
+    override suspend fun <W : WorkItem> attach(workflow: Workflow<W>, config: RunConfig): RunHandle =
+        launch(workflow, config, attach = true)
+
     @OptIn(EngineApi::class)
-    override suspend fun <W : WorkItem> run(workflow: Workflow<W>, config: RunConfig): RunHandle {
+    private suspend fun launch(workflow: Workflow<*>, config: RunConfig, attach: Boolean): RunHandle {
         val engineRun = EngineRun(workflow, config)
         val processes = BpmnCompiler.compile(workflow)
         for (process in processes) {
@@ -42,6 +48,7 @@ class Camunda8Backend(
             driver = Camunda8Driver(client, "loadshift-${engineRun.runId}"),
             rootProcessId = workflow.root.key,
             processIds = processes.map { it.key },
+            attach = attach,
         ).begin()
         control.track(workflow, runner, runner)
         return runner

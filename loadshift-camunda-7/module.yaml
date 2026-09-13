@@ -21,3 +21,4 @@ dependencies:
 test-dependencies:
   - $libs.kotlinx.coroutines.test
   - $libs.testcontainers
+  - $libs.ktor.client.mock

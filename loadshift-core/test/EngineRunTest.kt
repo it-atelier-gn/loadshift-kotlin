@@ -48,6 +48,15 @@ class EngineRunTest {
     private fun job(type: String, variables: JsonObject, retries: Int? = null, instance: String = "pi-1") =
         EngineJob("job-$instance", type, instance, variables, retries)
 
+    private fun JsonObject.after(outcome: JobOutcome): JsonObject =
+        JsonObject(this + assertIs<JobOutcome.Complete>(outcome).variables)
+
+    private fun JobOutcome.recorded(field: String): String = when (this) {
+        is JobOutcome.Complete -> variables
+        is JobOutcome.Terminate -> variables
+        else -> error("outcome $this carries no variables")
+    }.getValue(EngineNames.OUTCOME).jsonObject.getValue(field).jsonPrimitive.content
+
     @Test
     fun jobTypesMatchTheCompiledServiceTasks() {
         val wf = workflow<EngineOrder>("shop") {
@@ -95,12 +104,12 @@ class EngineRunTest {
     }
 
     @Test
-    fun rootVariablesCarryItemKeyAndRunId() {
+    fun rootVariablesCarryItemKeyAndWorkflowKey() {
         val wf = workflow<EngineOrder>("root-vars") { input(emptyList()) }
-        val run = EngineRun(wf, RunConfig(), runId = "run-7")
+        val run = EngineRun(wf, RunConfig())
         val vars = run.rootVariables(EngineOrder("o-1"))
         assertEquals("o-1", vars.getValue(EngineNames.ITEM_KEY).jsonPrimitive.content)
-        assertEquals("run-7", vars.getValue(EngineNames.RUN_ID).jsonPrimitive.content)
+        assertEquals("root-vars", vars.getValue(EngineNames.WORKFLOW).jsonPrimitive.content)
     }
 
     @Test
@@ -158,16 +167,48 @@ class EngineRunTest {
             task("ship", retry = RetryPolicy.None) { error("no carrier") }
         }
         val run = EngineRun(wf, RunConfig())
-        val vars = run.rootVariables(EngineOrder("o-1"))
-        run.execute(job(run.type("reserve"), vars))
-        run.execute(job(run.type("charge"), vars))
+        var vars = run.rootVariables(EngineOrder("o-1"))
+        vars = vars.after(run.execute(job(run.type("reserve"), vars)))
+        vars = vars.after(run.execute(job(run.type("charge"), vars)))
 
-        assertIs<JobOutcome.Terminate>(run.execute(job(run.type("ship"), vars)))
+        val outcome = assertIs<JobOutcome.Terminate>(run.execute(job(run.type("ship"), vars)))
         assertEquals(listOf("release"), log.toList())
         assertEquals(
             listOf(DeadLetter("o-1", "ship", "no carrier"), DeadLetter("o-1", "compensate_charge", "refund unavailable")),
             run.deadLetters(),
         )
+        assertEquals("DeadLetter", outcome.recorded("policy"))
+        assertEquals("ship", outcome.recorded("topic"))
+        assertEquals("no carrier", outcome.recorded("error"))
+    }
+
+    @Test
+    fun compensationRunsFromSnapshotsWrittenByAnotherWorker() = runTest {
+        val refunds = Collections.synchronizedList(mutableListOf<String>())
+        fun flow() = workflow<EngineOrder>("durable-saga") {
+            input(emptyList())
+            task("charge") { it.total = 30 } compensate { refunds += "${it.id}:${it.total}" }
+            task("ship", retry = RetryPolicy.None) { error("no carrier") }
+        }
+        val first = EngineRun(flow(), RunConfig())
+        val vars = first.rootVariables(EngineOrder("o-1")).let { it.after(first.execute(job(first.type("charge"), it))) }
+
+        val second = EngineRun(flow(), RunConfig())
+        assertIs<JobOutcome.Terminate>(second.execute(job(second.type("ship"), vars)))
+
+        assertEquals(listOf("o-1:30"), refunds.toList())
+        assertEquals(listOf(DeadLetter("o-1", "ship", "no carrier")), second.deadLetters())
+    }
+
+    @Test
+    fun topicsSharingACompensationVariableAreRejected() {
+        val wf = workflow<EngineOrder>("clash") {
+            input(emptyList())
+            task("pay-out") { } compensate { }
+            task("pay_out") { } compensate { }
+        }
+        val error = assertFailsWith<IllegalArgumentException> { EngineRun(wf, RunConfig()) }
+        assertTrue("'pay-out'" in error.message.orEmpty() && "'pay_out'" in error.message.orEmpty())
     }
 
     @Test
@@ -179,10 +220,10 @@ class EngineRunTest {
             task("ship", retry = RetryPolicy.None) { error("no carrier") }
         }
         val run = EngineRun(wf, RunConfig(onError = ErrorPolicy.Skip))
-        val vars = run.rootVariables(EngineOrder("o-1"))
-        run.execute(job(run.type("reserve"), vars))
+        val vars = run.rootVariables(EngineOrder("o-1")).let { it.after(run.execute(job(run.type("reserve"), it))) }
 
-        assertIs<JobOutcome.Terminate>(run.execute(job(run.type("ship"), vars)))
+        val outcome = assertIs<JobOutcome.Terminate>(run.execute(job(run.type("ship"), vars)))
+        assertEquals("Skip", outcome.recorded("policy"))
         assertEquals(emptyList(), log.toList())
         assertEquals(emptyList(), run.deadLetters())
         assertEquals(1, run.progress().skipped)
@@ -381,7 +422,8 @@ class EngineRunTest {
         val run = EngineRun(wf, RunConfig())
         val type = run.generated("timeout_")
 
-        assertEquals(JobOutcome.Complete(JsonObject(emptyMap())), run.execute(job(type, run.rootVariables(EngineOrder("o-1")))))
+        val outcome = assertIs<JobOutcome.Complete>(run.execute(job(type, run.rootVariables(EngineOrder("o-1")))))
+        assertEquals("DeadLetter", outcome.recorded("policy"))
         assertEquals(listOf(DeadLetter("o-1", type.substringAfter('/'), "exceeded 5s")), run.deadLetters())
         run.rootFinished("pi-1", "o-1", completed = true)
         assertEquals(0, run.progress().done)

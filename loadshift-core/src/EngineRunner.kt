@@ -4,9 +4,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,12 +30,18 @@ class EngineRunner(
     private val driver: EngineDriver,
     private val rootProcessId: String,
     private val processIds: List<String>,
+    private val attach: Boolean = false,
     private val pollInterval: Duration = 500.milliseconds,
     private val fetchWait: Duration = 5.seconds,
 ) : RunHandle, RunInspector {
     private class Root(val key: String?)
 
     private val config = run.config
+
+    init {
+        require(!attach || config.start !is Start.Cron) { "an attached run cannot use Start.Cron" }
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val startSignal = CompletableDeferred<Unit>()
     private val completion = CompletableDeferred<RunResult>()
@@ -41,15 +49,18 @@ class EngineRunner(
     private val stopping = MutableStateFlow(false)
     private val workSlots = Semaphore(config.maxConcurrency)
     private val pendingRoots = ConcurrentHashMap<String, Root>()
+    private val finishedRoots: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val pendingSends: MutableSet<Pair<String, String>> = ConcurrentHashMap.newKeySet()
     private val broadcasts: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private val pollers = mutableListOf<Job>()
     private val stateLock = Any()
 
     @Volatile private var runState = if (config.start is Start.Now) RunState.Running else RunState.Scheduled
-    @Volatile private var cancelling = false
+    @Volatile private var ending: RunState? = null
+    private lateinit var lifecycle: Job
 
     fun begin(): EngineRunner {
-        scope.launch { lifecycle() }
+        lifecycle = scope.launch { runLifecycle() }
         return this
     }
 
@@ -69,10 +80,23 @@ class EngineRunner(
 
     override suspend fun cancel() {
         if (completion.isCompleted) return
-        cancelling = true
+        ending = RunState.Cancelled
         scope.cancel()
         withContext(NonCancellable) { cancelRoots() }
         finish(RunState.Cancelled)
+    }
+
+    override suspend fun detach() {
+        if (completion.isCompleted) return
+        ending = RunState.Detached
+        withContext(NonCancellable) {
+            stopping.value = true
+            lifecycle.cancelAndJoin()
+            synchronized(pollers) { pollers.toList() }.joinAll()
+            repeat(config.maxConcurrency) { workSlots.acquire() }
+        }
+        finish(RunState.Detached)
+        scope.cancel()
     }
 
     override suspend fun await(): RunResult = completion.await()
@@ -92,16 +116,9 @@ class EngineRunner(
 
     override fun deadLetters(): List<DeadLetter> = run.deadLetters()
 
-    override suspend fun engineActive(): Long? =
-        try {
-            driver.activeInstances(processIds)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            null
-        }
+    override suspend fun engineActive(): Long? = attempt { driver.activeInstances(processIds) }
 
-    private suspend fun lifecycle() {
+    private suspend fun runLifecycle() {
         try {
             when (val start = config.start) {
                 Start.Manual -> startSignal.await()
@@ -113,43 +130,56 @@ class EngineRunner(
             }
             if (!config.dryRun) work()
             finish(RunState.Completed)
+            scope.cancel()
         } catch (e: CancellationException) {
-            if (!cancelling) finish(RunState.Cancelled)
+            if (ending == null && finish(RunState.Cancelled)) scope.cancel()
         } catch (e: Throwable) {
             abort(e)
-        } finally {
-            scope.cancel()
         }
     }
 
-    private suspend fun work() = coroutineScope {
-        val pollers = if (run.jobTypes.isEmpty()) {
-            emptyList()
-        } else {
-            val groups = driver.pollGroups(run.jobTypes)
-            val wait = if (groups.size == 1) fetchWait else Duration.ZERO
-            groups.map { group -> launch { poll(group, wait) } }
-        }
+    private suspend fun work() {
+        startPollers()
         try {
-            val cron = config.start as? Start.Cron
-            do {
-                seed()
+            if (attach) {
                 drain()
-                run.clearInstanceState()
-                if (cron != null) CronSchedule.awaitNext(cron.expr, cron.zone)
-            } while (cron != null)
+            } else {
+                val cron = config.start as? Start.Cron
+                do {
+                    seed()
+                    drain()
+                    run.clearInstanceState()
+                    if (cron != null) CronSchedule.awaitNext(cron.expr, cron.zone)
+                } while (cron != null)
+            }
         } finally {
             stopping.value = true
-            withContext(NonCancellable) { pollers.joinAll() }
+            withContext(NonCancellable) { synchronized(pollers) { pollers.toList() }.joinAll() }
         }
+    }
+
+    private fun startPollers() {
+        if (run.jobTypes.isEmpty()) return
+        val groups = driver.pollGroups(run.jobTypes)
+        val wait = if (groups.size == 1) fetchWait else Duration.ZERO
+        synchronized(pollers) {
+            for (group in groups) pollers += scope.launch { poll(group, wait) }
+        }
+    }
+
+    private suspend fun adopt(): Boolean {
+        awaitRunning()
+        val roots = attempt { driver.activeRoots(rootProcessId) } ?: return true
+        val fresh = roots.count { it.id !in finishedRoots && pendingRoots.putIfAbsent(it.id, Root(it.itemKey)) == null }
+        run.recordAttached(fresh)
+        return pendingRoots.isNotEmpty()
     }
 
     private suspend fun seed() {
         val seen = if (config.dedupe) HashSet<String>() else null
         val starts = Semaphore(config.maxConcurrency)
         coroutineScope {
-            run.workflow.seed().collect { value ->
-                val item = value as WorkItem
+            run.workflow.seed().collect { item ->
                 awaitRunning()
                 if (!run.admit(item, seen)) return@collect
                 starts.acquire()
@@ -168,11 +198,12 @@ class EngineRunner(
     private suspend fun drain() {
         while (true) {
             deliverMessages()
-            if (pendingRoots.isEmpty()) return
+            if (pendingRoots.isEmpty() && (!attach || !adopt())) return
             delay(pollInterval)
             val finished = attempt { driver.finished(pendingRoots.keys.toList()) } ?: continue
             for ((id, completed) in finished) {
                 val root = pendingRoots.remove(id) ?: continue
+                finishedRoots += id
                 run.rootFinished(id, root.key, completed)
             }
         }
@@ -184,6 +215,10 @@ class EngineRunner(
             combine(paused, stopping) { isPaused, isStopping -> isStopping || !isPaused }.first { it }
             if (stopping.value) return
             workSlots.acquire()
+            if (stopping.value) {
+                workSlots.release()
+                return
+            }
             var slots = 1
             while (slots < MAX_BATCH && workSlots.tryAcquire()) slots++
             val jobs = try {
@@ -224,7 +259,7 @@ class EngineRunner(
     private suspend fun process(job: EngineJob) {
         val heartbeat = scope.launch {
             while (true) {
-                delay(config.lockDuration / 2)
+                delay(config.lockDuration / 3)
                 attempt { driver.extendLock(job, config.lockDuration) }
             }
         }
@@ -234,7 +269,7 @@ class EngineRunner(
                 is JobOutcome.Retry -> deliver {
                     driver.fail(job, outcome.retries, outcome.backoff, outcome.message, outcome.details)
                 }
-                is JobOutcome.Terminate -> deliver { driver.terminate(job, outcome.message) }
+                is JobOutcome.Terminate -> deliver { driver.terminate(job, outcome.message, outcome.variables) }
                 is JobOutcome.Abort -> {
                     val cause = outcome.cause
                     attempt { driver.fail(job, 0, Duration.ZERO, cause.message ?: cause.toString(), cause.stackTraceToString()) }
@@ -268,7 +303,7 @@ class EngineRunner(
     }
 
     private suspend fun correlate(message: String, key: String?): Boolean =
-        attempt { driver.correlate(message, run.runId, key) } ?: false
+        attempt { driver.correlate(message, run.workflow.key, key) } ?: false
 
     private suspend fun awaitRunning() {
         paused.first { !it }

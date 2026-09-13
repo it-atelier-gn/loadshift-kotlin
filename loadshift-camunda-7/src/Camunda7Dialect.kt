@@ -32,8 +32,8 @@ object Camunda7Dialect {
             )
             extensions.addChildElement(
                 model.newInstance(CamundaIn::class.java).apply {
-                    camundaSource = EngineNames.RUN_ID
-                    camundaTarget = EngineNames.RUN_ID
+                    camundaSource = EngineNames.WORKFLOW
+                    camundaTarget = EngineNames.WORKFLOW
                 },
             )
             extensions.addChildElement(

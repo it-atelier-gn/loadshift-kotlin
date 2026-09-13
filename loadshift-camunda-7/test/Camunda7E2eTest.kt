@@ -278,14 +278,44 @@ abstract class Camunda7Scenarios internal constructor(private val engine: Camund
             input(listOf(Customer("long")))
             task("slow") {
                 executions.incrementAndGet()
-                delay(6.seconds)
+                delay(7.seconds)
             }
         }
 
-        val result = Camunda7Backend(base).run(wf, RunConfig(lockDuration = 2.seconds, maxConcurrency = 2)).await()
+        val result = Camunda7Backend(base).run(wf, RunConfig(lockDuration = 3.seconds, maxConcurrency = 2)).await()
 
         assertEquals(1, executions.get())
         assertEquals(1, result.done)
+    }
+
+    @Test
+    fun detachedInstancesAreFinishedByAnAttachedWorker() = e2e { base ->
+        val charged = Collections.synchronizedList(mutableListOf<String>())
+        val refunded = Collections.synchronizedList(mutableListOf<String>())
+        val name = uniqueName("handover")
+        fun flow() = workflow<Customer>(name) {
+            input(listOf(Customer("ok"), Customer("broken")))
+            task("charge") { charged += it.id } compensate { refunded += it.id }
+            awaitMessage("ship")
+            task("ship", retry = RetryPolicy.None) { if (it.id == "broken") error("no carrier") }
+        }
+
+        val first = Camunda7Backend(base)
+        val original = first.run(flow())
+        eventually { charged.size == 2 }
+        original.detach()
+        assertEquals(RunState.Detached, first.control.runs().single().state)
+        assertEquals(2L, Camunda7Client(base).processInstanceCount(flow().key))
+
+        val second = Camunda7Backend(base)
+        val takeover = second.attach(flow())
+        takeover.send("ship", "ok")
+        takeover.send("ship", "broken")
+        val result = takeover.await()
+
+        assertEquals(RunResult(done = 1, failed = 0, skipped = 0, deadLetters = listOf(DeadLetter("broken", "ship", "no carrier"))), result)
+        assertEquals(listOf("broken"), refunded.toList())
+        assertEquals(2, second.control.runs().single().progress.seeded)
     }
 
     @Test

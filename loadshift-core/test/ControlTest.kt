@@ -83,12 +83,14 @@ class ControlTest {
         var paused = false
         var resumed = false
         var cancelled = false
+        var detached = false
         val control = object : RunHandle {
             override suspend fun start() { started = true }
             override fun progress() = Progress()
             override suspend fun pause() { paused = true }
             override suspend fun resume() { resumed = true }
             override suspend fun cancel() { cancelled = true }
+            override suspend fun detach() { detached = true }
             override suspend fun await() = RunResult(0, 0, 0, emptyList())
             override suspend fun send(message: String, key: String) {}
             override suspend fun broadcast(message: String) {}
@@ -99,15 +101,18 @@ class ControlTest {
         assertTrue(tracker.pause(id))
         assertTrue(tracker.resume(id))
         assertTrue(tracker.cancel(id))
+        assertTrue(tracker.detach(id))
         assertTrue(started)
         assertTrue(paused)
         assertTrue(resumed)
         assertTrue(cancelled)
+        assertTrue(detached)
 
         assertFalse(tracker.start("missing"))
         assertFalse(tracker.pause("missing"))
         assertFalse(tracker.resume("missing"))
         assertFalse(tracker.cancel("missing"))
+        assertFalse(tracker.detach("missing"))
     }
 
     @Test
@@ -123,6 +128,7 @@ class ControlTest {
         assertFalse(tracker.pause(id))
         assertFalse(tracker.resume(id))
         assertFalse(tracker.cancel(id))
+        assertFalse(tracker.detach(id))
     }
 
     @Test

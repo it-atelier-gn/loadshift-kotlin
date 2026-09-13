@@ -176,6 +176,8 @@ private class LocalRun<W : WorkItem>(
         finish(RunState.Cancelled)
     }
 
+    override suspend fun detach() = cancel()
+
     override suspend fun await(): RunResult = completion.await()
 
     override suspend fun send(message: String, key: String) {

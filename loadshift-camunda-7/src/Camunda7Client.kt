@@ -2,12 +2,15 @@ package loadshift.camunda7
 
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.engine.HttpClientEngine
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.delete
 import io.ktor.client.request.forms.MultiPartFormDataContent
 import io.ktor.client.request.forms.formData
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -22,18 +25,37 @@ import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import java.util.Base64
 
-class Camunda7Client(
-    private val base: String = "http://localhost:8080/engine-rest",
+class BasicCredentials(val username: String, val password: String) {
+    internal fun header(): String =
+        "Basic " + Base64.getEncoder().encodeToString("$username:$password".toByteArray(Charsets.UTF_8))
+
+    override fun toString(): String = "BasicCredentials(username=$username)"
+}
+
+class Camunda7Client internal constructor(
+    private val base: String,
+    credentials: BasicCredentials?,
+    private val engine: HttpClientEngine,
 ) {
+    constructor(
+        base: String = "http://localhost:8080/engine-rest",
+        credentials: BasicCredentials? = null,
+    ) : this(base, credentials, CIO.create())
+
     private val json = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
         encodeDefaults = true
     }
 
-    private val http = HttpClient(CIO) {
+    private val http = HttpClient(engine) {
         install(ContentNegotiation) { json(json) }
+        if (credentials != null) {
+            val authorization = credentials.header()
+            defaultRequest { header(HttpHeaders.Authorization, authorization) }
+        }
     }
 
     suspend fun deploy(name: String, resources: List<Pair<String, ByteArray>>): DeploymentDto {
@@ -69,6 +91,30 @@ class Camunda7Client(
     ): StartInstanceResponse {
         val response = postJson("$base/process-definition/key/$processDefinitionKey/start", StartInstanceRequest(variables, businessKey))
         response.ensureSuccess("start")
+        return response.body()
+    }
+
+    suspend fun processInstances(processDefinitionKey: String, firstResult: Int, maxResults: Int): List<ProcessInstanceDto> {
+        val response = http.get("$base/process-instance") {
+            parameter("processDefinitionKey", processDefinitionKey)
+            parameter("sortBy", "instanceId")
+            parameter("sortOrder", "asc")
+            parameter("firstResult", firstResult)
+            parameter("maxResults", maxResults)
+        }
+        response.ensureSuccess("list process instances")
+        return response.body()
+    }
+
+    suspend fun variableInstances(variableName: String, processInstanceIds: List<String>): List<VariableInstanceDto> {
+        if (processInstanceIds.isEmpty()) return emptyList()
+        val response = http.post("$base/variable-instance") {
+            parameter("maxResults", processInstanceIds.size)
+            parameter("deserializeValues", false)
+            contentType(ContentType.Application.Json)
+            setBody(VariableInstanceQuery(variableName, processInstanceIds))
+        }
+        response.ensureSuccess("variable query")
         return response.body()
     }
 
@@ -131,7 +177,10 @@ class Camunda7Client(
         return if (request.resultEnabled) response.body<JsonArray>().size else 1
     }
 
-    fun close() = http.close()
+    fun close() {
+        http.close()
+        engine.close()
+    }
 
     private suspend inline fun <reified T> postJson(url: String, body: T): HttpResponse =
         http.post(url) {

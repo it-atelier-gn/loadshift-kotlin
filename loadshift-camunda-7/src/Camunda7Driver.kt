@@ -1,10 +1,13 @@
 package loadshift.camunda7
 
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import loadshift.core.EngineApi
 import loadshift.core.EngineDriver
 import loadshift.core.EngineJob
 import loadshift.core.EngineNames
+import loadshift.core.RootInstance
 import kotlin.time.Duration
 
 @OptIn(EngineApi::class)
@@ -21,6 +24,27 @@ internal class Camunda7Driver(
             CamundaVariables.toCamunda(variables),
             businessKey?.takeIf { it.length <= MAX_BUSINESS_KEY },
         ).id
+
+    override suspend fun activeRoots(processId: String): List<RootInstance> {
+        val instances = buildList {
+            var first = 0
+            while (true) {
+                val page = client.processInstances(processId, first, PAGE_SIZE)
+                addAll(page)
+                if (page.size < PAGE_SIZE) break
+                first += PAGE_SIZE
+            }
+        }
+        val keys = instances.map { it.id }
+            .chunked(QUERY_CHUNK)
+            .flatMap { client.variableInstances(EngineNames.ITEM_KEY, it) }
+            .mapNotNull { variable ->
+                val instance = variable.processInstanceId ?: return@mapNotNull null
+                instance to (variable.value as? JsonPrimitive)?.contentOrNull
+            }
+            .toMap()
+        return instances.map { RootInstance(it.id, keys[it.id]?.takeIf { key -> key.isNotEmpty() }) }
+    }
 
     override suspend fun fetch(jobTypes: List<String>, maxJobs: Int, lock: Duration, wait: Duration): List<EngineJob> =
         client.fetchAndLock(
@@ -57,8 +81,16 @@ internal class Camunda7Driver(
         )
     }
 
-    override suspend fun terminate(job: EngineJob, message: String) {
-        client.bpmnError(job.id, BpmnErrorRequest(workerId, EngineNames.TERMINATE_ERROR, message.take(MAX_ERROR_MESSAGE)))
+    override suspend fun terminate(job: EngineJob, message: String, variables: JsonObject) {
+        client.bpmnError(
+            job.id,
+            BpmnErrorRequest(
+                workerId = workerId,
+                errorCode = EngineNames.TERMINATE_ERROR,
+                errorMessage = message.take(MAX_ERROR_MESSAGE),
+                variables = CamundaVariables.toCamunda(variables),
+            ),
+        )
     }
 
     override suspend fun extendLock(job: EngineJob, lock: Duration) {
@@ -78,9 +110,9 @@ internal class Camunda7Driver(
         client.deleteProcessInstance(instanceId)
     }
 
-    override suspend fun correlate(message: String, runId: String, itemKey: String?): Boolean {
+    override suspend fun correlate(message: String, workflowKey: String, itemKey: String?): Boolean {
         val keys = buildMap {
-            put(EngineNames.RUN_ID, CamundaVariables.encode(runId))
+            put(EngineNames.WORKFLOW, CamundaVariables.encode(workflowKey))
             if (itemKey != null) put(EngineNames.ITEM_KEY, CamundaVariables.encode(itemKey))
         }
         return client.correlateMessage(MessageRequest(message, keys, all = true, resultEnabled = true)) > 0
@@ -89,9 +121,10 @@ internal class Camunda7Driver(
     override suspend fun activeInstances(processIds: List<String>): Long =
         processIds.sumOf { client.processInstanceCount(it) }
 
-    private companion object {
+    internal companion object {
         const val MAX_BUSINESS_KEY = 255
         const val MAX_ERROR_MESSAGE = 666
         const val QUERY_CHUNK = 100
+        const val PAGE_SIZE = 500
     }
 }

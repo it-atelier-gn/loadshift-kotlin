@@ -731,4 +731,16 @@ class LocalBackendTest {
             result.deadLetters,
         )
     }
+
+    @Test
+    fun detachStopsALocalRunLikeCancel() = runTest {
+        val wf = workflow<Cust>("local-detach") {
+            input(listOf(Cust("x")))
+            task("t") { }
+        }
+        val handle = LocalBackend().run(wf, RunConfig(start = Start.Manual))
+        handle.detach()
+        assertEquals(RunState.Cancelled, (handle as RunInspector).state())
+        assertEquals(RunResult(done = 0, failed = 0, skipped = 0, deadLetters = emptyList()), handle.await())
+    }
 }

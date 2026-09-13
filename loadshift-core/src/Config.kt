@@ -105,6 +105,7 @@ interface RunHandle {
     suspend fun pause()
     suspend fun resume()
     suspend fun cancel()
+    suspend fun detach()
     suspend fun await(): RunResult
     suspend fun send(message: String, key: String)
     suspend fun broadcast(message: String)

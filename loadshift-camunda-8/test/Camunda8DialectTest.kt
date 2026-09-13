@@ -92,7 +92,7 @@ class Camunda8DialectTest {
         Camunda8Dialect.decorate(root.model, root.serviceTasks)
         val message = root.model.getModelElementsByType(Message::class.java).single()
         val subscription = message.extensionElements.domElement.childElements.single { it.localName == "subscription" }
-        assertEquals("=${EngineNames.RUN_ID} + \":\" + ${EngineNames.ITEM_KEY}", subscription.getAttribute("correlationKey"))
+        assertEquals("=${EngineNames.WORKFLOW} + \":\" + ${EngineNames.ITEM_KEY}", subscription.getAttribute("correlationKey"))
     }
 
     @Test

@@ -49,9 +49,9 @@ class Camunda7DialectTest {
 
         val call = root.model.getModelElementsByType(CallActivity::class.java).single()
         val inputs = call.extensionElements.elementsQuery.filterByType(CamundaIn::class.java).list()
-        assertEquals(setOf("f1_item", EngineNames.RUN_ID, EngineNames.ITEM_KEY), inputs.map { it.camundaTarget }.toSet())
+        assertEquals(setOf("f1_item", EngineNames.WORKFLOW, EngineNames.ITEM_KEY), inputs.map { it.camundaTarget }.toSet())
         assertEquals("f1_item", inputs.single { it.camundaTarget == "f1_item" }.camundaSource)
-        assertEquals(EngineNames.RUN_ID, inputs.single { it.camundaTarget == EngineNames.RUN_ID }.camundaSource)
+        assertEquals(EngineNames.WORKFLOW, inputs.single { it.camundaTarget == EngineNames.WORKFLOW }.camundaSource)
         assertEquals(
             "\${f1_item.prop('${EngineNames.ITEM_KEY}').stringValue()}",
             inputs.single { it.camundaTarget == EngineNames.ITEM_KEY }.camundaSourceExpression,

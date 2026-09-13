@@ -13,9 +13,13 @@ annotation class EngineApi
 
 object EngineNames {
     const val ITEM_KEY = "loadshiftKey"
-    const val RUN_ID = "loadshiftRun"
+    const val WORKFLOW = "loadshiftWorkflow"
     const val PARENTS = "loadshiftParents"
+    const val OUTCOME = "loadshiftOutcome"
+    const val COMPENSATION_PREFIX = "loadshiftCompensation_"
     const val TERMINATE_ERROR = "loadshift-terminate"
+
+    private val NON_IDENTIFIER = Regex("[^A-Za-z0-9_]")
 
     fun jobType(workflowKey: String, name: String): String = "$workflowKey/$name"
     fun decision(stepId: String): String = "decision_$stepId"
@@ -24,11 +28,12 @@ object EngineNames {
     fun timeout(stepId: String): String = "timeout_$stepId"
     fun loop(stepId: String): String = "loop_$stepId"
     fun compensate(topic: String): String = "compensate_$topic"
+    fun compensation(topic: String): String = COMPENSATION_PREFIX + topic.replace(NON_IDENTIFIER, "_")
     fun items(stepId: String): String = "${stepId}_items"
     fun item(stepId: String): String = "${stepId}_item"
     fun result(stepId: String): String = "${stepId}_result"
     fun iterations(stepId: String): String = "${stepId}_iterations"
-    fun correlationKey(runId: String, itemKey: String): String = "$runId:$itemKey"
+    fun correlationKey(workflowKey: String, itemKey: String): String = "$workflowKey:$itemKey"
 }
 
 @EngineApi
@@ -41,10 +46,13 @@ class EngineJob(
 )
 
 @EngineApi
+class RootInstance(val id: String, val itemKey: String?)
+
+@EngineApi
 sealed interface JobOutcome {
     data class Complete(val variables: JsonObject) : JobOutcome
     data class Retry(val retries: Int, val backoff: Duration, val message: String, val details: String) : JobOutcome
-    data class Terminate(val message: String) : JobOutcome
+    data class Terminate(val message: String, val variables: JsonObject) : JobOutcome
     data class Abort(val cause: Throwable) : JobOutcome
 }
 
@@ -52,14 +60,15 @@ sealed interface JobOutcome {
 interface EngineDriver {
     fun pollGroups(jobTypes: List<String>): List<List<String>>
     suspend fun startInstance(processId: String, variables: JsonObject, businessKey: String?): String
+    suspend fun activeRoots(processId: String): List<RootInstance>
     suspend fun fetch(jobTypes: List<String>, maxJobs: Int, lock: Duration, wait: Duration): List<EngineJob>
     suspend fun complete(job: EngineJob, variables: JsonObject)
     suspend fun fail(job: EngineJob, retries: Int, backoff: Duration, message: String, details: String)
-    suspend fun terminate(job: EngineJob, message: String)
+    suspend fun terminate(job: EngineJob, message: String, variables: JsonObject)
     suspend fun extendLock(job: EngineJob, lock: Duration)
     suspend fun release(job: EngineJob)
     suspend fun finished(instanceIds: List<String>): Map<String, Boolean>
     suspend fun cancel(instanceId: String)
-    suspend fun correlate(message: String, runId: String, itemKey: String?): Boolean
+    suspend fun correlate(message: String, workflowKey: String, itemKey: String?): Boolean
     suspend fun activeInstances(processIds: List<String>): Long
 }

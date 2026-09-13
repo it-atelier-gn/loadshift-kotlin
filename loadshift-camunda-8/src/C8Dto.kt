@@ -46,6 +46,7 @@ data class FailJobRequest(
 data class JobErrorRequest(
     val errorCode: String,
     val errorMessage: String? = null,
+    val variables: JsonObject? = null,
 )
 
 @Serializable
@@ -70,7 +71,22 @@ data class ProcessInstanceItem(
 )
 
 @Serializable
-data class ProcessInstanceSearchResponse(val items: List<ProcessInstanceItem> = emptyList())
+data class CursorPage(val endCursor: String? = null)
+
+@Serializable
+data class ProcessInstanceSearchResponse(
+    val items: List<ProcessInstanceItem> = emptyList(),
+    val page: CursorPage = CursorPage(),
+)
+
+@Serializable
+data class VariableItem(
+    val processInstanceKey: String,
+    val value: String? = null,
+)
+
+@Serializable
+data class VariableSearchResponse(val items: List<VariableItem> = emptyList())
 
 @Serializable
 data class MessageSubscriptionItem(val correlationKey: String? = null)

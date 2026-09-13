@@ -51,7 +51,7 @@ object Camunda8Dialect {
             val subscription = ensureExtensions(model, message).addExtensionElement(ZEEBE_NS, "subscription")
             subscription.domElement.setAttribute(
                 "correlationKey",
-                "=${EngineNames.RUN_ID} + \":\" + ${EngineNames.ITEM_KEY}",
+                "=${EngineNames.WORKFLOW} + \":\" + ${EngineNames.ITEM_KEY}",
             )
         }
         for (condition in model.getModelElementsByType(ConditionExpression::class.java)) {

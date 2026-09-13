@@ -1,10 +1,14 @@
 package loadshift.camunda8
 
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import loadshift.core.EngineApi
 import loadshift.core.EngineDriver
 import loadshift.core.EngineJob
 import loadshift.core.EngineNames
+import loadshift.core.RootInstance
 import kotlin.time.Duration
 
 @OptIn(EngineApi::class)
@@ -17,6 +21,25 @@ internal class Camunda8Driver(
 
     override suspend fun startInstance(processId: String, variables: JsonObject, businessKey: String?): String =
         client.createInstance(processId, variables).processInstanceKey
+
+    override suspend fun activeRoots(processId: String): List<RootInstance> {
+        val keys = buildList {
+            var cursor: String? = null
+            while (true) {
+                val page = client.activeInstances(processId, cursor, PAGE_SIZE)
+                page.items.mapTo(this) { it.processInstanceKey }
+                cursor = page.page.endCursor
+                if (page.items.isEmpty() || cursor == null) break
+            }
+        }.distinct()
+        val itemKeys = keys.chunked(QUERY_CHUNK)
+            .flatMap { client.variables(EngineNames.ITEM_KEY, it) }
+            .associate { variable ->
+                val decoded = variable.value?.let { (Json.parseToJsonElement(it) as? JsonPrimitive)?.contentOrNull }
+                variable.processInstanceKey to decoded
+            }
+        return keys.map { RootInstance(it, itemKeys[it]?.takeIf { key -> key.isNotEmpty() }) }
+    }
 
     override suspend fun fetch(jobTypes: List<String>, maxJobs: Int, lock: Duration, wait: Duration): List<EngineJob> =
         jobTypes.flatMap { type ->
@@ -47,8 +70,8 @@ internal class Camunda8Driver(
         client.failJob(job.id, FailJobRequest(retries, message, backoff.inWholeMilliseconds))
     }
 
-    override suspend fun terminate(job: EngineJob, message: String) {
-        client.throwError(job.id, JobErrorRequest(EngineNames.TERMINATE_ERROR, message))
+    override suspend fun terminate(job: EngineJob, message: String, variables: JsonObject) {
+        client.throwError(job.id, JobErrorRequest(EngineNames.TERMINATE_ERROR, message, variables))
     }
 
     override suspend fun extendLock(job: EngineJob, lock: Duration) {
@@ -69,9 +92,9 @@ internal class Camunda8Driver(
         client.cancelInstance(instanceId)
     }
 
-    override suspend fun correlate(message: String, runId: String, itemKey: String?): Boolean {
-        if (itemKey != null) return client.correlateMessage(message, EngineNames.correlationKey(runId, itemKey))
-        val prefix = EngineNames.correlationKey(runId, "")
+    override suspend fun correlate(message: String, workflowKey: String, itemKey: String?): Boolean {
+        if (itemKey != null) return client.correlateMessage(message, EngineNames.correlationKey(workflowKey, itemKey))
+        val prefix = EngineNames.correlationKey(workflowKey, "")
         val keys = client.messageSubscriptions(message)
             .mapNotNull { it.correlationKey }
             .filter { it.startsWith(prefix) }
@@ -88,5 +111,6 @@ internal class Camunda8Driver(
         const val NO_LONG_POLLING = -1L
         const val RELEASE_TIMEOUT_MILLIS = 1L
         const val QUERY_CHUNK = 100
+        const val PAGE_SIZE = 100
     }
 }
