@@ -1,10 +1,13 @@
 product: jvm/lib
 
-repositories:
-  - id: mavenLocal
-    url: mavenLocal
-    resolve: false
-    publish: true
+apply:
+  - ../templates/library.module-template.yaml
+
+settings:
+  kotlin:
+    serialization: json
+    freeCompilerArgs:
+      - -Xcontext-parameters
 
 dependencies:
   - ../loadshift-core
@@ -14,16 +17,6 @@ dependencies:
   - $libs.ktor.client.cio
   - $libs.ktor.client.content.negotiation
   - $libs.ktor.serialization.kotlinx.json
-
-settings:
-  kotlin:
-    serialization: json
-    freeCompilerArgs:
-      - -Xcontext-parameters
-  publishing:
-    enabled: true
-    group: io.github.it-atelier-gn
-    version: 0.5.0
 
 test-dependencies:
   - $libs.kotlinx.coroutines.test

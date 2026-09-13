@@ -1,10 +1,11 @@
 product: jvm/lib
 
-repositories:
-  - id: mavenLocal
-    url: mavenLocal
-    resolve: false
-    publish: true
+apply:
+  - ../templates/library.module-template.yaml
+
+settings:
+  kotlin:
+    serialization: json
 
 dependencies:
   - ../loadshift-core
@@ -15,14 +16,6 @@ dependencies:
   - $libs.ktor.server.cio
   - $libs.ktor.server.content.negotiation
   - $libs.ktor.serialization.kotlinx.json
-
-settings:
-  kotlin:
-    serialization: json
-  publishing:
-    enabled: true
-    group: io.github.it-atelier-gn
-    version: 0.5.0
 
 test-dependencies:
   - ../loadshift-local
