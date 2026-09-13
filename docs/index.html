@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>loadshift: a Kotlin DSL for durable execution</title>
-<meta name="description" content="loadshift-kotlin: describe a workflow once, run it in-process or durably on Camunda 7 / Camunda 8. Examples and reference.">
+<meta name="description" content="loadshift-kotlin: describe a workflow once, run it in-process or durably on Camunda 7, CIB seven or Camunda 8. Examples and reference.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -38,7 +38,7 @@
     <h1 class="reveal">SHIFT HEAVY<br>WORK<span class="accent">LOADS.</span></h1>
     <p class="hero-sub reveal">A Kotlin DSL for durable execution. Describe the flow once
     (fan-out, retries, rate limits, dead letters), then run it in-process for tests
-    or compile it to BPMN and run it durably on Camunda&nbsp;7 / Camunda&nbsp;8.</p>
+    or compile it to BPMN and run it durably on Camunda&nbsp;7, CIB&nbsp;seven or Camunda&nbsp;8.</p>
     <div class="hero-actions reveal">
       <a class="btn btn-amber" href="#examples">Read the examples</a>
       <a class="btn btn-ghost" href="https://github.com/it-atelier-gn/loadshift-kotlin">Source ↗</a>
@@ -98,12 +98,26 @@ cd loadshift-kotlin
 <pre><code class="lang-output">== Dry run plan ==
   cleanup
   flag-missing
+  cleanup
+  cleanup
+  cleanup
+  flag-missing
+  cleanup
+  cleanup
+  flag-missing
 == Execute on LocalBackend ==
+  flag-missing cust-2-b
+  cleanup cust-3-a &lt;cust-3@example.com&gt;
+  cleanup cust-2-a &lt;cust-2@example.com&gt;
   flag-missing cust-1-b
+  flag-missing cust-3-b
   cleanup cust-1-a &lt;cust-1@example.com&gt;
 done=3 failed=0 deadLetters=3
+  DLQ topic=cleanup error=invalid email for cust-2-c
+  DLQ topic=cleanup error=invalid email for cust-3-c
   DLQ topic=cleanup error=invalid email for cust-1-c</code></pre>
   </div>
+  <p class="note">Children run concurrently, so the order of the lines varies between runs.</p>
 
   <p>Or pull it into an existing project from Maven Central
   (<code>io.github.it-atelier-gn</code>, version <code>0.5.0</code>):</p>
@@ -123,6 +137,7 @@ done=3 failed=0 deadLetters=3
     implementation("io.github.it-atelier-gn:loadshift-camunda-8:0.5.0")
     implementation("io.github.it-atelier-gn:loadshift-web:0.5.0")
     implementation("io.github.it-atelier-gn:loadshift-sqlite:0.5.0")
+    implementation("io.github.it-atelier-gn:loadshift-otel:0.5.0")
 }</code></pre>
     <pre class="tab-panel" data-tab="groovy"><code class="lang-groovy">dependencies {
     implementation 'io.github.it-atelier-gn:loadshift-core:0.5.0'
@@ -131,6 +146,7 @@ done=3 failed=0 deadLetters=3
     implementation 'io.github.it-atelier-gn:loadshift-camunda-8:0.5.0'
     implementation 'io.github.it-atelier-gn:loadshift-web:0.5.0'
     implementation 'io.github.it-atelier-gn:loadshift-sqlite:0.5.0'
+    implementation 'io.github.it-atelier-gn:loadshift-otel:0.5.0'
 }</code></pre>
     <pre class="tab-panel" data-tab="maven"><code class="lang-xml">&lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
@@ -160,6 +176,11 @@ done=3 failed=0 deadLetters=3
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-sqlite&lt;/artifactId&gt;
+    &lt;version&gt;0.5.0&lt;/version&gt;
+&lt;/dependency&gt;
+&lt;dependency&gt;
+    &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
+    &lt;artifactId&gt;loadshift-otel&lt;/artifactId&gt;
     &lt;version&gt;0.5.0&lt;/version&gt;
 &lt;/dependency&gt;</code></pre>
   </div>
@@ -207,8 +228,10 @@ val vip = Customer("cust-1")</code></pre>
     task("welcome-mail") { sendWelcome(it) }
 }</code></pre>
   </div>
-  <p class="note">Topic names become BPMN external-task topics on Camunda, and trace
-  entries on the local backend, so keep them short and stable.</p>
+  <p class="note">On an engine, a task's topic becomes the job type
+  <code>&lt;workflow-key&gt;/&lt;topic&gt;</code>. Topics must be unique within a workflow. The workflow
+  key is the lowercased name with every character other than letters, digits, <code>_</code> and
+  <code>-</code> replaced by <code>-</code>; it must start with a letter or <code>_</code>.</p>
 </section>
 
 <section id="branching" class="block">
@@ -244,25 +267,30 @@ timeout(10.minutes) {
 awaitMessage("payment-confirmed")
 task("fulfil") { fulfil(it) }</code></pre>
   </div>
-  <p class="note">Runaway loops are cut off by <code>RunConfig(maxLoopIterations = …)</code>
-  and turned into dead letters. <code>wait</code> pauses the flow for a fixed duration —
-  a real timer catch event on Camunda, a suspending delay locally. <code>timeout</code> wraps a
-  block in an interrupting boundary timer (an embedded subprocess on Camunda); overruns become
-  dead letters.</p>
+  <p class="note">A loop that exceeds <code>RunConfig(maxLoopIterations = …)</code> dead-letters
+  the item. <code>wait</code> pauses the item for a fixed duration: a timer catch event on an engine,
+  a suspending delay in-process. <code>timeout</code> cancels its block when the duration passes and
+  dead-letters the item; on an engine the block is an embedded subprocess with an interrupting
+  boundary timer.</p>
   <p class="note"><code>awaitMessage</code> parks an item until an event arrives. The run handle delivers
-  it with <code>send(message, key)</code> (one item) or <code>broadcast(message)</code> (all waiters,
-  local). On Camunda, <code>send</code> correlates through the engine's message API — a catch event
-  keyed by item — and is the verified path on both Camunda 7 and 8.</p>
+  it with <code>send(message, key)</code> to the item with that key, or with <code>broadcast(message)</code>
+  to every waiting item, including items that reach the wait later. A <code>send</code> that arrives before
+  the item waits is delivered once it does. On an engine both reach waiting instances of the same workflow,
+  whichever run started them. Camunda&nbsp;8 correlates on the key
+  <code>&lt;workflow-key&gt;:&lt;item-key&gt;</code>; Camunda&nbsp;7 and CIB&nbsp;seven correlate on the
+  variables <code>loadshiftWorkflow</code> and <code>loadshiftKey</code>.</p>
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>Saga.kt</span><button class="copy" type="button">COPY</button></div>
 <pre><code class="lang-kotlin">task("charge") { charge(it) } compensate { refund(it) }
 task("reserve") { reserve(it) } compensate { release(it) }
-task("ship") { ship(it) }   // if this fails…
-// …release(it) then refund(it) run automatically, in reverse</code></pre>
+task("ship") { ship(it) }</code></pre>
   </div>
-  <p class="note">A failing step rolls back the completed steps before it: each <code>compensate</code>
-  block runs in reverse order, so a half-done item is undone instead of left inconsistent. Enforced at
-  runtime on the local backend and worker-side on Camunda 7 and 8.</p>
+  <p class="note">When <code>ship</code> dead-letters the item, <code>release</code> runs first and
+  <code>refund</code> second: compensations run in reverse order of the completed steps. A compensation
+  that throws adds a dead letter with the topic <code>compensate_&lt;topic&gt;</code>. On an engine, the
+  worker stores a snapshot of the item in the process variable
+  <code>loadshiftCompensation_&lt;topic&gt;</code> when the step completes, so the worker that
+  dead-letters the item runs the compensation even when another worker ran the step.</p>
 </section>
 
 <section id="fan-out" class="block">
@@ -387,9 +415,8 @@ val sync = workflow&lt;Customer&gt;("sync-all") {
   inside a <code>parallel</code> branch: a failing branch task is retried in full
   (e.g. all 3 attempts of the default policy) before the item is handed to the run's
   <code>ErrorPolicy</code>.</p>
-  <p>What happens when a task still fails is a run-level decision.
-  <code>ErrorPolicy.DeadLetter</code> records the failure and keeps going,
-  <code>Fail</code> aborts the run, <code>Skip</code> counts and continues.</p>
+  <p>What happens when a task still fails is a run-level decision, set with
+  <code>RunConfig.onError</code>.</p>
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>ErrorPolicy.kt</span><button class="copy" type="button">COPY</button></div>
 <pre><code class="lang-kotlin">val result = LocalBackend().run(
@@ -403,33 +430,63 @@ val sync = workflow&lt;Customer&gt;("sync-all") {
 
 result.deadLetters.forEach { println("${it.topic}: ${it.error}") }</code></pre>
   </div>
+  <table class="modtable">
+    <thead><tr><th>POLICY</th><th>ITEM</th><th>COMPENSATIONS</th><th>COUNTED AS</th></tr></thead>
+    <tbody>
+      <tr><td><code>DeadLetter</code></td><td>Ends; its parent continues</td><td>Run in reverse order</td><td>A dead letter</td></tr>
+      <tr><td><code>Skip</code></td><td>Ends; its parent continues</td><td>Not run</td><td><code>skipped</code></td></tr>
+      <tr><td><code>Fail</code></td><td>The run fails and its other items are cancelled</td><td>Not run</td><td><code>failed</code></td></tr>
+    </tbody>
+  </table>
+  <p class="note">On an engine, task bodies run at least once: the engine delivers a job again when the
+  worker stops before completing it or when the job's lock expires. Write task bodies so that running
+  them twice has the same effect as running them once. While a body runs, the worker extends the job's
+  lock every third of <code>RunConfig.lockDuration</code>.</p>
 </section>
 
 <section id="backends" class="block">
   <h2><span class="num">07</span>Backends</h2>
-  <p>The definition is backend-agnostic. <code>LocalBackend</code> interprets it
-  in-process, ideal for tests and development. The Camunda backends compile the
-  same definition to BPMN, deploy it, seed instances, and work the external-task
-  topics with your Kotlin task bodies.</p>
+  <p>The definition is backend-agnostic. <code>LocalBackend</code> interprets it in-process.
+  <code>Camunda7Backend</code>, for Camunda&nbsp;7 and CIB&nbsp;seven, and <code>Camunda8Backend</code>
+  compile the same definition to BPMN, deploy it, start one process instance per item and work the jobs
+  with your Kotlin task bodies.</p>
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>Backends.kt</span><button class="copy" type="button">COPY</button></div>
 <pre><code class="lang-kotlin">LocalBackend().dryRun(cleanup).forEach(::println)
 
 LocalBackend().run(cleanup).await()
 
-Camunda7Backend("http://localhost:8080/engine-rest").run(cleanup).await()
+Camunda7Backend(
+    "http://localhost:8080/engine-rest",
+    credentials = BasicCredentials("demo", "demo"),
+).run(cleanup).await()
 
-Camunda8Backend("http://localhost:8080", token = zeebeToken).run(cleanup).await()</code></pre>
+Camunda8Backend(
+    "https://camunda.example.com",
+    auth = Camunda8Auth.ClientCredentials(tokenUrl, clientId, clientSecret, audience = "zeebe-api"),
+).run(cleanup).await()</code></pre>
   </div>
-  <p class="note"><code>dryRun</code> walks the plan without executing task bodies and
-  returns the topics in visit order: cheap workflow shape tests.</p>
+  <p class="note"><code>LocalBackend.dryRun</code> walks the plan without executing task bodies and
+  returns the topics in visit order. On an engine, <code>RunConfig(dryRun = true)</code> compiles the
+  BPMN and deploys and starts nothing.</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>Handover.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">val handle = Camunda8Backend(base).run(cleanup)
+handle.detach()
+
+val takeover = Camunda8Backend(base).attach(cleanup)
+takeover.await()</code></pre>
+  </div>
+  <p class="note"><code>detach()</code> stops seeding and fetching, waits for running task bodies and
+  leaves the process instances on the engine. <code>attach(workflow)</code> works the active instances
+  of the workflow, including instances that appear while it runs, and finishes when none are left.</p>
 </section>
 
 <section id="run-control" class="block">
   <h2><span class="num">08</span>Run control</h2>
-  <p><code>run()</code> returns a <code>RunHandle</code>: live progress counters, pause,
-  cancel, and an awaitable result. <code>RunConfig.start</code> picks one of
-  <code>Start.Now</code>, <code>Start.Manual</code>, <code>Start.At</code>, or
+  <p><code>run()</code> returns a <code>RunHandle</code> with progress counters, pause, resume,
+  cancel, detach and an awaitable result. <code>RunConfig.start</code> picks one of
+  <code>Start.Now</code>, <code>Start.Manual</code>, <code>Start.At</code> or
   <code>Start.Cron</code>.</p>
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>RunControl.kt</span><button class="copy" type="button">COPY</button></div>
@@ -439,31 +496,30 @@ handle.start()
 println(handle.progress())
 
 handle.pause()
-handle.cancel()
+handle.resume()
 
 val result = handle.await()
 println("done=${result.done} failed=${result.failed} skipped=${result.skipped}")</code></pre>
   </div>
-  <p class="note"><code>Start.Manual</code> is uniform across backends: the run is
-  registered (process definitions deployed on Camunda, worker pool started) and then
-  waits for <code>handle.start()</code> before seeding via <code>input()</code>. If the
-  process that called <code>run()</code> isn't the one that should trigger it,
-  <code>loadshift-web</code>'s <code>ControlServer</code> exposes the same controls
-  over HTTP: <code>POST /api/runs/{id}/start</code>, <code>/pause</code>, and
-  <code>/cancel</code>, backed by <code>Control.start/pause/cancel</code> on the
-  tracked <code>RunHandle</code>.</p>
+  <p class="note">While a run is paused, tasks that have not started wait and running task bodies finish.
+  <code>cancel()</code> stops the run and, on an engine, cancels its process instances.
+  <code>Start.Manual</code> waits for <code>handle.start()</code>. <code>loadshift-web</code>'s
+  <code>ControlServer</code> offers the same controls over HTTP: <code>POST /api/runs/{id}/start</code>,
+  <code>/pause</code>, <code>/resume</code>, <code>/cancel</code> and <code>/detach</code>.</p>
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>ScheduledStart.kt</span><button class="copy" type="button">COPY</button></div>
 <pre><code class="lang-kotlin">LocalBackend().run(sync, RunConfig(start = Start.At(Clock.System.now() + 5.minutes)))
 
-LocalBackend().run(sync, RunConfig(start = Start.Cron("0 9 * * *")))</code></pre>
+LocalBackend().run(sync, RunConfig(start = Start.Cron("0 9 * * MON-FRI", TimeZone.of("Europe/Berlin"))))</code></pre>
   </div>
-  <p class="note"><code>Start.At</code> waits until the given instant, then seeds and runs
-  once. <code>Start.Cron</code> takes a standard 5-field cron expression
-  (minute hour day-of-month month day-of-week) and repeats indefinitely: on every tick it
-  calls <code>input()</code> again and runs that batch to completion before waiting for the
-  next tick. Because each tick re-reads <code>input()</code> (including paginated
-  sources), this works the same whether a tick seeds one item or millions.</p>
+  <p class="note"><code>Start.At</code> seeds once at the given instant. <code>Start.Cron</code> takes a
+  five-field expression (minute, hour, day of month, month, day of week) evaluated in the given zone, the
+  system zone by default. Fields accept <code>*</code>, <code>?</code>, lists, ranges, steps such as
+  <code>*/15</code> or <code>5/20</code>, and the names <code>JAN</code>–<code>DEC</code> and
+  <code>SUN</code>–<code>SAT</code>. When day of month and day of week are both restricted, a day matches
+  if either field matches. On every tick the run seeds <code>input()</code> again and runs that batch to
+  completion before it waits for the next tick. An invalid expression throws
+  <code>IllegalArgumentException</code> when <code>Start.Cron</code> is created.</p>
 </section>
 
 <section id="logging" class="block">
@@ -494,10 +550,11 @@ backend.run(workflow, RunConfig(logSink = sink)).await()</code></pre>
     <tbody>
       <tr><td><code>loadshift-core</code></td><td>Flow IR, the DSL, the <code>Backend</code> SPI, and the BPMN compiler with a deterministic diagram layout.</td></tr>
       <tr><td><code>loadshift-local</code></td><td>In-process interpreter (<code>LocalBackend</code>) for tests and development.</td></tr>
-      <tr><td><code>loadshift-camunda-7</code></td><td><code>Camunda7Backend</code>. BPMN + external tasks, driven over REST.</td></tr>
-      <tr><td><code>loadshift-camunda-8</code></td><td><code>Camunda8Backend</code>. Camunda 8 REST API with <code>zeebe:</code> extensions.</td></tr>
-      <tr><td><code>loadshift-web</code></td><td><code>ControlServer</code>. Embedded web console showing live runs of any backend.</td></tr>
-      <tr><td><code>loadshift-sqlite</code></td><td><code>SqliteLogSink</code>. Persists <code>log()</code> entries to a SQLite database.</td></tr>
+      <tr><td><code>loadshift-camunda-7</code></td><td><code>Camunda7Backend</code> for Camunda&nbsp;7 and CIB&nbsp;seven, working external tasks over the REST API.</td></tr>
+      <tr><td><code>loadshift-camunda-8</code></td><td><code>Camunda8Backend</code> for Camunda&nbsp;8, working jobs over the REST API.</td></tr>
+      <tr><td><code>loadshift-web</code></td><td><code>ControlServer</code>. Web console and JSON API for the runs of a backend, with optional basic authentication.</td></tr>
+      <tr><td><code>loadshift-sqlite</code></td><td><code>SqliteLogSink</code> for <code>log()</code> entries and <code>SqliteCheckpointStore</code> for checkpoints.</td></tr>
+      <tr><td><code>loadshift-otel</code></td><td><code>OtelTracer</code>, which emits an OpenTelemetry span per task.</td></tr>
       <tr><td><code>loadshift-demo</code></td><td>Runnable example on <code>LocalBackend</code>.</td></tr>
     </tbody>
   </table>
