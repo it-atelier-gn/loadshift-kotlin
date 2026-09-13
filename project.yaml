@@ -7,5 +7,6 @@ modules:
   - ./loadshift-otel
   - ./loadshift-sqlite
   - ./loadshift-web
+  - ./scripts/deps
   - ./scripts/engine
   - ./scripts/examples
