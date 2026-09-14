@@ -1,0 +1,47 @@
+name: Engine versions
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    name: ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: loadshift-camunda-7
+            suite: loadshift.camunda7.Camunda7E2eTest
+            variable: LOADSHIFT_C7_IMAGE
+            image: camunda/camunda-bpm-platform:run-7.23.0
+          - module: loadshift-camunda-7
+            suite: loadshift.camunda7.Camunda7E2eTest
+            variable: LOADSHIFT_C7_IMAGE
+            image: camunda/camunda-bpm-platform:run-7.24.0
+          - module: loadshift-camunda-7
+            suite: loadshift.camunda7.CibSevenE2eTest
+            variable: LOADSHIFT_CIB7_IMAGE
+            image: cibseven/cibseven:run-2.1.0
+          - module: loadshift-camunda-7
+            suite: loadshift.camunda7.CibSevenE2eTest
+            variable: LOADSHIFT_CIB7_IMAGE
+            image: cibseven/cibseven:run-2.2.0
+          - module: loadshift-camunda-8
+            suite: loadshift.camunda8.Camunda8E2eTest
+            variable: LOADSHIFT_C8_IMAGE
+            image: camunda/camunda:8.9.19
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Run end-to-end tests
+        run: |
+          chmod +x ./kotlin
+          env "${{ matrix.variable }}=${{ matrix.image }}" ./kotlin test -m "${{ matrix.module }}" --include-classes="${{ matrix.suite }}"
