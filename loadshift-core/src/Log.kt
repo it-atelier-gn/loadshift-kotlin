@@ -30,6 +30,42 @@ object NoopLogSink : LogSink {
     override suspend fun write(entry: LogEntry) {}
 }
 
+data class LogPage(val entries: List<LogEntry>, val nextCursor: String?)
+
+interface LogReader {
+    suspend fun list(runId: String, limit: Int = 100, after: String? = null): LogPage
+}
+
+class InMemoryLogSink(private val capacity: Int = DEFAULT_CAPACITY) : LogSink, LogReader {
+    private val entries = ArrayDeque<Pair<Long, LogEntry>>()
+    private var sequence = 0L
+
+    init {
+        require(capacity > 0) { "capacity must be positive, was $capacity" }
+    }
+
+    override suspend fun write(entry: LogEntry) {
+        synchronized(entries) {
+            entries.addLast(++sequence to entry)
+            while (entries.size > capacity) entries.removeFirst()
+        }
+    }
+
+    override suspend fun list(runId: String, limit: Int, after: String?): LogPage {
+        require(limit > 0) { "limit must be positive, was $limit" }
+        val position = after?.let { it.toLongOrNull() ?: throw IllegalArgumentException("invalid log cursor '$it'") }
+        val matching = synchronized(entries) {
+            entries.filter { (number, entry) -> entry.runId == runId && (position == null || number > position) }
+        }
+        val page = matching.take(limit)
+        return LogPage(page.map { it.second }, if (matching.size > limit) page.last().first.toString() else null)
+    }
+
+    companion object {
+        const val DEFAULT_CAPACITY = 10_000
+    }
+}
+
 class ExecutionContext(
     val runId: String,
     val workflowName: String,

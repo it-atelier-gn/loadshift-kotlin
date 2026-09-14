@@ -14,6 +14,11 @@ import loadshift.core.EngineNames
 import loadshift.core.ErrorPolicy
 import loadshift.core.InMemoryCheckpointStore
 import loadshift.core.InMemoryDeadLetterStore
+import loadshift.core.InMemoryLogSink
+import loadshift.core.log
+import kotlin.test.assertNotNull
+import loadshift.core.ItemState
+import loadshift.core.ItemStatus
 import loadshift.core.RunInspector
 import loadshift.core.RunResult
 import loadshift.core.RunState
@@ -37,6 +42,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -783,6 +789,278 @@ class LocalBackendTest {
 
         val topics = store.list(wf.key).records.map { it.deadLetter.topic to it.item["n"] }
         assertEquals(setOf("ship" to JsonPrimitive(7), "compensate_charge" to JsonPrimitive(7)), topics.toSet())
+    }
+
+    @Test
+    fun requeueRerunsARootItemAndRemovesItsRecord() = runTest {
+        val store = InMemoryDeadLetterStore()
+        val broken = AtomicBoolean(true)
+        val processed = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("requeue-root") {
+            input(listOf(Cust("a", 3), Cust("b", 4)))
+            task("check", retry = RetryPolicy.None) { c ->
+                if (c.id == "a" && broken.get()) error("temporarily broken")
+                processed += "${c.id}:${c.n}"
+            }
+        }
+        val backend = LocalBackend()
+        backend.run(wf, RunConfig(deadLetters = store)).await()
+        val records = store.list(wf.key).records
+        processed.clear()
+        broken.set(false)
+
+        val result = backend.requeue(wf, records, RunConfig(deadLetters = store)).await()
+
+        assertEquals(listOf("a:3"), processed.toList())
+        assertEquals(RunResult(done = 1, failed = 0, skipped = 0, deadLetters = emptyList()), result)
+        assertTrue(store.list(wf.key).records.isEmpty())
+    }
+
+    @Test
+    fun requeueRerunsAChildWithItsParentContext() = runTest {
+        val store = InMemoryDeadLetterStore()
+        val broken = AtomicBoolean(true)
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val parentRuns = AtomicInteger()
+        val wf = workflow<Cust>("requeue-child") {
+            input(listOf(Cust("p", 9)))
+            task("parent") { parentRuns.incrementAndGet() }
+            fanOut(expand = { c -> listOf(Kid("${c.id}-1"), Kid("${c.id}-2")) }, context = { it }) {
+                task("child", retry = RetryPolicy.None) { kid ->
+                    if (kid.label == "p-2" && broken.get()) error("child broken")
+                    seen += "${kid.label}:${context().id}:${context().n}"
+                }
+            }
+        }
+        val backend = LocalBackend()
+        backend.run(wf, RunConfig(deadLetters = store)).await()
+        val records = store.list(wf.key).records
+        assertEquals(listOf("p-2"), records.map { it.deadLetter.key })
+        seen.clear()
+        broken.set(false)
+
+        val result = backend.requeue(wf, records, RunConfig(deadLetters = store)).await()
+
+        assertEquals(listOf("p-2:p:9"), seen.toList())
+        assertEquals(1, parentRuns.get())
+        assertEquals(1, result.done)
+        assertTrue(store.list(wf.key).records.isEmpty())
+    }
+
+    @Test
+    fun requeuedItemThatFailsAgainIsRecordedAgain() = runTest {
+        val store = InMemoryDeadLetterStore()
+        val wf = workflow<Cust>("requeue-again") {
+            input(listOf(Cust("a")))
+            task("check", retry = RetryPolicy.None) { error("still broken") }
+        }
+        val backend = LocalBackend()
+        backend.run(wf, RunConfig(deadLetters = store)).await()
+        val original = store.list(wf.key).records.single()
+
+        val result = backend.requeue(wf, listOf(original), RunConfig(deadLetters = store)).await()
+
+        assertEquals(listOf(DeadLetter("a", "check", "still broken")), result.deadLetters)
+        val stored = store.list(wf.key).records.single()
+        assertTrue(stored.id != original.id)
+        assertEquals(original.deadLetter, stored.deadLetter)
+    }
+
+    @Test
+    fun itemStatusFollowsAnItemThroughItsTasks() = runTest {
+        val wf = workflow<Cust>("item-status") {
+            input(listOf(Cust("a")))
+            task("first") { }
+            awaitMessage("go")
+            task("second") { }
+        }
+        val handle = LocalBackend().run(wf)
+        eventually { runBlockingItem(handle, "a")?.topic == "first" }
+        assertEquals(ItemState.Running, handle.item("a")?.state)
+
+        handle.send("go", "a")
+        handle.await()
+
+        assertEquals(ItemStatus("a", ItemState.Done, null, emptyList()), handle.item("a"))
+        assertNull(handle.item("unknown"))
+    }
+
+    @Test
+    fun cancelItemStopsARunningItemWithoutStoppingTheRun() = runTest {
+        val compensated = AtomicBoolean(false)
+        val wf = workflow<Cust>("cancel-running") {
+            input(listOf(Cust("stuck"), Cust("fine")))
+            task("prepare") { } compensate { compensated.set(true) }
+            condition({ it.id == "stuck" }) { awaitMessage("never") }
+        }
+        val handle = LocalBackend().run(wf)
+        eventually { runBlockingItem(handle, "stuck")?.state == ItemState.Running && runBlockingItem(handle, "fine")?.state == ItemState.Done }
+
+        assertTrue(handle.cancelItem("stuck"))
+        val result = handle.await()
+
+        assertEquals(RunResult(done = 1, failed = 0, skipped = 0, deadLetters = emptyList(), cancelled = 1), result)
+        assertEquals(ItemState.Cancelled, handle.item("stuck")?.state)
+        assertFalse(handle.cancelItem("stuck"))
+        assertFalse(compensated.get())
+    }
+
+    @Test
+    fun cancelledWaitingItemNeverStarts() = runTest {
+        val processed = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("cancel-waiting") {
+            input(listOf(Cust("first"), Cust("second")))
+            task("work") { processed += it.id }
+            condition({ it.id == "first" }) { awaitMessage("go") }
+        }
+        val handle = LocalBackend().run(wf, RunConfig(maxConcurrency = 1))
+        eventually { runBlockingItem(handle, "second")?.state == ItemState.Waiting }
+
+        assertTrue(handle.cancelItem("second"))
+        handle.send("go", "first")
+        val result = handle.await()
+
+        assertEquals(listOf("first"), processed.toList())
+        assertEquals(1, result.cancelled)
+        assertEquals(ItemState.Cancelled, handle.item("second")?.state)
+    }
+
+    private fun runBlockingItem(handle: loadshift.core.RunHandle, key: String): ItemStatus? =
+        kotlinx.coroutines.runBlocking { handle.item(key) }
+
+    @Test
+    fun userTaskWaitsForCompletionAndAppliesTheForm() = kotlinx.coroutines.runBlocking {
+        val backend = LocalBackend()
+        val booked = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("approvals") {
+            input(listOf(Cust("a")))
+            userTask("approve", assignee = "ops", candidateGroups = listOf("reviewers")) { cust, form ->
+                cust.n = (form.getValue("amount") as kotlinx.serialization.json.JsonPrimitive).content.toInt()
+            }
+            task("book") { booked += "${it.id}:${it.n}" }
+        }
+        val handle = backend.run(wf)
+
+        val task = kotlinx.coroutines.withTimeout(5_000) {
+            var open = backend.userTasks(wf)
+            while (open.isEmpty()) {
+                delay(20)
+                open = backend.userTasks(wf)
+            }
+            open.single()
+        }
+
+        assertEquals(loadshift.core.UserTask(task.id, "approvals", "approve", "a", "ops", listOf("reviewers")), task)
+        assertFalse(backend.completeUserTask("unknown", kotlinx.serialization.json.JsonObject(emptyMap())))
+        val form = kotlinx.serialization.json.JsonObject(mapOf("amount" to kotlinx.serialization.json.JsonPrimitive(42)))
+        assertTrue(backend.completeUserTask(task.id, form))
+        assertEquals(1, handle.await().done)
+        assertEquals(listOf("a:42"), booked.toList())
+        assertTrue(backend.userTasks(wf).isEmpty())
+        assertFalse(backend.completeUserTask(task.id, form))
+    }
+
+    @Test
+    fun callRunsTheCalledWorkflowOnTheItemAndContinuesAfterItsDeadLetters() = runTest {
+        val store = InMemoryDeadLetterStore()
+        val shipped = Collections.synchronizedList(mutableListOf<String>())
+        val billing = workflow<Cust>("billing") {
+            input(emptyList())
+            task("invoice") { it.n += 10 }
+            task("archive", retry = RetryPolicy.None) { if (it.id == "b") error("archive down") }
+        }
+        val checkout = workflow<Cust>("checkout") {
+            input(listOf(Cust("a"), Cust("b")))
+            call(billing)
+            task("ship") { shipped += "${it.id}:${it.n}" }
+        }
+
+        val result = LocalBackend().run(checkout, RunConfig(deadLetters = store)).await()
+
+        assertEquals(setOf("a:10", "b:10"), shipped.toSet())
+        assertEquals(2, result.done)
+        assertEquals(listOf(loadshift.core.DeadLetter("b", "archive", "archive down")), result.deadLetters)
+        assertEquals("billing", store.list("billing").records.single().level)
+        assertTrue(store.list("checkout").records.isEmpty())
+    }
+
+    @Test
+    fun signalReleasesOnlyItemsThatAlreadyWaitForItInEveryRun() = kotlinx.coroutines.runBlocking {
+        val backend = LocalBackend()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val finished = Collections.synchronizedList(mutableListOf<String>())
+        val waiting = workflow<Cust>("signal-waiting") {
+            input(listOf(Cust("early")))
+            awaitSignal("released")
+            task("finish") { finished += it.id }
+        }
+        val late = workflow<Cust>("signal-late") {
+            input(listOf(Cust("late")))
+            task("gate") { gate.await() }
+            awaitSignal("released")
+            task("finish") { finished += it.id }
+        }
+        val first = backend.run(waiting)
+        val second = backend.run(late)
+
+        kotlinx.coroutines.withTimeout(5_000) {
+            while ("early" !in finished) {
+                backend.signal("released")
+                delay(20)
+            }
+        }
+        gate.complete(Unit)
+        delay(300)
+        assertEquals(listOf("early"), finished.toList())
+
+        kotlinx.coroutines.withTimeout(5_000) {
+            while ("late" !in finished) {
+                backend.signal("released")
+                delay(20)
+            }
+        }
+        assertEquals(1, first.await().done)
+        assertEquals(1, second.await().done)
+        backend.signal("released")
+    }
+
+    @Test
+    fun logEntriesAndDeadLetterRecordsShareTheRunIdOfTheSnapshot() = runTest {
+        val logs = InMemoryLogSink()
+        val store = InMemoryDeadLetterStore()
+        val backend = LocalBackend()
+        val wf = workflow<Cust>("drill-down") {
+            input(listOf(Cust("a")))
+            task("ship", retry = RetryPolicy.None) {
+                log("shipping")
+                error("no carrier")
+            }
+        }
+
+        backend.run(wf, RunConfig(logSink = logs, deadLetters = store)).await()
+
+        val runId = assertNotNull(backend.control.runs().single().runId)
+        assertEquals(listOf("shipping"), logs.list(runId).entries.map { it.message })
+        assertEquals(listOf("ship"), store.forRun(runId).records.map { it.deadLetter.topic })
+    }
+
+    @Test
+    fun maxInFlightBoundsUnfinishedTopLevelItems() = runTest {
+        val active = AtomicInteger()
+        val peak = AtomicInteger()
+        val wf = workflow<Cust>("in-flight") {
+            input((1..6).map { Cust("c$it") })
+            task("work") {
+                peak.accumulateAndGet(active.incrementAndGet(), ::maxOf)
+                delay(20)
+                active.decrementAndGet()
+            }
+        }
+
+        val result = LocalBackend().run(wf, RunConfig(maxConcurrency = 8, maxInFlight = 2)).await()
+
+        assertEquals(6, result.done)
+        assertEquals(2, peak.get())
     }
 
     @Test

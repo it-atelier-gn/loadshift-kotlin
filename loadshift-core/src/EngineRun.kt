@@ -8,6 +8,8 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -21,9 +23,9 @@ import kotlinx.serialization.json.putJsonObject
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.Clock
+import kotlin.time.TimeSource
 
 @EngineApi
 class EngineRun(
@@ -31,53 +33,69 @@ class EngineRun(
     val config: RunConfig,
     val runId: String = UUID.randomUUID().toString(),
 ) {
-    private val seeded = AtomicLong()
-    private val expanded = AtomicLong()
-    private val done = AtomicLong()
-    private val failed = AtomicLong()
-    private val skipped = AtomicLong()
+    private val counters = RunMetrics(config.metrics, workflow.key)
     private val deadLetters = Collections.synchronizedList(mutableListOf<DeadLetter>())
-    private val terminated: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private val terminated = ConcurrentHashMap<String, ItemState>()
     private val globalLimiter = config.rateLimit?.let { RateLimiter(it) }
+    private val levelKeys = mutableMapOf<Pair<String, String?>, String>()
     private val compensable = mutableListOf<TaskHandler>()
-    private val handlers: Map<String, JobHandler> = buildMap { register(workflow.root, null, emptyList(), null) }
-    private val compensators: Map<String, TaskHandler> = compensable.associateBy { EngineNames.compensation(it.topic) }
+    private val called = workflow.calledWorkflows()
+    private val handlers: Map<String, JobHandler> = buildMap {
+        for (owner in listOf(workflow) + called) register(owner, owner.root, null, emptyList(), null)
+    }
+    private val compensators: Map<Pair<String, String>, TaskHandler> =
+        compensable.associateBy { it.owner.key to EngineNames.compensation(it.topic) }
 
     init {
-        for ((variable, tasks) in compensable.groupBy { EngineNames.compensation(it.topic) }) {
+        for ((variable, tasks) in compensable.groupBy { it.owner.key to EngineNames.compensation(it.topic) }) {
             require(tasks.size == 1) {
-                "topics ${tasks.joinToString { "'${it.topic}'" }} share the compensation variable '$variable'; rename one of them"
+                "topics ${tasks.joinToString { "'${it.topic}'" }} of workflow '${variable.first}' share the compensation " +
+                    "variable '${variable.second}'; rename one of them"
             }
         }
     }
 
     val jobTypes: List<String> = handlers.keys.toList()
 
+    val correlationKeys: List<String> = listOf(workflow.key) + called.map { it.key }
+
     fun maxAttempts(jobType: String): Int =
         requireNotNull(handlers[jobType]) { "unknown job type '$jobType'" }.retry.maxAttempts
 
-    fun progress(): Progress = Progress(seeded.get(), expanded.get(), done.get(), failed.get(), skipped.get())
+    fun progress(): Progress = counters.progress()
 
     fun deadLetters(): List<DeadLetter> = synchronized(deadLetters) { deadLetters.toList() }
 
-    fun result(): RunResult = RunResult(done.get(), failed.get(), skipped.get(), deadLetters())
+    fun result(): RunResult = counters.result(deadLetters())
+
+    fun recordCancelled() {
+        counters.cancelled()
+    }
+
+    fun recordSkipped() {
+        counters.skipped()
+    }
 
     suspend fun admit(item: WorkItem, seen: MutableSet<String>?): Boolean {
         val key = item.key
         if (key != null && seen != null && !seen.add(key)) {
-            skipped.incrementAndGet()
+            counters.skipped()
             return false
         }
         if (key != null && config.resume && config.checkpoints?.isComplete(workflow.key, key) == true) {
-            skipped.incrementAndGet()
+            counters.skipped()
             return false
         }
-        seeded.incrementAndGet()
+        counters.seeded()
         return true
     }
 
+    fun recordLockExtension(job: EngineJob, success: Boolean) {
+        counters.lockExtension(handlers[job.type]?.topic ?: job.type, success)
+    }
+
     fun recordAttached(count: Int) {
-        seeded.addAndGet(count.toLong())
+        counters.seeded(count.toLong())
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -91,10 +109,12 @@ class EngineRun(
         )
     }
 
-    suspend fun rootFinished(instanceId: String, itemKey: String?, completed: Boolean) {
-        if (terminated.remove(instanceId) || !completed) return
-        done.incrementAndGet()
+    suspend fun rootFinished(instanceId: String, itemKey: String?, completed: Boolean): ItemState {
+        terminated.remove(instanceId)?.let { return it }
+        if (!completed) return ItemState.Cancelled
+        counters.done()
         if (itemKey != null) config.checkpoints?.markComplete(workflow.key, itemKey)
+        return ItemState.Done
     }
 
     fun clearInstanceState() {
@@ -119,53 +139,87 @@ class EngineRun(
         val message = error.message ?: error.toString()
         if (remaining > 1 && policy.retryOn(error)) {
             val attempt = (policy.maxAttempts - remaining + 1).coerceAtLeast(1)
+            counters.retry(handler.topic)
             return JobOutcome.Retry(remaining - 1, policy.backoff(attempt), message, error.stackTraceToString())
         }
         val key = runCatching { handler.key(handler.source(job.variables)) }.getOrNull()
         return when (config.onError) {
-            ErrorPolicy.DeadLetter -> deadLetter(job, DeadLetter(key, handler.topic, message))
+            ErrorPolicy.DeadLetter -> deadLetter(handler, job, DeadLetter(key, handler.topic, message))
             ErrorPolicy.Skip -> {
-                skipped.incrementAndGet()
-                terminated += job.instanceId
+                counters.skipped()
+                terminated[job.instanceId] = ItemState.Skipped
                 JobOutcome.Terminate(message, outcome(ErrorPolicy.Skip, handler.topic, message))
             }
             ErrorPolicy.Fail -> {
-                failed.incrementAndGet()
+                counters.failed()
                 JobOutcome.Abort(error)
             }
         }
     }
 
-    private suspend fun deadLetter(job: EngineJob, letter: DeadLetter): JobOutcome.Terminate {
-        record(job, letter)
+    private suspend fun deadLetter(handler: JobHandler, job: EngineJob, letter: DeadLetter): JobOutcome.Terminate {
+        record(handler, job, letter)
         return JobOutcome.Terminate(letter.error, outcome(ErrorPolicy.DeadLetter, letter.topic, letter.error))
     }
 
-    private suspend fun record(job: EngineJob, letter: DeadLetter) {
+    private suspend fun record(handler: JobHandler, job: EngineJob, letter: DeadLetter) {
         deadLetters += letter
-        terminated += job.instanceId
+        counters.deadLetter(letter.topic)
+        terminated[job.instanceId] = ItemState.DeadLettered
+        store(handler, letter, handler.snapshot(job.variables))
         compensate(job.variables)
     }
 
+    private suspend fun store(handler: JobHandler, letter: DeadLetter, snapshot: JsonObject?) {
+        val store = config.deadLetters ?: return
+        store.record(
+            DeadLetterRecord(
+                id = UUID.randomUUID().toString(),
+                workflowKey = handler.owner.key,
+                level = levelKeys.getValue(handler.owner.key to handler.itemVariable),
+                itemVariable = handler.itemVariable,
+                deadLetter = letter,
+                item = snapshot ?: JsonObject(emptyMap()),
+                recordedAt = Clock.System.now(),
+                runId = runId,
+            ),
+        )
+    }
+
+    fun requeueVariables(record: DeadLetterRecord): JsonObject {
+        val workflowEntry = EngineNames.WORKFLOW to JsonPrimitive(workflow.key)
+        val itemVariable = record.itemVariable ?: return JsonObject(record.item + workflowEntry)
+        val key = record.item[EngineNames.ITEM_KEY] ?: JsonPrimitive("")
+        return JsonObject(mapOf(itemVariable to record.item, EngineNames.ITEM_KEY to key, workflowEntry))
+    }
+
     private suspend fun compensate(variables: JsonObject) {
-        val pending = variables.mapNotNull { (name, value) ->
-            val handler = compensators[name] ?: return@mapNotNull null
-            val entry = value as? JsonObject ?: return@mapNotNull null
-            val snapshot = entry[SNAPSHOT_ITEM] as? JsonObject ?: return@mapNotNull null
-            val at = (entry[SNAPSHOT_AT] as? JsonPrimitive)?.longOrNull ?: 0L
-            PendingCompensation(handler, at, snapshot)
-        }.sortedWith(compareByDescending<PendingCompensation> { it.at }.thenByDescending { it.handler.order })
+        val owner = (variables[EngineNames.WORKFLOW] as? JsonPrimitive)?.contentOrNull ?: workflow.key
+        val pending = variables.flatMap { (name, value) ->
+            val handler = compensators[owner to name] ?: return@flatMap emptyList()
+            snapshots(value).mapIndexedNotNull { index, element ->
+                val entry = element as? JsonObject ?: return@mapIndexedNotNull null
+                val snapshot = entry[SNAPSHOT_ITEM] as? JsonObject ?: return@mapIndexedNotNull null
+                val at = (entry[SNAPSHOT_AT] as? JsonPrimitive)?.longOrNull ?: 0L
+                PendingCompensation(handler, at, index, snapshot)
+            }
+        }.sortedWith(
+            compareByDescending<PendingCompensation> { it.at }.thenByDescending { it.handler.order }.thenByDescending { it.index },
+        )
         for (compensation in pending) {
             try {
                 compensation.handler.compensate(compensation.snapshot)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                deadLetters += DeadLetter(
+                val letter = DeadLetter(
                     compensation.handler.key(compensation.snapshot),
                     EngineNames.compensate(compensation.handler.topic),
                     e.message ?: e.toString(),
                 )
+                deadLetters += letter
+                counters.deadLetter(letter.topic)
+                store(compensation.handler, letter, compensation.snapshot)
             }
         }
     }
@@ -178,20 +232,34 @@ class EngineRun(
         }
     }
 
-    private class PendingCompensation(val handler: TaskHandler, val at: Long, val snapshot: JsonObject)
+    private class PendingCompensation(val handler: TaskHandler, val at: Long, val index: Int, val snapshot: JsonObject)
+
+    private fun snapshots(value: JsonElement?): List<JsonElement> = when (value) {
+        is JsonArray -> value
+        is JsonObject -> listOf(value)
+        is JsonPrimitive -> value.contentOrNull
+            ?.let { runCatching { Json.parseToJsonElement(it) }.getOrNull() }
+            ?.takeIf { it !is JsonPrimitive }
+            ?.let(::snapshots)
+            .orEmpty()
+        else -> emptyList()
+    }
 
     private fun MutableMap<String, JobHandler>.register(
+        owner: Workflow<*>,
         level: SubFlow<*>,
         itemVariable: String?,
         parents: List<WorkItemCodec<WorkItem>>,
         limit: Semaphore?,
     ) {
+        levelKeys[owner.key to itemVariable] = level.key
         @Suppress("UNCHECKED_CAST")
-        collect(level.step, level.codec as WorkItemCodec<WorkItem>, itemVariable, parents, limit)
+        collect(owner, level.step, level.codec as WorkItemCodec<WorkItem>, itemVariable, parents, limit)
     }
 
     @Suppress("UNCHECKED_CAST")
     private fun MutableMap<String, JobHandler>.collect(
+        owner: Workflow<*>,
         step: Step<*>,
         codec: WorkItemCodec<WorkItem>,
         itemVariable: String?,
@@ -199,55 +267,66 @@ class EngineRun(
         limit: Semaphore?,
     ) {
         fun add(handler: JobHandler) {
-            val type = EngineNames.jobType(workflow.key, handler.topic)
+            val type = EngineNames.jobType(owner.key, handler.topic)
             check(put(type, handler) == null) { "job type '$type' is registered twice" }
         }
 
-        fun descend(child: Step<*>) = collect(child, codec, itemVariable, parents, limit)
+        fun descend(child: Step<*>) = collect(owner, child, codec, itemVariable, parents, limit)
 
         when (step) {
             is Sequence<*> -> step.steps.forEach(::descend)
-            is Execute<*> -> add(TaskHandler(step as Execute<WorkItem>, codec, itemVariable, parents, limit))
+            is Execute<*> -> add(TaskHandler(owner, step as Execute<WorkItem>, codec, itemVariable, parents, limit))
             is Conditional<*> -> {
-                add(ConditionHandler(step as Conditional<WorkItem>, codec, itemVariable))
+                add(ConditionHandler(owner, step as Conditional<WorkItem>, codec, itemVariable))
                 descend(step.onTrue)
                 step.onFalse?.let(::descend)
             }
             is Loop<*> -> {
-                add(LoopHandler(step as Loop<WorkItem>, codec, itemVariable))
+                add(LoopHandler(owner, step as Loop<WorkItem>, codec, itemVariable))
                 descend(step.body)
             }
             is Parallel<*> -> step.branches.forEach(::descend)
             is Timeout<*> -> {
-                add(TimeoutHandler(step as Timeout<WorkItem>, codec, itemVariable))
+                add(TimeoutHandler(owner, step as Timeout<WorkItem>, codec, itemVariable))
                 descend(step.body)
             }
             is FanOut<*, *> -> {
                 val fan = step as FanOut<WorkItem, WorkItem>
-                add(ExpandHandler(fan.id, fan.expand, fan.childCodec, codec, itemVariable, parents))
-                register(fan.body, EngineNames.item(fan.id), listOf(codec) + parents, fan.concurrency?.let { Semaphore(it) })
+                add(ExpandHandler(owner, fan.id, fan.expand, fan.childCodec, codec, itemVariable, parents))
+                register(owner, fan.body, EngineNames.item(fan.id), listOf(codec) + parents, fan.concurrency?.let { Semaphore(it) })
             }
             is FanIn<*, *, *> -> {
                 val fan = step as FanIn<WorkItem, WorkItem, Any?>
-                add(ExpandHandler(fan.id, fan.expand, fan.childCodec, codec, itemVariable, parents))
-                add(ReduceHandler(fan, codec, itemVariable, parents))
-                register(fan.body, EngineNames.item(fan.id), listOf(codec) + parents, fan.concurrency?.let { Semaphore(it) })
+                add(ExpandHandler(owner, fan.id, fan.expand, fan.childCodec, codec, itemVariable, parents))
+                add(ReduceHandler(owner, fan, codec, itemVariable, parents))
+                register(owner, fan.body, EngineNames.item(fan.id), listOf(codec) + parents, fan.concurrency?.let { Semaphore(it) })
             }
-            is Wait<*>, is AwaitMessage<*> -> Unit
+            is HumanTask<*> -> add(FormHandler(owner, step as HumanTask<WorkItem>, codec, itemVariable, parents))
+            is Call<*> -> {
+                add(CallHandler(owner, step.id, codec, itemVariable, parents))
+                add(ReturnHandler(owner, step.id, codec, itemVariable, parents))
+            }
+            is Wait<*>, is AwaitMessage<*>, is AwaitSignal<*> -> Unit
         }
     }
 
     private abstract inner class JobHandler(
+        val owner: Workflow<*>,
         val topic: String,
         val codec: WorkItemCodec<WorkItem>,
-        private val itemVariable: String?,
+        val itemVariable: String?,
         private val parentCodecs: List<WorkItemCodec<WorkItem>>,
         val retry: RetryPolicy,
     ) {
         abstract suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome
 
+        fun snapshot(variables: JsonObject): JsonObject? = runCatching {
+            val source = source(variables)
+            JsonObject(lineage(source) + codec.encode(codec.decode(source)))
+        }.getOrNull()
+
         fun source(variables: JsonObject): JsonObject {
-            val name = itemVariable ?: return variables
+            val name = itemVariable ?: return variables[EngineNames.CALL_ITEM] as? JsonObject ?: variables
             return variables[name] as? JsonObject ?: error("variable '$name' is missing or not an object")
         }
 
@@ -266,29 +345,30 @@ class EngineRun(
             }
         }
 
-        fun lineage(source: JsonObject): Map<String, kotlinx.serialization.json.JsonElement> =
+        fun lineage(source: JsonObject): Map<String, JsonElement> =
             source.filterKeys { it == EngineNames.ITEM_KEY || it == EngineNames.PARENTS }
 
         fun context(item: WorkItem, parents: List<WorkItem>, topic: String?): CoroutineContext {
             val path = parents.asReversed().map { it.key ?: "?" }
-            val execution = ExecutionContext(runId, workflow.name, config.logSink, path, item.key, topic)
+            val execution = ExecutionContext(runId, owner.name, config.logSink, path, item.key, topic)
             return if (parents.isEmpty()) execution else execution + ParentItemStack(parents)
         }
 
-        fun write(source: JsonObject, item: WorkItem): JsonObject {
+        fun write(variables: JsonObject, source: JsonObject, item: WorkItem): JsonObject {
             val encoded = codec.encode(item)
-            val name = itemVariable ?: return encoded
+            val name = itemVariable ?: EngineNames.CALL_ITEM.takeIf { variables[it] is JsonObject } ?: return encoded
             return JsonObject(mapOf(name to JsonObject(source + encoded)))
         }
     }
 
     private inner class TaskHandler(
+        owner: Workflow<*>,
         private val step: Execute<WorkItem>,
         codec: WorkItemCodec<WorkItem>,
         itemVariable: String?,
         parentCodecs: List<WorkItemCodec<WorkItem>>,
         private val levelLimit: Semaphore?,
-    ) : JobHandler(step.task.topic, codec, itemVariable, parentCodecs, step.options.retry ?: config.retry) {
+    ) : JobHandler(owner, step.task.topic, codec, itemVariable, parentCodecs, step.options.retry ?: config.retry) {
         val order = compensable.size
         private val limiter = step.options.rateLimit?.let { RateLimiter(it) }
         private val timeout = step.options.timeout ?: retry.timeout
@@ -302,13 +382,14 @@ class EngineRun(
             val item = codec.decode(source)
             val parents = parents(source)
             if (levelLimit == null) invoke(item, parents) else levelLimit.withPermit { invoke(item, parents) }
-            val written = write(source, item)
+            val written = write(variables, source, item)
             if (step.compensation == null) return JobOutcome.Complete(written)
+            val name = EngineNames.compensation(topic)
             val entry = buildJsonObject {
                 put(SNAPSHOT_AT, Clock.System.now().toEpochMilliseconds())
                 put(SNAPSHOT_ITEM, JsonObject(lineage(source) + codec.encode(item)))
             }
-            return JobOutcome.Complete(JsonObject(written + (EngineNames.compensation(topic) to entry)))
+            return JobOutcome.Complete(JsonObject(written + (name to JsonArray(snapshots(variables[name]) + entry))))
         }
 
         suspend fun compensate(snapshot: JsonObject) {
@@ -322,17 +403,27 @@ class EngineRun(
             limiter?.acquire()
             withContext(context(item, parents, topic)) {
                 config.tracer.span("task $topic", mapOf("item" to item.key.orEmpty())) {
-                    withTaskTimeout(timeout) { step.task.execute(item) }
+                    val started = TimeSource.Monotonic.markNow()
+                    try {
+                        withTaskTimeout(timeout) { step.task.execute(item) }
+                        counters.taskDuration(topic, true, started.elapsedNow())
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        counters.taskDuration(topic, false, started.elapsedNow())
+                        throw e
+                    }
                 }
             }
         }
     }
 
     private inner class ConditionHandler(
+        owner: Workflow<*>,
         private val step: Conditional<WorkItem>,
         codec: WorkItemCodec<WorkItem>,
         itemVariable: String?,
-    ) : JobHandler(EngineNames.decision(step.id), codec, itemVariable, emptyList(), RetryPolicy.None) {
+    ) : JobHandler(owner, EngineNames.decision(step.id), codec, itemVariable, emptyList(), RetryPolicy.None) {
         override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
             val outcome = step.predicate(codec.decode(source(variables)))
             return JobOutcome.Complete(buildJsonObject { put(EngineNames.result(step.id), outcome) })
@@ -340,10 +431,11 @@ class EngineRun(
     }
 
     private inner class LoopHandler(
+        owner: Workflow<*>,
         private val step: Loop<WorkItem>,
         codec: WorkItemCodec<WorkItem>,
         itemVariable: String?,
-    ) : JobHandler(EngineNames.decision(step.id), codec, itemVariable, emptyList(), RetryPolicy.None) {
+    ) : JobHandler(owner, EngineNames.decision(step.id), codec, itemVariable, emptyList(), RetryPolicy.None) {
         override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
             val source = source(variables)
             val iterations = (variables[EngineNames.iterations(step.id)] as? JsonPrimitive)?.intOrNull ?: 0
@@ -354,7 +446,7 @@ class EngineRun(
                     EngineNames.loop(step.id),
                     "exceeded maxLoopIterations=${config.maxLoopIterations}",
                 )
-                return deadLetter(job, letter)
+                return deadLetter(this, job, letter)
             }
             return complete(repeat = true, iterations = iterations + 1)
         }
@@ -368,30 +460,32 @@ class EngineRun(
     }
 
     private inner class TimeoutHandler(
+        owner: Workflow<*>,
         private val step: Timeout<WorkItem>,
         codec: WorkItemCodec<WorkItem>,
         itemVariable: String?,
-    ) : JobHandler(EngineNames.timeout(step.id), codec, itemVariable, emptyList(), RetryPolicy.None) {
+    ) : JobHandler(owner, EngineNames.timeout(step.id), codec, itemVariable, emptyList(), RetryPolicy.None) {
         override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
             val letter = DeadLetter(key(source(variables)), topic, "exceeded ${step.duration}")
-            record(job, letter)
+            record(this, job, letter)
             return JobOutcome.Complete(outcome(ErrorPolicy.DeadLetter, topic, letter.error))
         }
     }
 
     private inner class ExpandHandler(
+        owner: Workflow<*>,
         private val stepId: String,
         private val expand: suspend (WorkItem) -> Flow<WorkItem>,
         private val childCodec: WorkItemCodec<WorkItem>,
         codec: WorkItemCodec<WorkItem>,
         itemVariable: String?,
         parentCodecs: List<WorkItemCodec<WorkItem>>,
-    ) : JobHandler(EngineNames.expand(stepId), codec, itemVariable, parentCodecs, RetryPolicy.None) {
+    ) : JobHandler(owner, EngineNames.expand(stepId), codec, itemVariable, parentCodecs, RetryPolicy.None) {
         override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
             val source = source(variables)
             val item = codec.decode(source)
             val children = withContext(context(item, parents(source), null)) { expand(item).toList() }
-            expanded.addAndGet(children.size.toLong())
+            counters.expanded(children.size.toLong())
             val lineage = JsonPrimitive(JsonArray(listOf(codec.encode(item)) + ancestors(source)).toString())
             val items = JsonArray(
                 children.map { child ->
@@ -403,16 +497,17 @@ class EngineRun(
                     )
                 },
             )
-            return JobOutcome.Complete(JsonObject(write(source, item) + (EngineNames.items(stepId) to items)))
+            return JobOutcome.Complete(JsonObject(write(variables, source, item) + (EngineNames.items(stepId) to items)))
         }
     }
 
     private inner class ReduceHandler(
+        owner: Workflow<*>,
         private val step: FanIn<WorkItem, WorkItem, Any?>,
         codec: WorkItemCodec<WorkItem>,
         itemVariable: String?,
         parentCodecs: List<WorkItemCodec<WorkItem>>,
-    ) : JobHandler(EngineNames.reduce(step.id), codec, itemVariable, parentCodecs, RetryPolicy.None) {
+    ) : JobHandler(owner, EngineNames.reduce(step.id), codec, itemVariable, parentCodecs, RetryPolicy.None) {
         override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
             val source = source(variables)
             val item = codec.decode(source)
@@ -424,7 +519,62 @@ class EngineRun(
             var accumulator = step.initial
             for (child in children) accumulator = step.combine(accumulator, step.childCodec.decode(child.jsonObject))
             withContext(context(item, parents(source), null)) { step.onComplete(item, accumulator) }
-            return JobOutcome.Complete(write(source, item))
+            return JobOutcome.Complete(write(variables, source, item))
+        }
+    }
+
+    private inner class FormHandler(
+        owner: Workflow<*>,
+        private val step: HumanTask<WorkItem>,
+        codec: WorkItemCodec<WorkItem>,
+        itemVariable: String?,
+        parentCodecs: List<WorkItemCodec<WorkItem>>,
+    ) : JobHandler(owner, EngineNames.form(step.id), codec, itemVariable, parentCodecs, config.retry) {
+        override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
+            val name = EngineNames.formVariable(step.id)
+            val form = when (val raw = variables[name]) {
+                is JsonObject -> raw
+                is JsonPrimitive -> raw.contentOrNull?.let { Json.parseToJsonElement(it) as? JsonObject }
+                else -> null
+            } ?: JsonObject(emptyMap())
+            val source = source(variables)
+            val item = codec.decode(source)
+            withContext(context(item, parents(source), topic)) { step.onComplete(item, form) }
+            return JobOutcome.Complete(JsonObject(write(variables, source, item) + (name to JsonNull)))
+        }
+    }
+
+    private inner class CallHandler(
+        owner: Workflow<*>,
+        private val stepId: String,
+        codec: WorkItemCodec<WorkItem>,
+        itemVariable: String?,
+        parentCodecs: List<WorkItemCodec<WorkItem>>,
+    ) : JobHandler(owner, EngineNames.call(stepId), codec, itemVariable, parentCodecs, RetryPolicy.None) {
+        override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
+            val item = codec.decode(source(variables))
+            val packed = JsonObject(codec.encode(item) + (EngineNames.ITEM_KEY to JsonPrimitive(item.key.orEmpty())))
+            return JobOutcome.Complete(JsonObject(mapOf(EngineNames.callItem(stepId) to packed)))
+        }
+    }
+
+    private inner class ReturnHandler(
+        owner: Workflow<*>,
+        private val stepId: String,
+        codec: WorkItemCodec<WorkItem>,
+        itemVariable: String?,
+        parentCodecs: List<WorkItemCodec<WorkItem>>,
+    ) : JobHandler(owner, EngineNames.returnCall(stepId), codec, itemVariable, parentCodecs, RetryPolicy.None) {
+        override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
+            val name = EngineNames.callItem(stepId)
+            val returned = when (val raw = variables[name]) {
+                is JsonObject -> raw
+                is JsonPrimitive -> raw.contentOrNull?.let { Json.parseToJsonElement(it) as? JsonObject }
+                else -> null
+            } ?: return JobOutcome.Complete(JsonObject(mapOf(name to JsonNull)))
+            val source = source(variables)
+            val item = codec.decode(returned)
+            return JobOutcome.Complete(JsonObject(write(variables, source, item) + (name to JsonNull)))
         }
     }
 

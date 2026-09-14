@@ -115,6 +115,8 @@ main { padding: 1.6rem 2rem; display: grid; gap: 1.2rem; max-width: 1100px; }
 .badge.Failed, .badge.Cancelled { color: var(--red); }
 .badge.Paused { color: var(--amber); }
 .badge.Scheduled, .badge.Detached { color: var(--blue); }
+.badge.stale { color: var(--red); }
+.worker { color: var(--dim); font-size: .72rem; }
 .started { margin-left: auto; color: var(--dim); font-size: .72rem; }
 .controls { display: flex; gap: .5rem; }
 .controls button {
@@ -189,6 +191,20 @@ summary:hover { color: var(--amber); }
 .dlq .key { color: var(--amber); }
 .dlq .topic { color: var(--dim); margin: 0 .6em; }
 .dlq .err { color: var(--red); }
+#dead-letters { padding: 0 2rem; max-width: 1100px; }
+.dlq-head { display: flex; align-items: baseline; gap: 1rem; border-top: 1px solid var(--line); padding-top: 1.2rem; }
+.dlq-title { font-size: .8rem; letter-spacing: .2em; text-transform: uppercase; color: var(--amber); }
+.dlq-count { color: var(--dim); font-size: .75rem; }
+#dlq-workflow { font-family: var(--mono); background: transparent; color: var(--ink); border: 1px solid var(--line); padding: .2em .5em; }
+.dlq li .controls { display: inline-flex; margin-left: 1rem; }
+.dlq pre { color: var(--dim); font-size: .7rem; margin-top: .35rem; white-space: pre-wrap; word-break: break-all; }
+.panel { margin: .5rem 0 0 .35rem; font-size: .75rem; }
+.panel .log { padding: .2rem 0; border-bottom: 1px solid var(--line); }
+.panel .when { color: var(--dim); margin-right: .6em; }
+.panel .key { color: var(--amber); margin-right: .6em; }
+.panel .topic { color: var(--dim); margin-right: .6em; }
+.panel .err { color: var(--red); }
+.panel pre { color: var(--dim); font-size: .7rem; white-space: pre-wrap; word-break: break-all; }
 footer {
   padding: 1.5rem 2rem 0;
   color: var(--dim);
@@ -206,11 +222,21 @@ footer {
   <span class="pulse" id="pulse"><span class="dot"></span><span id="pulse-text">live</span></span>
 </header>
 <main id="runs"><div class="empty">awaiting runs</div></main>
+<section id="dead-letters" hidden>
+  <div class="dlq-head">
+    <span class="dlq-title">dead letters</span>
+    <select id="dlq-workflow" aria-label="workflow"></select>
+    <span class="dlq-count" id="dlq-count"></span>
+  </div>
+  <ul class="dlq" id="dlq-list"></ul>
+</section>
 <footer>introspection console · polls /api/runs every 1s</footer>
 <script>
 const structures = new Map();
 const openTrees = new Set();
 const openDlqs = new Set();
+const openPanels = new Set();
+const panelContent = new Map();
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -235,7 +261,7 @@ function renderBar(p, deadLetterCount) {
 
 function renderRun(run) {
   const p = run.progress;
-  const failed = p.failed + run.deadLetters.length;
+  const failed = p.failed + run.deadLetterCount;
   const active = run.engineActive == null ? "" :
     `<span class="k-active">engine-active<b>${run.engineActive}</b></span>`;
   const dlq = run.deadLetters.length ? `
@@ -246,13 +272,25 @@ function renderRun(run) {
       </ul>
     </details>` : "";
   const tree = structures.get(run.id);
-  const flow = `
+  const flow = !run.controllable ? "" : `
     <details class="tree-box" ${openTrees.has(run.id) ? "open" : ""} data-run="${esc(run.id)}">
       <summary>flow structure</summary>
       <div class="tree">${tree ? renderTree(tree) : "loading…"}</div>
     </details>`;
+  const panels = !run.controllable ? "" : ["logs", "records"]
+    .filter(kind => kind === "logs" || run.deadLetterCount > 0)
+    .map(kind => {
+      const key = `${kind}:${run.id}`;
+      return `
+    <details class="panel-box" data-kind="${kind}" data-run="${esc(run.id)}" ${openPanels.has(key) ? "open" : ""}>
+      <summary>${kind === "logs" ? "log entries" : "dead-letter records"}</summary>
+      <div class="panel">${panelContent.get(key) ?? "loading…"}</div>
+    </details>`;
+    }).join("");
   const terminal = ["Completed", "Failed", "Cancelled", "Detached"].includes(run.state);
-  const controls = `<div class="controls">
+  const worker =run.worker ? `<span class="worker">${esc(run.worker)}</span>` : "";
+  const stale = run.stale ? `<span class="badge stale">stale</span>` : "";
+  const controls = !run.controllable ? "" : `<div class="controls">
     <button class="start" data-action="start" data-run="${esc(run.id)}" ${run.state === "Scheduled" ? "" : "disabled"}>start</button>
     <button class="pause" data-action="pause" data-run="${esc(run.id)}" ${run.state === "Running" ? "" : "disabled"}>pause</button>
     <button class="resume" data-action="resume" data-run="${esc(run.id)}" ${run.state === "Paused" ? "" : "disabled"}>resume</button>
@@ -264,19 +302,21 @@ function renderRun(run) {
       <span class="run-id">${esc(run.id)}</span>
       <span class="run-name">${esc(run.workflowName)}</span>
       <span class="badge ${esc(run.state)}">${esc(run.state)}</span>
+      ${stale}${worker}
       <span class="started">since ${esc(run.startedAt.replace("T", " ").slice(0, 19))}Z</span>
       ${controls}
     </div>
-    ${renderBar(p, run.deadLetters.length)}
+    ${renderBar(p, run.deadLetterCount)}
     <div class="counters">
       <span>seeded<b>${p.seeded}</b></span>
       <span>expanded<b>${p.expanded}</b></span>
       <span class="k-done">done<b>${p.done}</b></span>
       <span class="k-failed">failed<b>${failed}</b></span>
       <span class="k-skipped">skipped<b>${p.skipped}</b></span>
+      <span>cancelled<b>${p.cancelled}</b></span>
       ${active}
     </div>
-    ${flow}${dlq}
+    ${flow}${panels}${dlq}
   </section>`;
 }
 
@@ -296,7 +336,43 @@ function rememberToggles() {
   document.querySelectorAll(".dlq-box").forEach(d => {
     if (d.open) openDlqs.add(d.dataset.run); else openDlqs.delete(d.dataset.run);
   });
+  document.querySelectorAll(".panel-box").forEach(d => {
+    const key = `${d.dataset.kind}:${d.dataset.run}`;
+    if (d.open) openPanels.add(key); else openPanels.delete(key);
+  });
 }
+
+async function loadPanel(kind, id) {
+  const key = `${kind}:${id}`;
+  const path = kind === "logs" ? "logs?limit=200" : "dead-letters?limit=100";
+  try {
+    const response = await fetch(`api/runs/${encodeURIComponent(id)}/${path}`);
+    if (response.status === 404) {
+      panelContent.set(key, `<span class="when">not available on this console</span>`);
+      return;
+    }
+    const page = await response.json();
+    const rows = kind === "logs"
+      ? page.entries.map(e => `<div class="log"><span class="when">${esc(e.timestamp.replace("T", " ").slice(0, 23))}</span>` +
+          `<span class="key">${esc(e.itemKey ?? "")}</span><span class="topic">${esc(e.topic ?? "")}</span>${esc(e.message)}` +
+          (Object.keys(e.data).length ? ` <span class="when">${esc(JSON.stringify(e.data))}</span>` : "") + `</div>`)
+      : page.records.map(r => `<div class="log"><span class="key">${esc(r.key ?? "?")}</span><span class="topic">${esc(r.topic)}</span>` +
+          `<span class="err">${esc(r.error)}</span><pre>${esc(JSON.stringify(r.item))}</pre></div>`);
+    panelContent.set(key, (rows.join("") || `<span class="when">none</span>`) +
+      (page.nextCursor ? `<div class="when">showing the first ${rows.length}</div>` : ""));
+  } catch {
+    panelContent.set(key, `<span class="when">unavailable</span>`);
+  }
+}
+
+document.getElementById("runs").addEventListener("toggle", (e) => {
+  const box = e.target;
+  if (!box.classList || !box.classList.contains("panel-box") || !box.open) return;
+  const key = `${box.dataset.kind}:${box.dataset.run}`;
+  if (panelContent.has(key)) return;
+  openPanels.add(key);
+  loadPanel(box.dataset.kind, box.dataset.run).then(tick);
+}, true);
 
 document.getElementById("runs").addEventListener("click", async (e) => {
   const btn = e.target.closest("button[data-action]");
@@ -317,8 +393,12 @@ async function tick() {
       (await fetch("api/runs")).json(),
     ]);
     document.getElementById("backend-type").textContent = backend.type;
-    await Promise.all(runs.map(r => loadStructure(r.id)));
+    await Promise.all(runs.filter(r => r.controllable).map(r => loadStructure(r.id)));
     rememberToggles();
+    await Promise.all([...openPanels].map(key => {
+      const separator = key.indexOf(":");
+      return loadPanel(key.slice(0, separator), key.slice(separator + 1));
+    }));
     const main = document.getElementById("runs");
     main.innerHTML = runs.length
       ? runs.slice().reverse().map(renderRun).join("")
@@ -331,6 +411,54 @@ async function tick() {
   }
 }
 
+const deadLetterSection = document.getElementById("dead-letters");
+const deadLetterSelect = document.getElementById("dlq-workflow");
+
+async function loadDeadLetterWorkflows() {
+  try {
+    const response = await fetch("api/dead-letters/workflows");
+    if (!response.ok) return;
+    const workflows = await response.json();
+    if (!workflows.length) return;
+    deadLetterSelect.innerHTML = workflows.map(w => `<option value="${esc(w.key)}">${esc(w.name)}</option>`).join("");
+    deadLetterSection.hidden = false;
+  } catch { deadLetterSection.hidden = true; }
+}
+
+async function refreshDeadLetters() {
+  if (deadLetterSection.hidden || !deadLetterSelect.value) return;
+  try {
+    const page = await (await fetch(`api/dead-letters?workflow=${encodeURIComponent(deadLetterSelect.value)}&limit=100`)).json();
+    document.getElementById("dlq-count").textContent = page.nextCursor ? `${page.records.length}+` : `${page.records.length}`;
+    document.getElementById("dlq-list").innerHTML = page.records.map(r =>
+      `<li><span class="key">${esc(r.key ?? "?")}</span><span class="topic">${esc(r.topic)}</span><span class="err">${esc(r.error)}</span>` +
+      `<span class="controls"><button class="resume" data-dlq-action="requeue" data-dlq="${esc(r.id)}">requeue</button>` +
+      `<button class="cancel" data-dlq-action="discard" data-dlq="${esc(r.id)}">discard</button></span>` +
+      `<pre>${esc(JSON.stringify(r.item))}</pre></li>`).join("");
+  } catch { document.getElementById("dlq-count").textContent = "unavailable"; }
+}
+
+document.getElementById("dlq-list").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-dlq-action]");
+  if (!btn) return;
+  btn.disabled = true;
+  const id = encodeURIComponent(btn.dataset.dlq);
+  try {
+    if (btn.dataset.dlqAction === "requeue") {
+      await fetch(`api/dead-letters/${id}/requeue`, { method: "POST" });
+    } else {
+      await fetch(`api/dead-letters/${id}`, { method: "DELETE" });
+    }
+  } finally {
+    refreshDeadLetters();
+    tick();
+  }
+});
+
+deadLetterSelect.addEventListener("change", refreshDeadLetters);
+
+loadDeadLetterWorkflows().then(refreshDeadLetters);
+setInterval(refreshDeadLetters, 3000);
 tick();
 setInterval(tick, 1000);
 </script>

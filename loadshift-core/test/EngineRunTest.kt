@@ -183,6 +183,123 @@ class EngineRunTest {
     }
 
     @Test
+    fun aTaskInALoopKeepsOneSnapshotPerRunAndEachIsCompensatedLatestFirst() = runTest {
+        val refunds = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<EngineOrder>("loop-compensation") {
+            input(emptyList())
+            loop({ it.total < 3 }) {
+                task("charge") { it.total += 1 } compensate { refunds += "${it.id}:${it.total}" }
+            }
+            task("ship") { error("no carrier") }
+        }
+        val run = EngineRun(wf, RunConfig(retry = RetryPolicy.None))
+        var variables = run.rootVariables(EngineOrder("o-1"))
+        repeat(3) { variables = variables.after(run.execute(job(run.type("charge"), variables))) }
+
+        assertEquals(3, variables.getValue(EngineNames.compensation("charge")).jsonArray.size)
+        assertIs<JobOutcome.Terminate>(run.execute(job(run.type("ship"), variables)))
+        assertEquals(listOf("o-1:3", "o-1:2", "o-1:1"), refunds.toList())
+    }
+
+    @Test
+    fun formHandlerAppliesTheCompletedFormToTheItemAndClearsIt() = runTest {
+        val wf = workflow<EngineOrder>("approval") {
+            input(emptyList())
+            userTask("approve") { order, form -> order.note = form.getValue("decision").jsonPrimitive.content }
+            task("book") { }
+        }
+        val run = EngineRun(wf, RunConfig())
+        val variables = JsonObject(run.rootVariables(EngineOrder("o-1")) + ("ut1_form" to buildJsonObject { put("decision", "approved") }))
+
+        val written = assertIs<JobOutcome.Complete>(run.execute(job(run.type("form_ut1"), variables))).variables
+
+        assertEquals(JsonPrimitive("approved"), written["note"])
+        assertEquals(JsonNull, written["ut1_form"])
+    }
+
+    @Test
+    fun callPacksTheItemRunsTheCalledTasksOnItAndWritesItBack() = runTest {
+        val store = InMemoryDeadLetterStore()
+        val billing = workflow<EngineOrder>("billing") {
+            input(emptyList())
+            task("invoice") { it.total += 10 }
+            task("archive") { if (it.note == "broken") error("archive down") }
+        }
+        val checkout = workflow<EngineOrder>("checkout") {
+            input(emptyList())
+            call(billing)
+            task("ship") { }
+        }
+        val run = EngineRun(checkout, RunConfig(retry = RetryPolicy.None, deadLetters = store))
+
+        assertTrue(EngineNames.jobType("billing", "invoice") in run.jobTypes)
+        assertEquals(listOf("checkout", "billing"), run.correlationKeys)
+
+        val parent = run.rootVariables(EngineOrder("o-1", total = 5))
+        val packed = assertIs<JobOutcome.Complete>(run.execute(job("checkout/call_cw1", parent)))
+            .variables.getValue("cw1_call").jsonObject
+        assertEquals(JsonPrimitive("o-1"), packed[EngineNames.ITEM_KEY])
+
+        val child = JsonObject(
+            mapOf(
+                EngineNames.CALL_ITEM to packed,
+                EngineNames.WORKFLOW to JsonPrimitive("billing"),
+                EngineNames.ITEM_KEY to JsonPrimitive("o-1"),
+            ),
+        )
+        val invoiced = child.after(run.execute(job("billing/invoice", child, instance = "child-1")))
+        val callItem = invoiced.getValue(EngineNames.CALL_ITEM).jsonObject
+        assertEquals(JsonPrimitive(15), callItem["total"])
+        assertEquals(JsonPrimitive("o-1"), callItem[EngineNames.ITEM_KEY])
+
+        val returned = assertIs<JobOutcome.Complete>(
+            run.execute(job("checkout/return_cw1", JsonObject(parent + ("cw1_call" to callItem)))),
+        ).variables
+        assertEquals(JsonPrimitive(15), returned["total"])
+        assertEquals(JsonNull, returned["cw1_call"])
+
+        val broken = JsonObject(invoiced + (EngineNames.CALL_ITEM to JsonObject(callItem + ("note" to JsonPrimitive("broken")))))
+        assertIs<JobOutcome.Terminate>(run.execute(job("billing/archive", broken, instance = "child-1")))
+        val record = store.list("billing").records.single()
+        assertEquals("billing", record.level)
+        assertEquals(null, record.itemVariable)
+        assertEquals(JsonPrimitive("o-1"), record.item[EngineNames.ITEM_KEY])
+        assertEquals(JsonPrimitive("broken"), record.item["note"])
+    }
+
+    @Test
+    fun deadLetterRecordsCarryTheRunId() = runTest {
+        val store = InMemoryDeadLetterStore()
+        val wf = workflow<EngineOrder>("run-id-records") {
+            input(emptyList())
+            task("ship") { error("no carrier") }
+        }
+        val run = EngineRun(wf, RunConfig(retry = RetryPolicy.None, deadLetters = store), runId = "internal-7")
+
+        run.execute(job(run.type("ship"), run.rootVariables(EngineOrder("o-1"))))
+
+        assertEquals(listOf("internal-7"), store.forRun("internal-7").records.map { it.runId })
+    }
+
+    @Test
+    fun aSingleSnapshotObjectIsCompensated() = runTest {
+        val refunds = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<EngineOrder>("single-snapshot") {
+            input(emptyList())
+            task("charge") { } compensate { refunds += it.id }
+            task("ship") { error("no carrier") }
+        }
+        val run = EngineRun(wf, RunConfig(retry = RetryPolicy.None))
+        val charged = run.rootVariables(EngineOrder("o-2")).after(run.execute(job(run.type("charge"), run.rootVariables(EngineOrder("o-2")))))
+        val name = EngineNames.compensation("charge")
+        val single = JsonObject(charged + (name to charged.getValue(name).jsonArray.single()))
+
+        run.execute(job(run.type("ship"), single))
+
+        assertEquals(listOf("o-2"), refunds.toList())
+    }
+
+    @Test
     fun compensationRunsFromSnapshotsWrittenByAnotherWorker() = runTest {
         val refunds = Collections.synchronizedList(mutableListOf<String>())
         fun flow() = workflow<EngineOrder>("durable-saga") {
@@ -198,6 +315,59 @@ class EngineRunTest {
 
         assertEquals(listOf("o-1:30"), refunds.toList())
         assertEquals(listOf(DeadLetter("o-1", "ship", "no carrier")), second.deadLetters())
+    }
+
+    @Test
+    fun deadLettersAreStoredWithLevelItemVariableAndSnapshot() = runTest {
+        val store = InMemoryDeadLetterStore()
+        val wf = workflow<EngineOrder>("stored") {
+            input(emptyList())
+            task("charge", retry = RetryPolicy.None) { error("declined") }
+            fanOut(expand = { o -> listOf(EngineLine("${o.id}-1")) }) {
+                task("pick", retry = RetryPolicy.None) { error("no stock") }
+            }
+        }
+        val run = EngineRun(wf, RunConfig(deadLetters = store))
+        run.execute(job(run.type("charge"), run.rootVariables(EngineOrder("o-1", total = 5))))
+
+        val expandType = run.generated("expand_")
+        val fanId = stepId(expandType, "expand_")
+        val expanded = assertIs<JobOutcome.Complete>(run.execute(job(expandType, run.rootVariables(EngineOrder("o-2")))))
+        val child = expanded.variables.getValue(EngineNames.items(fanId)).jsonArray.single().jsonObject
+        val itemVariable = EngineNames.item(fanId)
+        run.execute(job(run.type("pick"), JsonObject(mapOf(itemVariable to child)), instance = "child-1"))
+
+        val records = store.list(wf.key).records.associateBy { it.deadLetter.topic }
+        val root = records.getValue("charge")
+        assertEquals(wf.key, root.level)
+        assertEquals(null, root.itemVariable)
+        assertEquals(JsonPrimitive(5), root.item["total"])
+        assertEquals(JsonPrimitive("o-1"), root.item[EngineNames.ITEM_KEY])
+        val childRecord = records.getValue("pick")
+        assertEquals("${wf.key}_$fanId", childRecord.level)
+        assertEquals(itemVariable, childRecord.itemVariable)
+        assertEquals(child[EngineNames.PARENTS], childRecord.item[EngineNames.PARENTS])
+        assertEquals(JsonPrimitive("o-2-1"), childRecord.item["id"])
+    }
+
+    @Test
+    fun requeueVariablesRestoreRootAndChildItems() {
+        val wf = workflow<EngineOrder>("requeue-vars") { input(emptyList()) }
+        val run = EngineRun(wf, RunConfig())
+        val item = JsonObject(mapOf("id" to JsonPrimitive("a"), EngineNames.ITEM_KEY to JsonPrimitive("a")))
+        fun record(itemVariable: String?) = DeadLetterRecord(
+            "r", wf.key, if (itemVariable == null) wf.key else "${wf.key}_f1", itemVariable,
+            DeadLetter("a", "t", "e"), item, kotlin.time.Instant.fromEpochMilliseconds(0),
+        )
+
+        val root = run.requeueVariables(record(null))
+        assertEquals(JsonPrimitive("a"), root["id"])
+        assertEquals(JsonPrimitive(wf.key), root[EngineNames.WORKFLOW])
+
+        val child = run.requeueVariables(record("f1_item"))
+        assertEquals(item, child["f1_item"])
+        assertEquals(JsonPrimitive("a"), child[EngineNames.ITEM_KEY])
+        assertEquals(JsonPrimitive(wf.key), child[EngineNames.WORKFLOW])
     }
 
     @Test

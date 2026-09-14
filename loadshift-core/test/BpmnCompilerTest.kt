@@ -3,11 +3,15 @@ package loadshift.core
 import kotlinx.serialization.Serializable
 import org.camunda.bpm.model.bpmn.Bpmn
 import org.camunda.bpm.model.bpmn.instance.BoundaryEvent
+import org.camunda.bpm.model.bpmn.instance.CallActivity
 import org.camunda.bpm.model.bpmn.instance.ErrorEventDefinition
 import org.camunda.bpm.model.bpmn.instance.FlowNode
 import org.camunda.bpm.model.bpmn.instance.SequenceFlow
+import org.camunda.bpm.model.bpmn.instance.SignalEventDefinition
 import org.camunda.bpm.model.bpmn.instance.StartEvent
 import org.camunda.bpm.model.bpmn.instance.SubProcess
+import org.camunda.bpm.model.bpmn.instance.TimeDate
+import org.camunda.bpm.model.bpmn.instance.UserTask
 import org.camunda.bpm.model.bpmn.instance.bpmndi.BpmnEdge
 import org.camunda.bpm.model.bpmn.instance.bpmndi.BpmnShape
 import kotlin.test.Test
@@ -49,6 +53,104 @@ class BpmnCompilerTest {
         assertTrue(topics.containsAll(setOf("receipt", "dunning", "index", "notify")))
         assertTrue(topics.any { it.startsWith("decision_") })
         assertTrue(topics.any { it.startsWith("expand_") })
+    }
+
+    @Test
+    fun scheduleProcessLoopsFromTheTickTimerThroughSeedAndAwait() {
+        val schedule = BpmnCompiler.compileSchedule(workflowWithEverything())
+        val next = EngineNames.SCHEDULE_NEXT
+        val seed = EngineNames.SCHEDULE_SEED
+        val await = EngineNames.SCHEDULE_AWAIT
+
+        assertEquals("order-job_loadshift_schedule", schedule.key)
+        assertEquals(listOf("order-job/$next", "order-job/$seed", "order-job/$await"), schedule.serviceTasks.map { it.jobType })
+        val flows = schedule.model.getModelElementsByType(SequenceFlow::class.java).map { it.source.id to it.target.id }.toSet()
+        assertEquals(setOf("start" to next, next to "tick", "tick" to seed, seed to await, await to next), flows)
+        assertEquals("\${${EngineNames.NEXT_TICK}}", schedule.model.getModelElementsByType(TimeDate::class.java).single().textContent)
+        assertEquals(5, schedule.model.getModelElementsByType(BpmnShape::class.java).size)
+    }
+
+    @Test
+    fun userTaskCompilesToAUserTaskWithAssignmentFollowedByTheFormTask() {
+        val wf = workflow<Order>("approval-job") {
+            input(emptyList())
+            userTask("Approve order", assignee = "ops", candidateGroups = listOf("reviewers", "leads")) { _, _ -> }
+        }
+
+        val process = BpmnCompiler.compile(wf).single()
+
+        val task = process.model.getModelElementById<UserTask>("user_ut1")
+        assertEquals("Approve order", task.name)
+        assertEquals("ops", task.camundaAssignee)
+        assertEquals("reviewers,leads", task.camundaCandidateGroups)
+        assertEquals(listOf("approval-job/form_ut1"), process.serviceTasks.map { it.jobType })
+        assertEquals(listOf("Approve order"), wf.humanTasks().map { it.step.name })
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            workflow<Order>("bad-groups") { userTask("x", candidateGroups = listOf("a,b")) }
+        }
+    }
+
+    @Test
+    fun theWorkflowVersionIsTheVersionTagOfEveryProcessItOwns() {
+        val billing = workflow<Order>("billing-versioned") {
+            version("7")
+            input(emptyList())
+            task("invoice") { }
+        }
+        val checkout = workflow<Order>("checkout-versioned") {
+            version("3.1")
+            input(emptyList())
+            fanOut(expand = { emptyList<Line>() }) { task("price") { } }
+            call(billing)
+        }
+
+        val tags = BpmnCompiler.compile(checkout).associate { it.key to it.versionTag }
+
+        assertEquals(mapOf("checkout-versioned" to "3.1", "checkout-versioned_f1" to "3.1", "billing-versioned" to "7"), tags)
+        assertEquals("3.1", BpmnCompiler.compileSchedule(checkout).versionTag)
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            workflow<Order>("blank-version") { version(" ") }
+        }
+    }
+
+    @Test
+    fun callCompilesToACallActivityAndIncludesTheCalledWorkflow() {
+        val billing = workflow<Order>("billing") {
+            input(emptyList())
+            task("invoice") { }
+        }
+        val checkout = workflow<Order>("checkout") {
+            input(emptyList())
+            task("reserve") { }
+            call(billing)
+            task("ship") { }
+        }
+
+        val processes = BpmnCompiler.compile(checkout)
+
+        assertEquals(listOf("checkout", "billing"), processes.map { it.key })
+        val activity = processes[0].model.getModelElementsByType(CallActivity::class.java).single()
+        assertEquals("billing", activity.calledElement)
+        assertEquals(
+            listOf("checkout/reserve", "checkout/call_cw1", "checkout/return_cw1", "checkout/ship"),
+            processes[0].serviceTasks.map { it.jobType },
+        )
+        assertEquals(listOf("billing/invoice"), processes[1].serviceTasks.map { it.jobType })
+        assertEquals(listOf("billing"), checkout.calledWorkflows().map { it.key })
+    }
+
+    @Test
+    fun awaitSignalCompilesToASignalCatchEvent() {
+        val wf = workflow<Order>("signal-job") {
+            input(emptyList())
+            awaitSignal("stock-arrived")
+            task("ship") { }
+        }
+        val model = BpmnCompiler.compile(wf).single().model
+
+        val definition = model.getModelElementsByType(SignalEventDefinition::class.java).single()
+        assertEquals("stock-arrived", definition.signal.name)
+        assertEquals(listOf("ship"), BpmnCompiler.compile(wf).single().serviceTasks.map { it.topic })
     }
 
     @Test

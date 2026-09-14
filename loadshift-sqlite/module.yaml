@@ -1,3 +1,4 @@
+description: SQLite log sink, checkpoint store, dead-letter store and run registry for loadshift
 product: jvm/lib
 
 apply:
@@ -6,6 +7,10 @@ apply:
 settings:
   kotlin:
     serialization: json
+  jvm:
+    test:
+      freeJvmArgs:
+        - --enable-native-access=ALL-UNNAMED
 
 dependencies:
   - ../loadshift-core

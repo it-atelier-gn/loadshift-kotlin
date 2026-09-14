@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
@@ -14,10 +15,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Clock
 import kotlin.time.Duration
@@ -32,15 +37,21 @@ class EngineRunner(
     private val rootProcessId: String,
     private val processIds: List<String>,
     private val attach: Boolean = false,
+    private val requeue: List<DeadLetterRecord>? = null,
+    private val scheduleProcessId: String? = null,
     private val pollInterval: Duration = 500.milliseconds,
     private val fetchWait: Duration = 5.seconds,
 ) : RunHandle, RunInspector {
-    private class Root(val key: String?)
+    private class Root(val key: String?, val holdsPermit: Boolean)
 
     private val config = run.config
 
     init {
         require(!attach || config.start !is Start.Cron) { "an attached run cannot use Start.Cron" }
+        require(!attach || requeue == null) { "a run either attaches or requeues" }
+        require((config.start is Start.Cron) == (scheduleProcessId != null)) {
+            "a schedule process is required for Start.Cron and allowed only with it"
+        }
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -49,8 +60,16 @@ class EngineRunner(
     private val paused = MutableStateFlow(false)
     private val stopping = MutableStateFlow(false)
     private val workSlots = Semaphore(config.maxConcurrency)
+    private val inFlight = config.maxInFlight?.let { Semaphore(it) }
+    private val nextTickType = EngineNames.jobType(run.workflow.key, EngineNames.SCHEDULE_NEXT)
+    private val seedType = EngineNames.jobType(run.workflow.key, EngineNames.SCHEDULE_SEED)
+    private val awaitType = EngineNames.jobType(run.workflow.key, EngineNames.SCHEDULE_AWAIT)
+    @Volatile private var scheduler: String? = null
     private val pendingRoots = ConcurrentHashMap<String, Root>()
+    private val rootsByKey = ConcurrentHashMap<String, String>()
+    private val finishedItems = FinishedItems()
     private val finishedRoots: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private val executing: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val pendingSends: MutableSet<Pair<String, String>> = ConcurrentHashMap.newKeySet()
     private val broadcasts: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val pollers = mutableListOf<Job>()
@@ -102,6 +121,29 @@ class EngineRunner(
 
     override suspend fun await(): RunResult = completion.await()
 
+    override suspend fun item(key: String): ItemStatus? {
+        val letters = run.deadLetters().filter { it.key == key }
+        val id = rootsByKey[key]
+        if (id != null && pendingRoots.containsKey(id)) return ItemStatus(key, ItemState.Running, null, letters)
+        val state = finishedItems[key] ?: return null
+        return ItemStatus(key, state, null, letters)
+    }
+
+    override suspend fun cancelItem(key: String): Boolean {
+        val id = rootsByKey[key] ?: return false
+        val root = pendingRoots.remove(id) ?: return false
+        if (attempt { driver.cancel(id) } == null) {
+            pendingRoots[id] = root
+            return false
+        }
+        finishedRoots += id
+        rootsByKey.remove(key, id)
+        releaseInFlight(root)
+        run.recordCancelled()
+        finishedItems.record(key, ItemState.Cancelled)
+        return true
+    }
+
     override suspend fun send(message: String, key: String) {
         if (!correlate(message, key)) pendingSends += message to key
     }
@@ -116,6 +158,8 @@ class EngineRunner(
     override fun state(): RunState = runState
 
     override fun deadLetters(): List<DeadLetter> = run.deadLetters()
+
+    override fun runId(): String = run.runId
 
     override suspend fun engineActive(): Long? = attempt { driver.activeInstances(processIds) }
 
@@ -136,22 +180,25 @@ class EngineRunner(
             if (ending == null && finish(RunState.Cancelled)) scope.cancel()
         } catch (e: Throwable) {
             abort(e)
+        } finally {
+            withContext(NonCancellable) { attempt { driver.close() } }
         }
     }
 
     private suspend fun work() {
         startPollers()
         try {
+            val records = requeue
             if (attach) {
-                drain()
+                drain(null)
+            } else if (records != null) {
+                coroutineScope { drain(launch { startRequeued(records) }) }
+            } else if (scheduleProcessId != null) {
+                adopt()
+                startScheduler(scheduleProcessId)
+                drain(null)
             } else {
-                val cron = config.start as? Start.Cron
-                do {
-                    seed()
-                    drain()
-                    run.clearInstanceState()
-                    if (cron != null) CronSchedule.awaitNext(cron.expr, cron.zone)
-                } while (cron != null)
+                coroutineScope { drain(launch { seed() }) }
             }
         } finally {
             stopping.value = true
@@ -168,26 +215,105 @@ class EngineRunner(
         }
     }
 
+    private suspend fun startScheduler(processId: String) {
+        awaitRunning()
+        scheduler = driver.activeRoots(processId).minByOrNull { it.id }?.id
+            ?: driver.startInstance(processId, JsonObject(mapOf(EngineNames.WORKFLOW to JsonPrimitive(run.workflow.key))), null)
+        synchronized(pollers) { pollers += scope.launch { pollSchedule() } }
+    }
+
+    private suspend fun pollSchedule() {
+        val types = listOf(nextTickType, seedType, awaitType)
+        while (true) {
+            combine(paused, stopping) { isPaused, isStopping -> isStopping || !isPaused }.first { it }
+            if (stopping.value) return
+            val fetchedAt = TimeSource.Monotonic.markNow()
+            val jobs = try {
+                driver.fetch(types, 1, config.lockDuration, fetchWait)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                delay(FETCH_ERROR_BACKOFF)
+                continue
+            }
+            if (jobs.isEmpty()) delay(pollInterval)
+            for (job in jobs) {
+                if (stopping.value) attempt { driver.release(job) } else runScheduleJob(job, fetchedAt)
+            }
+        }
+    }
+
+    private suspend fun runScheduleJob(job: EngineJob, lockedAt: TimeSource.Monotonic.ValueTimeMark) = supervisorScope {
+        val heartbeat = heartbeat(job, lockedAt)
+        try {
+            val work = async {
+                when (job.type) {
+                    nextTickType -> nextTick()
+                    seedType -> JsonObject(emptyMap()).also { seed(skipActive = true) }
+                    else -> JsonObject(emptyMap()).also { awaitBatch() }
+                }
+            }
+            val watcher = launch {
+                stopping.first { it }
+                work.cancel()
+            }
+            val variables = try {
+                work.await()
+            } catch (e: CancellationException) {
+                if (!isActive || !stopping.value) throw e
+                withContext(NonCancellable) { attempt { driver.release(job) } }
+                return@supervisorScope
+            } catch (e: Throwable) {
+                attempt { driver.fail(job, 0, Duration.ZERO, e.message ?: e.toString(), e.stackTraceToString()) }
+                abort(e)
+                return@supervisorScope
+            } finally {
+                watcher.cancel()
+            }
+            deliver { driver.complete(job, variables) }
+        } finally {
+            heartbeat.cancel()
+        }
+    }
+
+    private fun nextTick(): JsonObject {
+        val cron = config.start as Start.Cron
+        val tick = CronSchedule.next(cron.expr, Clock.System.now(), cron.zone)
+        return JsonObject(mapOf(EngineNames.NEXT_TICK to JsonPrimitive(tick.toString().removeSuffix("Z") + "+00:00")))
+    }
+
+    private suspend fun awaitBatch() {
+        while (pendingRoots.isNotEmpty()) delay(pollInterval)
+        run.clearInstanceState()
+    }
+
     private suspend fun adopt(): Boolean {
         awaitRunning()
         val roots = attempt { driver.activeRoots(rootProcessId) } ?: return true
-        val fresh = roots.count { it.id !in finishedRoots && pendingRoots.putIfAbsent(it.id, Root(it.itemKey)) == null }
+        val fresh = roots.count { root ->
+            val added = root.id !in finishedRoots && pendingRoots.putIfAbsent(root.id, Root(root.itemKey, false)) == null
+            if (added) root.itemKey?.let { rootsByKey[it] = root.id }
+            added
+        }
         run.recordAttached(fresh)
         return pendingRoots.isNotEmpty()
     }
 
-    private suspend fun seed() {
-        val seen = if (config.dedupe) HashSet<String>() else null
+    private suspend fun startRequeued(records: List<DeadLetterRecord>) {
         val starts = Semaphore(config.maxConcurrency)
         coroutineScope {
-            run.workflow.seed().collect { item ->
+            for (record in records) {
                 awaitRunning()
-                if (!run.admit(item, seen)) return@collect
+                inFlight?.acquire()
                 starts.acquire()
                 launch {
                     try {
-                        val id = driver.startInstance(rootProcessId, run.rootVariables(item), item.key)
-                        pendingRoots[id] = Root(item.key)
+                        val rootKey = record.deadLetter.key.takeIf { record.itemVariable == null }
+                        val id = startHoldingPermit { driver.startInstance(record.level, run.requeueVariables(record), rootKey) }
+                        pendingRoots[id] = Root(rootKey, inFlight != null)
+                        rootKey?.let { rootsByKey[it] = id }
+                        run.recordAttached(1)
+                        config.deadLetters?.remove(record.id)
                     } finally {
                         starts.release()
                     }
@@ -196,16 +322,63 @@ class EngineRunner(
         }
     }
 
-    private suspend fun drain() {
+    private suspend fun seed(skipActive: Boolean = false) {
+        val seen = if (config.dedupe) HashSet<String>() else null
+        val starts = Semaphore(config.maxConcurrency)
+        coroutineScope {
+            run.workflow.seed().collect { item ->
+                awaitRunning()
+                if (skipActive && item.key?.let { rootsByKey[it] }?.let(pendingRoots::containsKey) == true) {
+                    run.recordSkipped()
+                    return@collect
+                }
+                inFlight?.acquire()
+                if (!run.admit(item, seen)) {
+                    inFlight?.release()
+                    return@collect
+                }
+                starts.acquire()
+                launch {
+                    try {
+                        val id = startHoldingPermit { driver.startInstance(rootProcessId, run.rootVariables(item), item.key) }
+                        pendingRoots[id] = Root(item.key, inFlight != null)
+                        item.key?.let { rootsByKey[it] = id }
+                    } finally {
+                        starts.release()
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun startHoldingPermit(start: suspend () -> String): String =
+        try {
+            start()
+        } catch (e: Throwable) {
+            inFlight?.release()
+            throw e
+        }
+
+    private fun releaseInFlight(root: Root) {
+        if (root.holdsPermit) inFlight?.release()
+    }
+
+    private suspend fun drain(starting: Job?) {
         while (true) {
             deliverMessages()
-            if (pendingRoots.isEmpty() && (!attach || !adopt())) return
+            val started = starting?.isCompleted ?: true
+            if (scheduleProcessId == null && started && pendingRoots.isEmpty() && (!attach || !adopt())) return
             delay(pollInterval)
             val finished = attempt { driver.finished(pendingRoots.keys.toList()) } ?: continue
             for ((id, completed) in finished) {
                 val root = pendingRoots.remove(id) ?: continue
                 finishedRoots += id
-                run.rootFinished(id, root.key, completed)
+                releaseInFlight(root)
+                val state = run.rootFinished(id, root.key, completed)
+                root.key?.let {
+                    rootsByKey.remove(it, id)
+                    finishedItems.record(it, state)
+                }
             }
         }
     }
@@ -238,13 +411,14 @@ class EngineRunner(
                 for (job in jobs) attempt { driver.release(job) }
                 return
             }
-            val accepted = jobs.take(slots)
+            val accepted = jobs.take(slots).filter { executing.add(it.id) }
             repeat(slots - accepted.size) { workSlots.release() }
             for (job in accepted) {
                 scope.launch {
                     try {
                         process(job, fetchedAt)
                     } finally {
+                        executing.remove(job.id)
                         workSlots.release()
                     }
                 }
@@ -258,16 +432,21 @@ class EngineRunner(
         }
     }
 
-    private suspend fun process(job: EngineJob, lockedAt: TimeSource.Monotonic.ValueTimeMark) {
-        val heartbeat = scope.launch {
-            val interval = config.lockDuration / 3
-            var tick = 1
-            while (true) {
-                delay(interval * tick - lockedAt.elapsedNow())
-                tick++
-                launch { attempt { driver.extendLock(job, config.lockDuration) } }
+    private fun heartbeat(job: EngineJob, lockedAt: TimeSource.Monotonic.ValueTimeMark): Job = scope.launch {
+        val interval = config.lockDuration / 3
+        var tick = 1
+        while (true) {
+            delay(interval * tick - lockedAt.elapsedNow())
+            tick++
+            launch {
+                val extended = attempt { driver.extendLock(job, config.lockDuration) } != null
+                run.recordLockExtension(job, extended)
             }
         }
+    }
+
+    private suspend fun process(job: EngineJob, lockedAt: TimeSource.Monotonic.ValueTimeMark) {
+        val heartbeat = heartbeat(job, lockedAt)
         try {
             when (val outcome = run.execute(job)) {
                 is JobOutcome.Complete -> deliver { driver.complete(job, outcome.variables) }
@@ -294,6 +473,7 @@ class EngineRunner(
     }
 
     private suspend fun cancelRoots() {
+        scheduler?.let { attempt { driver.cancel(it) } }
         for (id in pendingRoots.keys.toList()) {
             attempt { driver.cancel(id) }
             pendingRoots.remove(id)
@@ -307,8 +487,13 @@ class EngineRunner(
         for (message in broadcasts.toList()) correlate(message, null)
     }
 
-    private suspend fun correlate(message: String, key: String?): Boolean =
-        attempt { driver.correlate(message, run.workflow.key, key) } ?: false
+    private suspend fun correlate(message: String, key: String?): Boolean {
+        var correlated = false
+        for (workflowKey in run.correlationKeys) {
+            if (attempt { driver.correlate(message, workflowKey, key) } == true) correlated = true
+        }
+        return correlated
+    }
 
     private suspend fun awaitRunning() {
         paused.first { !it }

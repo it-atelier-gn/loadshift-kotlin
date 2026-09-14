@@ -5,6 +5,8 @@ kotlinx-datetime = "0.8.0"
 ktor = "3.5.2"
 testcontainers = "2.0.5"
 opentelemetry = "1.66.0"
+micrometer = "1.17.1"
+camunda-client = "8.9.19"
 sqlite-jdbc = "3.53.4.0"
 camunda-bpmn-model = "7.24.0"
 
@@ -21,10 +23,14 @@ ktor-server-core = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
 ktor-server-cio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
 ktor-server-content-negotiation = { module = "io.ktor:ktor-server-content-negotiation", version.ref = "ktor" }
 ktor-server-auth = { module = "io.ktor:ktor-server-auth", version.ref = "ktor" }
+ktor-server-auth-jwt = { module = "io.ktor:ktor-server-auth-jwt", version.ref = "ktor" }
+ktor-server-sessions = { module = "io.ktor:ktor-server-sessions", version.ref = "ktor" }
 ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
 testcontainers = { module = "org.testcontainers:testcontainers", version.ref = "testcontainers" }
 opentelemetry-api = { module = "io.opentelemetry:opentelemetry-api", version.ref = "opentelemetry" }
 opentelemetry-sdk = { module = "io.opentelemetry:opentelemetry-sdk", version.ref = "opentelemetry" }
 opentelemetry-sdk-testing = { module = "io.opentelemetry:opentelemetry-sdk-testing", version.ref = "opentelemetry" }
+camunda-client-java = { module = "io.camunda:camunda-client-java", version.ref = "camunda-client" }
+micrometer-core = { module = "io.micrometer:micrometer-core", version.ref = "micrometer" }
 sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite-jdbc" }
 camunda-bpmn-model = { module = "org.camunda.bpm.model:camunda-bpmn-model", version.ref = "camunda-bpmn-model" }

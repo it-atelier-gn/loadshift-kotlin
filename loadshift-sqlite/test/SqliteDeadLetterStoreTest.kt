@@ -22,6 +22,7 @@ class SqliteDeadLetterStoreTest {
         workflow: String = "orders",
         key: String? = id,
         itemVariable: String? = null,
+        runId: String? = null,
     ) = DeadLetterRecord(
         id = id,
         workflowKey = workflow,
@@ -30,7 +31,24 @@ class SqliteDeadLetterStoreTest {
         deadLetter = DeadLetter(key, "ship", "no carrier for $id"),
         item = JsonObject(mapOf("id" to JsonPrimitive(id), "total" to JsonPrimitive(millis))),
         recordedAt = Instant.fromEpochMilliseconds(millis),
+        runId = runId,
     )
+
+    @Test
+    fun pagesTheRecordsOfOneRunAndKeepsTheRunId() = runTest {
+        SqliteDeadLetterStore(tempPath()).use { store ->
+            store.record(record("a", 1, runId = "r1"))
+            store.record(record("b", 2, runId = "r2"))
+            store.record(record("c", 3, runId = "r1"))
+
+            val first = store.forRun("r1", limit = 1)
+            assertEquals(listOf("a"), first.records.map { it.id })
+            assertEquals("r1", first.records.single().runId)
+            val second = store.forRun("r1", limit = 1, after = first.nextCursor)
+            assertEquals(listOf("c"), second.records.map { it.id })
+            assertNull(second.nextCursor)
+        }
+    }
 
     @Test
     fun storesAndReadsRecordsIncludingNullFields() = runTest {
@@ -63,6 +81,19 @@ class SqliteDeadLetterStoreTest {
             assertEquals(listOf("e"), third.records.map { it.id })
             assertNull(third.nextCursor)
             assertEquals(listOf("other"), store.list("billing").records.map { it.id })
+        }
+    }
+
+    @Test
+    fun findsRecordsByItemKeyInRecordingOrder() = runTest {
+        SqliteDeadLetterStore(tempPath()).use { store ->
+            store.record(record("second", 2, key = "a"))
+            store.record(record("first", 1, key = "a"))
+            store.record(record("other", 1, key = "b"))
+            store.record(record("elsewhere", 1, workflow = "billing", key = "a"))
+
+            assertEquals(listOf("first", "second"), store.forKey("orders", "a").map { it.id })
+            assertEquals(emptyList(), store.forKey("orders", "missing"))
         }
     }
 

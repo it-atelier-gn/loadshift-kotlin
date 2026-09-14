@@ -84,6 +84,27 @@ open class FlowSpec<W : WorkItem> internal constructor(
         steps += AwaitMessage(idgen.next("msg"), message)
     }
 
+    fun userTask(
+        name: String,
+        assignee: String? = null,
+        candidateGroups: List<String> = emptyList(),
+        onComplete: suspend (W, kotlinx.serialization.json.JsonObject) -> Unit = { _, _ -> },
+    ) {
+        require(name.isNotBlank()) { "user task name must not be blank" }
+        require(assignee == null || assignee.isNotBlank()) { "user task assignee must not be blank" }
+        require(candidateGroups.none { it.isBlank() || ',' in it }) { "candidate groups must not be blank or contain commas" }
+        steps += HumanTask(idgen.next("ut"), name, assignee, candidateGroups.toList(), onComplete)
+    }
+
+    fun call(workflow: Workflow<W>) {
+        steps += Call(idgen.next("cw"), workflow)
+    }
+
+    fun awaitSignal(signal: String) {
+        require(signal.isNotBlank()) { "signal name must not be blank" }
+        steps += AwaitSignal(idgen.next("sig"), signal)
+    }
+
     internal fun replaceStep(index: Int, step: Step<W>) {
         steps[index] = step
     }
@@ -276,6 +297,12 @@ class WorkflowSpec<W : WorkItem> @PublishedApi internal constructor(
     private val wfName: String,
 ) : FlowSpec<W>(codec, sanitizeId(wfName), IdGen()) {
     private var seed: Seed<W> = { emptyFlow() }
+    private var versionTag: String? = null
+
+    fun version(tag: String) {
+        require(tag.isNotBlank()) { "version must not be blank" }
+        versionTag = tag
+    }
 
     fun input(list: List<W>) {
         seed = { flow { for (w in list) emit(w) } }
@@ -299,7 +326,7 @@ class WorkflowSpec<W : WorkItem> @PublishedApi internal constructor(
         }
         val root = SubFlow(key, toStep(), codec, tasks.toMap(), decisions.toMap())
         validateTopics(wfName, root)
-        return Workflow(key = key, name = wfName, seed = seed, root = root)
+        return Workflow(key = key, name = wfName, seed = seed, root = root, version = versionTag)
     }
 }
 
@@ -310,7 +337,7 @@ inline fun <reified W : WorkItem> workflow(
 
 private val WORKFLOW_KEY = Regex("^[a-z_][a-z0-9_\\-]*$")
 
-private val RESERVED_TOPIC = Regex("^(decision_[cl]|expand_f|reduce_f|timeout_to|loop_l)\\d+$")
+private val RESERVED_TOPIC = Regex("^(decision_[cl]|expand_f|reduce_f|timeout_to|loop_l|call_cw|return_cw|form_ut)\\d+$")
 
 private fun validateTopics(workflowName: String, root: SubFlow<*>) {
     val seen = HashSet<String>()
@@ -335,7 +362,7 @@ private fun validateTopics(workflowName: String, root: SubFlow<*>) {
             is Timeout<*> -> visit(step.body)
             is FanOut<*, *> -> visit(step.body.step)
             is FanIn<*, *, *> -> visit(step.body.step)
-            is Wait<*>, is AwaitMessage<*> -> Unit
+            is Wait<*>, is AwaitMessage<*>, is AwaitSignal<*>, is Call<*>, is HumanTask<*> -> Unit
         }
     }
     visit(root.step)

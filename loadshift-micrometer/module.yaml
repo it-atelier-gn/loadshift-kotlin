@@ -1,0 +1,13 @@
+description: Micrometer metrics for loadshift
+product: jvm/lib
+
+apply:
+  - ../templates/library.module-template.yaml
+
+dependencies:
+  - ../loadshift-core
+  - $libs.micrometer.core
+
+test-dependencies:
+  - ../loadshift-local
+  - $libs.kotlinx.coroutines.test

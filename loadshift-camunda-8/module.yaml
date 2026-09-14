@@ -1,3 +1,4 @@
+description: Backend that runs loadshift workflows on Camunda 8
 product: jvm/lib
 
 apply:

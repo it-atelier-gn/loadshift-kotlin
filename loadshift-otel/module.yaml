@@ -1,3 +1,4 @@
+description: OpenTelemetry tracing and metrics for loadshift
 product: jvm/lib
 
 apply:

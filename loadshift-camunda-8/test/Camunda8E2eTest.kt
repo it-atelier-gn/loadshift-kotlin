@@ -9,8 +9,17 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import loadshift.core.DeadLetter
+import loadshift.core.EngineNames
 import loadshift.core.ErrorPolicy
 import loadshift.core.InMemoryCheckpointStore
+import loadshift.core.InMemoryDeadLetterStore
+import loadshift.core.ItemState
+import loadshift.core.MigrationResult
+import loadshift.core.MetricNames
+import loadshift.core.Metrics
+import loadshift.core.UserTask
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import loadshift.core.Progress
 import loadshift.core.RetryPolicy
 import loadshift.core.RunConfig
@@ -31,6 +40,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.util.Collections
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -50,7 +60,7 @@ private data class Contact(var id: String, var label: String = "") : WorkItem {
     override val key get() = id
 }
 
-private const val IMAGE = "camunda/camunda:8.9.19"
+private val IMAGE = System.getenv("LOADSHIFT_C8_IMAGE") ?: "camunda/camunda:8.9.19"
 private const val BASE_VARIABLE = "LOADSHIFT_C8_BASE"
 
 private val h2Config = """
@@ -290,17 +300,27 @@ class Camunda8E2eTest {
     @Test
     fun longRunningTaskKeepsItsLock() = e2e { base ->
         val executions = AtomicInteger()
+        val failedExtensions = AtomicInteger()
+        val metrics = object : Metrics {
+            override fun increment(name: String, attributes: Map<String, String>, amount: Long) {
+                if (name == MetricNames.LOCK_EXTENSIONS && attributes[MetricNames.OUTCOME] == MetricNames.FAILURE) {
+                    failedExtensions.addAndGet(amount.toInt())
+                }
+            }
+
+            override fun record(name: String, attributes: Map<String, String>, duration: Duration) {}
+        }
         val wf = workflow<Customer>(uniqueName("lock")) {
             input(listOf(Customer("long")))
             task("slow") {
                 executions.incrementAndGet()
-                delay(15.seconds)
+                delay(25.seconds)
             }
         }
 
-        val result = Camunda8Backend(base).run(wf, RunConfig(lockDuration = 6.seconds, maxConcurrency = 2)).await()
+        val result = Camunda8Backend(base).run(wf, RunConfig(lockDuration = 10.seconds, maxConcurrency = 2, metrics = metrics)).await()
 
-        assertEquals(1, executions.get())
+        assertEquals(1, executions.get(), "failed lock extensions: ${failedExtensions.get()}")
         assertEquals(1, result.done)
     }
 
@@ -333,6 +353,214 @@ class Camunda8E2eTest {
         assertEquals(RunResult(done = 1, failed = 0, skipped = 0, deadLetters = listOf(DeadLetter("broken", "ship", "no carrier"))), result)
         assertEquals(listOf("broken"), refunded.toList())
         assertEquals(2, second.control.runs().single().progress.seeded)
+    }
+
+    @Test
+    fun deadLettersAreRequeuedAfterTheCauseIsFixed() = e2e { base ->
+        val store = InMemoryDeadLetterStore()
+        val broken = AtomicBoolean(true)
+        val finished = Collections.synchronizedSet(mutableSetOf<String>())
+        val wf = workflow<Customer>(uniqueName("requeue")) {
+            input(listOf(Customer("root-bad"), Customer("parent")))
+            task("check", retry = RetryPolicy.None) {
+                if (it.id == "root-bad" && broken.get()) error("root broken")
+                finished += it.id
+            }
+            fanOut(expand = { c -> if (c.id == "parent") listOf(Contact("parent-kid")) else emptyList() }, context = { it }) {
+                task("child", retry = RetryPolicy.None) { kid ->
+                    if (broken.get()) error("child broken")
+                    finished += "${kid.id}<${context().id}"
+                }
+            }
+        }
+
+        val backend = Camunda8Backend(base)
+        val first = backend.run(wf, RunConfig(deadLetters = store)).await()
+        assertEquals(setOf("check", "child"), first.deadLetters.map { it.topic }.toSet())
+        val records = store.list(wf.key).records
+        assertEquals(2, records.size)
+
+        broken.set(false)
+        val requeued = backend.requeue(wf, records, RunConfig(deadLetters = store)).await()
+
+        assertEquals(RunResult(done = 2, failed = 0, skipped = 0, deadLetters = emptyList()), requeued)
+        assertTrue("root-bad" in finished && "parent-kid<parent" in finished, finished.toString())
+        assertTrue(store.list(wf.key).records.isEmpty())
+    }
+
+    @Test
+    fun userTasksAreListedAndCompletedWithFormData() = e2e { base ->
+        val finished = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Customer>(uniqueName("approval")) {
+            input(listOf(Customer("a")))
+            userTask("approve order", assignee = "ops", candidateGroups = listOf("reviewers")) { customer, form ->
+                customer.note = form.getValue("decision").jsonPrimitive.content
+            }
+            task("finish") { finished += "${it.id}:${it.note}" }
+        }
+        val backend = Camunda8Backend(base)
+        val handle = backend.run(wf)
+        var open = emptyList<UserTask>()
+        eventually {
+            open = backend.userTasks(wf).filter { it.itemKey != null }
+            open.isNotEmpty()
+        }
+        val task = open.single()
+
+        assertEquals(UserTask(task.id, wf.key, "approve order", "a", "ops", listOf("reviewers")), task)
+        assertTrue(backend.completeUserTask(task.id, JsonObject(mapOf("decision" to JsonPrimitive("approved")))))
+        assertEquals(1, handle.await().done)
+        assertEquals(listOf("a:approved"), finished.toList())
+    }
+
+    @Test
+    fun migrateMovesWaitingInstancesToTheLatestVersion() = e2e { base ->
+        val name = uniqueName("versioned")
+        val steps = Collections.synchronizedList(mutableListOf<String>())
+        val first = workflow<Customer>(name) {
+            version("1")
+            input(listOf(Customer("a")))
+            awaitMessage("go")
+            task("finish") { steps += "finish-1:${it.id}" }
+        }
+        val second = workflow<Customer>(name) {
+            version("2")
+            input(emptyList())
+            awaitMessage("go")
+            task("audit") { steps += "audit:${it.id}" }
+            task("finish") { steps += "finish-2:${it.id}" }
+        }
+        val backend = Camunda8Backend(base)
+        val original = backend.run(first)
+        eventually { original.item("a")?.state == ItemState.Running }
+        eventually { Camunda8Client(base).instanceCount(first.key) == 1L }
+        original.detach()
+
+        assertEquals(MigrationResult(1, emptyList()), backend.migrate(second))
+
+        val takeover = backend.attach(second)
+        takeover.send("go", "a")
+        assertEquals(1, takeover.await().done)
+        assertEquals(listOf("audit:a", "finish-2:a"), steps.toList())
+    }
+
+    @Test
+    fun callRunsTheCalledWorkflowAndReturnsTheItemToTheCaller() = e2e { base ->
+        val shipped = Collections.synchronizedList(mutableListOf<String>())
+        val billing = workflow<Customer>(uniqueName("billing")) {
+            input(emptyList())
+            task("invoice") { it.note = "invoiced" }
+            awaitMessage("paid")
+            task("archive", retry = RetryPolicy.None) { if (it.id == "broken") error("archive down") }
+        }
+        val checkout = workflow<Customer>(uniqueName("checkout")) {
+            input(listOf(Customer("fine"), Customer("broken")))
+            call(billing)
+            task("ship") { shipped += "${it.id}:${it.note}" }
+        }
+
+        val handle = Camunda8Backend(base).run(checkout)
+        handle.send("paid", "fine")
+        handle.send("paid", "broken")
+        val result = handle.await()
+
+        assertEquals(setOf("fine:invoiced", "broken:invoiced"), shipped.toSet())
+        assertEquals(2, result.done)
+        assertEquals(listOf("archive"), result.deadLetters.map { it.topic })
+    }
+
+    @Test
+    fun signalReleasesWaitingInstancesOfEveryWorkflow() = e2e { base ->
+        val signal = uniqueName("signal")
+        fun flow(name: String) = workflow<Customer>(uniqueName(name)) {
+            input(listOf(Customer("a")))
+            awaitSignal(signal)
+            task("finish") { }
+        }
+        val backend = Camunda8Backend(base)
+        val first = backend.run(flow("signal-one"))
+        val second = backend.run(flow("signal-two"))
+        eventually { first.item("a")?.state == ItemState.Running && second.item("a")?.state == ItemState.Running }
+
+        eventually {
+            backend.signal(signal)
+            first.progress().done == 1L && second.progress().done == 1L
+        }
+
+        assertEquals(1, first.await().done)
+        assertEquals(1, second.await().done)
+    }
+
+    @Test
+    fun defaultTenantIdIsAcceptedOnEveryTenantScopedRequest() = e2e { base ->
+        val wf = workflow<Customer>(uniqueName("tenant")) {
+            input(listOf(Customer("a")))
+            awaitMessage("go")
+            task("finish") { }
+        }
+        val handle = Camunda8Backend(base, tenantId = "<default>").run(wf)
+        eventually { handle.item("a")?.state == ItemState.Running }
+        handle.send("go", "a")
+
+        assertEquals(1, handle.await().done)
+        eventually { Camunda8Client(base, tenantId = "<default>").instanceCount(wf.key) == 0L }
+    }
+
+    @Test
+    fun cronScheduleSeedsFromTheEngineTimerUntilTheRunIsCancelled() = e2e { base ->
+        val wf = workflow<Customer>(uniqueName("cron")) {
+            input(listOf(Customer("a"), Customer("b")))
+            task("work") { }
+        }
+        val client = Camunda8Client(base)
+        val schedule = EngineNames.scheduleProcess(wf.key)
+        val handle = Camunda8Backend(base).run(wf, RunConfig(start = Start.Cron("* * * * *")))
+
+        eventually(timeout = 150.seconds) { handle.progress().done == 2L }
+        eventually { client.instanceCount(schedule) == 1L }
+
+        handle.cancel()
+
+        eventually { client.instanceCount(schedule) == 0L }
+    }
+
+    @Test
+    fun maxInFlightStartsTheNextInstanceWhenOneFinishes() = e2e { base ->
+        val wf = workflow<Customer>(uniqueName("in-flight")) {
+            input(listOf(Customer("a"), Customer("b"), Customer("c")))
+            awaitMessage("go")
+            task("finish") { }
+        }
+        val handle = Camunda8Backend(base).run(wf, RunConfig(maxInFlight = 2))
+        eventually { handle.progress().seeded == 2L }
+        delay(2.seconds)
+        assertEquals(2L, handle.progress().seeded)
+
+        handle.send("go", "a")
+        eventually { handle.progress().seeded == 3L }
+        handle.send("go", "b")
+        handle.send("go", "c")
+
+        assertEquals(3, handle.await().done)
+    }
+
+    @Test
+    fun cancelItemCancelsOneWaitingInstance() = e2e { base ->
+        val wf = workflow<Customer>(uniqueName("cancel-item")) {
+            input(listOf(Customer("keep"), Customer("drop")))
+            awaitMessage("go")
+            task("finish") { }
+        }
+        val handle = Camunda8Backend(base).run(wf)
+        eventually { handle.item("keep")?.state == ItemState.Running && handle.item("drop")?.state == ItemState.Running }
+
+        assertTrue(handle.cancelItem("drop"))
+        handle.send("go", "keep")
+        val result = handle.await()
+
+        assertEquals(RunResult(done = 1, failed = 0, skipped = 0, deadLetters = emptyList(), cancelled = 1), result)
+        assertEquals(ItemState.Cancelled, handle.item("drop")?.state)
+        assertEquals(ItemState.Done, handle.item("keep")?.state)
     }
 
     @Test

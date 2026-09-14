@@ -35,11 +35,13 @@ class SqliteDeadLetterStore(path: String) : DeadLetterStore, AutoCloseable {
                     topic TEXT NOT NULL,
                     error TEXT NOT NULL,
                     item TEXT NOT NULL,
-                    recorded_at INTEGER NOT NULL
+                    recorded_at INTEGER NOT NULL,
+                    run_id TEXT
                 )
                 """.trimIndent(),
             )
             stmt.execute("CREATE INDEX IF NOT EXISTS dead_letters_page ON dead_letters (workflow_key, recorded_at, id)")
+            stmt.execute("CREATE INDEX IF NOT EXISTS dead_letters_run ON dead_letters (run_id, recorded_at, id)")
         }
     }
 
@@ -47,9 +49,8 @@ class SqliteDeadLetterStore(path: String) : DeadLetterStore, AutoCloseable {
         io {
             connection.prepareStatement(
                 """
-                INSERT OR REPLACE INTO dead_letters
-                    (id, workflow_key, level, item_variable, item_key, topic, error, item, recorded_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO dead_letters ($COLUMNS)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """.trimIndent(),
             ).use { stmt ->
                 stmt.setString(1, record.id)
@@ -61,40 +62,32 @@ class SqliteDeadLetterStore(path: String) : DeadLetterStore, AutoCloseable {
                 stmt.setString(7, record.deadLetter.error)
                 stmt.setString(8, record.item.toString())
                 stmt.setLong(9, record.recordedAt.toEpochMilliseconds())
+                stmt.setNullableString(10, record.runId)
                 stmt.executeUpdate()
             }
         }
     }
 
-    override suspend fun list(workflowKey: String, limit: Int, after: String?): DeadLetterPage {
-        require(limit > 0) { "limit must be positive, was $limit" }
-        val position = after?.let(::parseDeadLetterCursor)
-        return io {
-            val sql = buildString {
-                append("SELECT $COLUMNS FROM dead_letters WHERE workflow_key = ?")
-                if (position != null) append(" AND (recorded_at > ? OR (recorded_at = ? AND id > ?))")
-                append(" ORDER BY recorded_at, id LIMIT ?")
-            }
-            connection.prepareStatement(sql).use { stmt ->
-                var index = 1
-                stmt.setString(index++, workflowKey)
-                if (position != null) {
-                    stmt.setLong(index++, position.first)
-                    stmt.setLong(index++, position.first)
-                    stmt.setString(index++, position.second)
-                }
-                stmt.setInt(index, limit + 1)
-                val rows = stmt.executeQuery().use { rs -> buildList { while (rs.next()) add(rs.toRecord()) } }
-                val page = rows.take(limit)
-                DeadLetterPage(page, if (rows.size > limit) page.last().cursor else null)
-            }
-        }
-    }
+    override suspend fun list(workflowKey: String, limit: Int, after: String?): DeadLetterPage =
+        page("workflow_key", workflowKey, limit, after)
+
+    override suspend fun forRun(runId: String, limit: Int, after: String?): DeadLetterPage =
+        page("run_id", runId, limit, after)
 
     override suspend fun get(id: String): DeadLetterRecord? = io {
         connection.prepareStatement("SELECT $COLUMNS FROM dead_letters WHERE id = ?").use { stmt ->
             stmt.setString(1, id)
             stmt.executeQuery().use { rs -> if (rs.next()) rs.toRecord() else null }
+        }
+    }
+
+    override suspend fun forKey(workflowKey: String, itemKey: String): List<DeadLetterRecord> = io {
+        connection.prepareStatement(
+            "SELECT $COLUMNS FROM dead_letters WHERE workflow_key = ? AND item_key = ? ORDER BY recorded_at, id",
+        ).use { stmt ->
+            stmt.setString(1, workflowKey)
+            stmt.setString(2, itemKey)
+            stmt.executeQuery().use { rs -> buildList { while (rs.next()) add(rs.toRecord()) } }
         }
     }
 
@@ -111,6 +104,31 @@ class SqliteDeadLetterStore(path: String) : DeadLetterStore, AutoCloseable {
         connection.close()
     }
 
+    private suspend fun page(column: String, value: String, limit: Int, after: String?): DeadLetterPage {
+        require(limit > 0) { "limit must be positive, was $limit" }
+        val position = after?.let(::parseDeadLetterCursor)
+        return io {
+            val sql = buildString {
+                append("SELECT $COLUMNS FROM dead_letters WHERE $column = ?")
+                if (position != null) append(" AND (recorded_at > ? OR (recorded_at = ? AND id > ?))")
+                append(" ORDER BY recorded_at, id LIMIT ?")
+            }
+            connection.prepareStatement(sql).use { stmt ->
+                var index = 1
+                stmt.setString(index++, value)
+                if (position != null) {
+                    stmt.setLong(index++, position.first)
+                    stmt.setLong(index++, position.first)
+                    stmt.setString(index++, position.second)
+                }
+                stmt.setInt(index, limit + 1)
+                val rows = stmt.executeQuery().use { rs -> buildList { while (rs.next()) add(rs.toRecord()) } }
+                val page = rows.take(limit)
+                DeadLetterPage(page, if (rows.size > limit) page.last().cursor else null)
+            }
+        }
+    }
+
     private suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { mutex.withLock { block() } }
 
     private fun java.sql.PreparedStatement.setNullableString(index: Int, value: String?) {
@@ -125,9 +143,10 @@ class SqliteDeadLetterStore(path: String) : DeadLetterStore, AutoCloseable {
         deadLetter = DeadLetter(getString("item_key"), getString("topic"), getString("error")),
         item = Json.parseToJsonElement(getString("item")).jsonObject,
         recordedAt = Instant.fromEpochMilliseconds(getLong("recorded_at")),
+        runId = getString("run_id"),
     )
 
     private companion object {
-        const val COLUMNS = "id, workflow_key, level, item_variable, item_key, topic, error, item, recorded_at"
+        const val COLUMNS = "id, workflow_key, level, item_variable, item_key, topic, error, item, recorded_at, run_id"
     }
 }

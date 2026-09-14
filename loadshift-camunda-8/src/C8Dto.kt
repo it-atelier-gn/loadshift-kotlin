@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonObject
 data class CreateInstanceRequest(
     val processDefinitionId: String,
     val variables: JsonObject,
+    val tenantId: String? = null,
 )
 
 @Serializable
@@ -19,6 +20,7 @@ data class ActivateJobsRequest(
     val timeout: Long,
     val maxJobsToActivate: Int,
     val requestTimeout: Long = 0,
+    val tenantIds: List<String>? = null,
 )
 
 @Serializable
@@ -62,12 +64,63 @@ data class JobUpdateRequest(val changeset: JobChangeset)
 data class MessageCorrelationRequest(
     val name: String,
     val correlationKey: String,
+    val tenantId: String? = null,
+)
+
+@Serializable
+data class SignalBroadcastRequest(
+    val signalName: String,
+    val tenantId: String? = null,
 )
 
 @Serializable
 data class ProcessInstanceItem(
     val processInstanceKey: String,
     val state: String,
+    val processDefinitionKey: String? = null,
+)
+
+@Serializable
+data class UserTaskItem(
+    val userTaskKey: String,
+    val name: String? = null,
+    val state: String? = null,
+    val assignee: String? = null,
+    val elementId: String? = null,
+    val processDefinitionId: String? = null,
+    val processInstanceKey: String? = null,
+    val candidateGroups: List<String> = emptyList(),
+)
+
+@Serializable
+data class UserTaskSearchResponse(
+    val items: List<UserTaskItem> = emptyList(),
+    val page: CursorPage = CursorPage(),
+)
+
+@Serializable
+data class UserTaskCompletionRequest(val variables: JsonObject)
+
+@Serializable
+data class DeployedProcess(
+    val processDefinitionId: String,
+    val processDefinitionKey: String,
+    val processDefinitionVersion: Int = 0,
+)
+
+@Serializable
+data class DeploymentMetadata(val processDefinition: DeployedProcess? = null)
+
+@Serializable
+data class DeploymentResponse(val deployments: List<DeploymentMetadata> = emptyList())
+
+@Serializable
+data class MappingInstruction(val sourceElementId: String, val targetElementId: String)
+
+@Serializable
+data class MigrationRequest(
+    val targetProcessDefinitionKey: String,
+    val mappingInstructions: List<MappingInstruction>,
 )
 
 @Serializable
@@ -95,7 +148,7 @@ data class MessageSubscriptionItem(val correlationKey: String? = null)
 data class MessageSubscriptionSearchResponse(val items: List<MessageSubscriptionItem> = emptyList())
 
 @Serializable
-data class SearchFilter(val processDefinitionId: String, val state: String? = null)
+data class SearchFilter(val processDefinitionId: String, val state: String? = null, val tenantId: String? = null)
 
 @Serializable
 data class SearchRequest(val filter: SearchFilter)

@@ -1,13 +1,24 @@
 package loadshift.core
 
-import kotlin.time.Clock
-import kotlin.time.Instant
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.time.Clock
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
 
 enum class RunState { Scheduled, Running, Paused, Completed, Failed, Cancelled, Detached }
 
 private val TERMINAL_STATES = setOf(RunState.Completed, RunState.Failed, RunState.Cancelled, RunState.Detached)
+
+val RunState.terminal: Boolean get() = this in TERMINAL_STATES
 
 data class FlowNode(
     val type: String,
@@ -24,11 +35,13 @@ data class RunSnapshot(
     val progress: Progress,
     val deadLetters: List<DeadLetter>,
     val engineActive: Long?,
+    val runId: String? = null,
 )
 
 interface RunInspector {
     fun state(): RunState
     fun progress(): Progress
+    fun runId(): String? = null
     fun deadLetters(): List<DeadLetter> = emptyList()
     suspend fun engineActive(): Long? = null
 }
@@ -43,6 +56,10 @@ interface Control {
     suspend fun resume(id: String): Boolean
     suspend fun cancel(id: String): Boolean
     suspend fun detach(id: String): Boolean
+    suspend fun item(id: String, key: String): ItemStatus?
+    suspend fun cancelItem(id: String, key: String): Boolean
+    val worker: String? get() = null
+    suspend fun registeredRuns(): List<RunRecord> = emptyList()
 }
 
 interface ControllableBackend : Backend {
@@ -51,9 +68,20 @@ interface ControllableBackend : Backend {
 
 interface EngineBackend : ControllableBackend {
     suspend fun <W : WorkItem> attach(workflow: Workflow<W>, config: RunConfig = RunConfig()): RunHandle
+    suspend fun migrate(workflow: Workflow<*>): MigrationResult
 }
 
-class RunTracker(override val backendType: String, private val maxEntries: Int = 1000) : Control {
+class RunTracker(
+    override val backendType: String,
+    private val maxEntries: Int = 1000,
+    private val registry: RunRegistry? = null,
+    override val worker: String = defaultWorkerName(),
+    private val publishInterval: Duration = 5.seconds,
+) : Control {
+
+    init {
+        require(publishInterval.isPositive()) { "publishInterval must be positive, was $publishInterval" }
+    }
 
     private class Entry(
         val id: String,
@@ -67,9 +95,13 @@ class RunTracker(override val backendType: String, private val maxEntries: Int =
 
     private val counter = AtomicLong()
     private val entries = ConcurrentHashMap<String, Entry>()
+    private val publisher = registry?.let { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
+    private val publishing = AtomicBoolean(false)
+    private val finalPublished: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     fun track(workflow: Workflow<*>, inspector: RunInspector, control: RunHandle? = null): String {
-        val id = "run-${counter.incrementAndGet()}"
+        val number = counter.incrementAndGet()
+        val id = if (registry == null) "run-$number" else "$worker:run-$number"
         entries[id] = Entry(
             id = id,
             workflowKey = workflow.key,
@@ -80,16 +112,71 @@ class RunTracker(override val backendType: String, private val maxEntries: Int =
             control = control,
         )
         evictOldestCompleted()
+        startPublishing()
         return id
+    }
+
+    suspend fun publish() {
+        val target = registry ?: return
+        for (entry in entries.values) {
+            if (entry.id in finalPublished) continue
+            val now = Clock.System.now()
+            val state = entry.inspector.state()
+            val record = RunRecord(
+                id = entry.id,
+                worker = worker,
+                backendType = backendType,
+                workflowKey = entry.workflowKey,
+                workflowName = entry.workflowName,
+                state = state,
+                startedAt = entry.startedAt,
+                updatedAt = now,
+                staleAt = now + publishInterval * STALE_INTERVALS,
+                progress = entry.inspector.progress(),
+                deadLetters = entry.inspector.deadLetters().size.toLong(),
+            )
+            try {
+                target.save(record)
+                if (state.terminal) finalPublished += entry.id
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                continue
+            }
+        }
+    }
+
+    override suspend fun registeredRuns(): List<RunRecord> {
+        val target = registry ?: return emptyList()
+        val records = try {
+            target.list()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return emptyList()
+        }
+        return records.filter { !entries.containsKey(it.id) }
+    }
+
+    private fun startPublishing() {
+        val scope = publisher ?: return
+        if (!publishing.compareAndSet(false, true)) return
+        scope.launch {
+            while (true) {
+                publish()
+                delay(publishInterval)
+            }
+        }
     }
 
     private fun evictOldestCompleted() {
         while (entries.size > maxEntries) {
             val oldest = entries.values
-                .filter { it.inspector.state() in TERMINAL_STATES }
+                .filter { it.inspector.state().terminal }
                 .minByOrNull { it.startedAt }
                 ?: break
             entries.remove(oldest.id)
+            finalPublished.remove(oldest.id)
         }
     }
 
@@ -110,6 +197,10 @@ class RunTracker(override val backendType: String, private val maxEntries: Int =
 
     override suspend fun detach(id: String): Boolean = withControl(id) { it.detach() }
 
+    override suspend fun item(id: String, key: String): ItemStatus? = entries[id]?.control?.item(key)
+
+    override suspend fun cancelItem(id: String, key: String): Boolean = entries[id]?.control?.cancelItem(key) ?: false
+
     private suspend fun withControl(id: String, action: suspend (RunHandle) -> Unit): Boolean {
         val control = entries[id]?.control ?: return false
         action(control)
@@ -125,7 +216,12 @@ class RunTracker(override val backendType: String, private val maxEntries: Int =
         progress = e.inspector.progress(),
         deadLetters = e.inspector.deadLetters(),
         engineActive = e.inspector.engineActive(),
+        runId = e.inspector.runId(),
     )
+
+    private companion object {
+        const val STALE_INTERVALS = 3
+    }
 }
 
 fun describeFlow(workflow: Workflow<*>): FlowNode =
@@ -147,6 +243,9 @@ private fun describeStep(step: Step<*>): FlowNode = when (step) {
     is Wait<*> -> FlowNode("wait", step.id)
     is Timeout<*> -> FlowNode("timeout", step.id, listOf(describeStep(step.body)))
     is AwaitMessage<*> -> FlowNode("awaitMessage", step.message)
+    is AwaitSignal<*> -> FlowNode("awaitSignal", step.signal)
+    is Call<*> -> FlowNode("call", step.workflow.name)
+    is HumanTask<*> -> FlowNode("userTask", step.name)
     is FanOut<*, *> -> FlowNode("fanOut", step.id, listOf(describeStep(step.body.step)))
     is FanIn<*, *, *> -> FlowNode("fanIn", step.id, listOf(describeStep(step.body.step)))
 }

@@ -1,0 +1,20 @@
+description: Job streaming over gRPC for the loadshift Camunda 8 backend
+product: jvm/lib
+
+apply:
+  - ../templates/library.module-template.yaml
+
+settings:
+  kotlin:
+    serialization: json
+
+dependencies:
+  - ../loadshift-core
+  - ../loadshift-camunda-8
+  - $libs.kotlinx.coroutines.core
+  - $libs.kotlinx.serialization.json
+  - $libs.camunda.client.java
+
+test-dependencies:
+  - $libs.kotlinx.coroutines.test
+  - $libs.testcontainers

@@ -3,6 +3,7 @@ package loadshift.camunda7
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 
 @Serializable
 data class DeploymentDto(
@@ -23,6 +24,13 @@ data class MessageRequest(
     val correlationKeys: Map<String, CamundaValue>? = null,
     val all: Boolean = true,
     val resultEnabled: Boolean = false,
+    val tenantId: String? = null,
+)
+
+@Serializable
+data class SignalRequest(
+    val name: String,
+    val tenantId: String? = null,
 )
 
 @Serializable
@@ -36,6 +44,42 @@ data class StartInstanceResponse(
 data class ProcessInstanceDto(
     val id: String,
     val businessKey: String? = null,
+    val definitionId: String? = null,
+)
+
+@Serializable
+data class TaskDto(
+    val id: String,
+    val name: String? = null,
+    val assignee: String? = null,
+    val taskDefinitionKey: String? = null,
+    val processInstanceId: String? = null,
+    val processDefinitionId: String? = null,
+)
+
+@Serializable
+data class CompleteTaskRequest(val variables: Map<String, CamundaValue>)
+
+@Serializable
+data class ProcessDefinitionDto(
+    val id: String,
+    val key: String,
+    val version: Int,
+    val versionTag: String? = null,
+)
+
+@Serializable
+data class MigrationGenerateRequest(
+    val sourceProcessDefinitionId: String,
+    val targetProcessDefinitionId: String,
+    val updateEventTriggers: Boolean = false,
+)
+
+@Serializable
+data class MigrationExecuteRequest(
+    val migrationPlan: JsonObject,
+    val processInstanceIds: List<String>,
+    val skipCustomListeners: Boolean = true,
 )
 
 @Serializable
@@ -57,6 +101,7 @@ data class FetchTopicDto(
     val lockDuration: Long,
     val variables: List<String>? = null,
     val deserializeValues: Boolean = false,
+    val tenantIdIn: List<String>? = null,
 )
 
 @Serializable

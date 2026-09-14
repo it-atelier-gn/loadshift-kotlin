@@ -94,8 +94,17 @@ class ControlTest {
             override suspend fun await() = RunResult(0, 0, 0, emptyList())
             override suspend fun send(message: String, key: String) {}
             override suspend fun broadcast(message: String) {}
+            override suspend fun item(key: String) =
+                if (key == "known") ItemStatus(key, ItemState.Running, "yes", emptyList()) else null
+            override suspend fun cancelItem(key: String) = key == "known"
         }
         val id = tracker.track(sample(), inspector, control)
+        assertEquals(ItemState.Running, tracker.item(id, "known")?.state)
+        assertNull(tracker.item(id, "other"))
+        assertNull(tracker.item("missing", "known"))
+        assertTrue(tracker.cancelItem(id, "known"))
+        assertFalse(tracker.cancelItem(id, "other"))
+        assertFalse(tracker.cancelItem("missing", "known"))
 
         assertTrue(tracker.start(id))
         assertTrue(tracker.pause(id))

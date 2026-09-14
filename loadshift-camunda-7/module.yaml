@@ -1,3 +1,4 @@
+description: Backend that runs loadshift workflows on Camunda 7 and CIB seven
 product: jvm/lib
 
 apply:

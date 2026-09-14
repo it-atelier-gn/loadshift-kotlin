@@ -10,14 +10,19 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Clock
 import kotlin.time.Duration
+import kotlin.time.Instant
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -32,7 +37,10 @@ private class FakeDriver : EngineDriver {
 
     val started = CopyOnWriteArrayList<Pair<String, JsonObject>>()
     val jobs = Channel<EngineJob>(Channel.UNLIMITED)
+    val scheduleJobs = Channel<EngineJob>(Channel.UNLIMITED)
     val completed = CopyOnWriteArrayList<String>()
+    val completedVariables = ConcurrentHashMap<String, JsonObject>()
+    val schedulers = CopyOnWriteArrayList<RootInstance>()
     val failures = CopyOnWriteArrayList<Failure>()
     val terminated = CopyOnWriteArrayList<String>()
     val cancelled = CopyOnWriteArrayList<String>()
@@ -50,11 +58,15 @@ private class FakeDriver : EngineDriver {
 
     override fun pollGroups(jobTypes: List<String>): List<List<String>> = listOf(jobTypes)
 
-    override suspend fun activeRoots(processId: String): List<RootInstance> = roots.filter { finished[it.id] == null }
+    override suspend fun activeRoots(processId: String): List<RootInstance> =
+        (if (processId.endsWith(EngineNames.scheduleProcess(""))) schedulers else roots).filter { finished[it.id] == null }
+
+    val startedProcesses = CopyOnWriteArrayList<String>()
 
     override suspend fun startInstance(processId: String, variables: JsonObject, businessKey: String?): String {
         val id = "pi-${ids.incrementAndGet()}"
         started += id to variables
+        startedProcesses += processId
         return id
     }
 
@@ -63,13 +75,15 @@ private class FakeDriver : EngineDriver {
             heldFetch = null
             return held.await()
         }
-        val first = withTimeoutOrNull(wait.coerceAtLeast(10.milliseconds)) { jobs.receive() } ?: return emptyList()
+        val source = if (jobTypes.any { it.endsWith("/${EngineNames.SCHEDULE_NEXT}") }) scheduleJobs else jobs
+        val first = withTimeoutOrNull(wait.coerceAtLeast(10.milliseconds)) { source.receive() } ?: return emptyList()
         val batch = mutableListOf(first)
-        while (batch.size < maxJobs) batch += jobs.tryReceive().getOrNull() ?: break
+        while (batch.size < maxJobs) batch += source.tryReceive().getOrNull() ?: break
         return batch
     }
 
     override suspend fun complete(job: EngineJob, variables: JsonObject) {
+        completedVariables[job.id] = variables
         completed += job.id
     }
 
@@ -133,6 +147,8 @@ class EngineRunnerTest {
         config: RunConfig = RunConfig(),
         driver: FakeDriver = FakeDriver(),
         attach: Boolean = false,
+        requeue: List<DeadLetterRecord>? = null,
+        scheduleProcessId: String? = null,
     ): Pair<EngineRunner, FakeDriver> {
         val runner = EngineRunner(
             run = EngineRun(workflow, config),
@@ -140,6 +156,8 @@ class EngineRunnerTest {
             rootProcessId = workflow.root.key,
             processIds = listOf(workflow.root.key),
             attach = attach,
+            requeue = requeue,
+            scheduleProcessId = scheduleProcessId,
             pollInterval = 20.milliseconds,
             fetchWait = 20.milliseconds,
         ).begin()
@@ -166,6 +184,31 @@ class EngineRunnerTest {
         assertEquals(RunState.Completed, handle.state())
         assertTrue(store.isComplete("finish", "a"))
         assertTrue(store.isComplete("finish", "b"))
+    }
+
+    @Test
+    fun jobFetchedAgainWhileExecutingRunsOnce() = runBlocking {
+        val executions = AtomicInteger()
+        val gate = CompletableDeferred<Unit>()
+        val wf = flow("duplicate", "a") {
+            executions.incrementAndGet()
+            gate.await()
+        }
+        val (handle, driver) = launch(wf, RunConfig(maxConcurrency = 2))
+        eventually { driver.started.size == 1 }
+        driver.enqueueWork(wf)
+        eventually { executions.get() == 1 }
+
+        driver.enqueueWork(wf)
+        delay(200.milliseconds)
+        gate.complete(Unit)
+
+        eventually { driver.completed.size == 1 }
+        delay(100.milliseconds)
+        assertEquals(1, executions.get())
+        assertEquals(listOf("job-pi-1"), driver.completed.toList())
+        assertTrue(driver.released.isEmpty())
+        handle.cancel()
     }
 
     @Test
@@ -351,6 +394,159 @@ class EngineRunnerTest {
 
         assertEquals(3, handle.await().done)
         assertTrue(driver.started.isEmpty())
+    }
+
+    @Test
+    fun requeueStartsInstancesOfTheRecordedLevelsAndRemovesTheRecords() = runBlocking {
+        val store = InMemoryDeadLetterStore()
+        val wf = flow("requeue-runner", "unused")
+        fun record(id: String, level: String, itemVariable: String?) = DeadLetterRecord(
+            id, wf.key, level, itemVariable, DeadLetter(id, "work", "boom"),
+            JsonObject(mapOf("id" to JsonPrimitive(id), EngineNames.ITEM_KEY to JsonPrimitive(id))),
+            kotlin.time.Instant.fromEpochMilliseconds(0),
+        )
+        val records = listOf(record("root-item", wf.key, null), record("child-item", "${wf.key}_f1", "f1_item"))
+        records.forEach { store.record(it) }
+
+        val (handle, driver) = launch(wf, RunConfig(deadLetters = store), requeue = records)
+        eventually { driver.started.size == 2 }
+
+        assertEquals(setOf(wf.key, "${wf.key}_f1"), driver.startedProcesses.toSet())
+        assertTrue(store.list(wf.key).records.isEmpty())
+        assertEquals(2L, handle.progress().seeded)
+        driver.finishAll()
+        assertEquals(2, handle.await().done)
+    }
+
+    @Test
+    fun itemStatusAndCancelItemFollowRootInstances() = runBlocking {
+        val wf = flow("items", "a", "b")
+        val (handle, driver) = launch(wf)
+        eventually { driver.started.size == 2 }
+        val idOf = driver.started.associate { (id, variables) -> variables.getValue("id").toString().trim('"') to id }
+
+        assertEquals(ItemState.Running, handle.item("a")?.state)
+        assertTrue(handle.cancelItem("a"))
+        assertEquals(listOf(idOf.getValue("a")), driver.cancelled.toList())
+        assertEquals(ItemState.Cancelled, handle.item("a")?.state)
+        assertFalse(handle.cancelItem("a"))
+        assertNull(handle.item("unknown"))
+
+        driver.finished[idOf.getValue("b")] = true
+        val result = handle.await()
+
+        assertEquals(RunResult(done = 1, failed = 0, skipped = 0, deadLetters = emptyList(), cancelled = 1), result)
+        assertEquals(ItemState.Done, handle.item("b")?.state)
+    }
+
+    @Test
+    fun maxInFlightHoldsSeedingUntilARootInstanceFinishes() = runBlocking {
+        val wf = flow("in-flight", "a", "b", "c")
+        val (handle, driver) = launch(wf, RunConfig(maxInFlight = 2))
+        eventually { driver.started.size == 2 }
+        delay(200.milliseconds)
+        assertEquals(2, driver.started.size)
+        assertEquals(2L, handle.progress().seeded)
+
+        driver.finished[driver.started.first().first] = true
+        eventually { driver.started.size == 3 }
+        driver.finishAll()
+
+        assertEquals(3, handle.await().done)
+    }
+
+    @Test
+    fun cancelledItemsFreeTheirInFlightPermit() = runBlocking {
+        val (handle, driver) = launch(flow("in-flight-cancel", "a", "b"), RunConfig(maxInFlight = 1))
+        eventually { driver.started.size == 1 }
+
+        assertTrue(handle.cancelItem("a"))
+        eventually { driver.started.size == 2 }
+        driver.finishAll()
+
+        assertEquals(RunResult(done = 1, failed = 0, skipped = 0, deadLetters = emptyList(), cancelled = 1), handle.await())
+    }
+
+    private fun scheduleJob(wf: Workflow<*>, name: String, id: String) =
+        EngineJob(id, EngineNames.jobType(wf.key, name), "scheduler", JsonObject(emptyMap()), null)
+
+    private val everyMinute = RunConfig(start = Start.Cron("* * * * *"))
+
+    @Test
+    fun scheduledRunStartsOneSchedulerAndSeedsBatchesThroughItsJobs() = runBlocking {
+        val wf = flow("scheduled", "a", "b")
+        val schedule = EngineNames.scheduleProcess(wf.key)
+        val (handle, driver) = launch(wf, everyMinute, scheduleProcessId = schedule)
+        eventually { driver.startedProcesses.toList() == listOf(schedule) }
+        val scheduler = driver.started.single().first
+
+        driver.scheduleJobs.trySend(scheduleJob(wf, EngineNames.SCHEDULE_NEXT, "next-1"))
+        eventually { "next-1" in driver.completed }
+        val tickText = driver.completedVariables.getValue("next-1").getValue(EngineNames.NEXT_TICK).jsonPrimitive.content
+        val tick = Instant.parse(tickText)
+        assertTrue(tickText.endsWith("+00:00"), tickText)
+        assertEquals(0L, tick.epochSeconds % 60)
+        assertTrue(tick - Clock.System.now() <= 60.seconds, tickText)
+
+        driver.scheduleJobs.trySend(scheduleJob(wf, EngineNames.SCHEDULE_SEED, "seed-1"))
+        eventually { "seed-1" in driver.completed }
+        assertEquals(listOf(schedule, wf.key, wf.key), driver.startedProcesses.toList())
+
+        driver.scheduleJobs.trySend(scheduleJob(wf, EngineNames.SCHEDULE_AWAIT, "await-1"))
+        delay(200.milliseconds)
+        assertFalse("await-1" in driver.completed)
+        for ((id, _) in driver.started.drop(1)) driver.finished[id] = true
+        eventually { "await-1" in driver.completed }
+        assertEquals(2L, handle.progress().done)
+
+        handle.cancel()
+        assertEquals(listOf(scheduler), driver.cancelled.toList())
+    }
+
+    @Test
+    fun scheduledRunReusesTheActiveSchedulerAndSkipsItemsWithActiveRootInstances() = runBlocking {
+        val wf = flow("scheduled-active", "a", "b")
+        val driver = FakeDriver().apply {
+            roots += RootInstance("old-a", "a")
+            schedulers += RootInstance("sched-1", null)
+        }
+        val (handle, _) = launch(wf, everyMinute, driver = driver, scheduleProcessId = EngineNames.scheduleProcess(wf.key))
+        eventually { handle.progress().seeded == 1L }
+
+        driver.scheduleJobs.trySend(scheduleJob(wf, EngineNames.SCHEDULE_SEED, "seed-1"))
+        eventually { "seed-1" in driver.completed }
+
+        assertEquals(listOf(wf.key), driver.startedProcesses.toList())
+        assertEquals(Progress(seeded = 2, skipped = 1), handle.progress())
+        handle.cancel()
+        assertTrue("sched-1" in driver.cancelled)
+    }
+
+    @Test
+    fun detachReleasesAScheduleJobThatWaitsForItsBatch() = runBlocking {
+        val wf = flow("scheduled-detach", "a")
+        val driver = FakeDriver().apply { roots += RootInstance("old-a", "a") }
+        val (handle, _) = launch(wf, everyMinute, driver = driver, scheduleProcessId = EngineNames.scheduleProcess(wf.key))
+        eventually { handle.progress().seeded == 1L }
+        driver.scheduleJobs.trySend(scheduleJob(wf, EngineNames.SCHEDULE_AWAIT, "await-1"))
+        delay(300.milliseconds)
+
+        withTimeout(5.seconds) { handle.detach() }
+
+        assertEquals(listOf("await-1"), driver.released.toList())
+        assertFalse("await-1" in driver.completed)
+        assertEquals(emptyList<String>(), driver.cancelled.toList())
+    }
+
+    @Test
+    fun cronRunsRequireAScheduleProcess() {
+        assertFailsWith<IllegalArgumentException> { launch(flow("cron-without-schedule", "a"), everyMinute) }
+        assertFailsWith<IllegalArgumentException> { launch(flow("schedule-without-cron", "a"), scheduleProcessId = "s") }
+    }
+
+    @Test
+    fun maxInFlightMustBePositive() {
+        assertFailsWith<IllegalArgumentException> { RunConfig(maxInFlight = 0) }
     }
 
     @Test

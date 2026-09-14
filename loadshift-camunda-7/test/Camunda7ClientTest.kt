@@ -2,6 +2,8 @@ package loadshift.camunda7
 
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.engine.mock.toByteArray
+import io.ktor.client.request.HttpRequestData
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.TextContent
@@ -25,6 +27,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 @OptIn(EngineApi::class)
 class Camunda7ClientTest {
@@ -49,6 +53,56 @@ class Camunda7ClientTest {
         val expected = "Basic " + Base64.getEncoder().encodeToString("demo:secret".toByteArray())
         assertEquals<List<String?>>(listOf(expected, expected), seen)
         assertFalse("secret" in credentials.toString())
+    }
+
+    @Test
+    fun signalIsSentByNameAndCarriesTheTenant() = runTest {
+        val requests = mutableListOf<Pair<String, JsonObject>>()
+        val engine = MockEngine { request ->
+            requests += request.url.encodedPath to body(request.body)
+            respond("", HttpStatusCode.NoContent)
+        }
+
+        Camunda7Client(base, null, engine).signal("stock-arrived")
+        Camunda7Client(base, null, engine, tenantId = "acme").signal("stock-arrived")
+
+        assertEquals(listOf("/engine-rest/signal", "/engine-rest/signal"), requests.map { it.first })
+        assertEquals("stock-arrived", requests[0].second.getValue("name").jsonPrimitive.content)
+        assertFalse("tenantId" in requests[0].second)
+        assertEquals("acme", requests[1].second.getValue("tenantId").jsonPrimitive.content)
+    }
+
+    @Test
+    fun tenantIdScopesDeploymentStartsQueriesFetchesAndMessages() = runTest {
+        val requests = mutableListOf<HttpRequestData>()
+        val engine = MockEngine { request ->
+            requests += request
+            when (request.url.encodedPath) {
+                "/engine-rest/deployment/create" -> respond("""{"id":"d-1"}""", HttpStatusCode.OK, jsonHeaders)
+                "/engine-rest/process-definition/key/proc/tenant-id/acme/start" ->
+                    respond("""{"id":"pi-1","definitionId":"def-1"}""", HttpStatusCode.OK, jsonHeaders)
+                "/engine-rest/process-instance/count" -> respond("""{"count":1}""", HttpStatusCode.OK, jsonHeaders)
+                "/engine-rest/external-task/fetchAndLock", "/engine-rest/message" -> respond("[]", HttpStatusCode.OK, jsonHeaders)
+                else -> error("unexpected request ${request.url}")
+            }
+        }
+        val client = Camunda7Client(base, null, engine, tenantId = "acme")
+        val driver = Camunda7Driver(client, "worker")
+
+        client.deploy("wf", listOf("proc.bpmn" to "<definitions/>".toByteArray()))
+        assertEquals("pi-1", driver.startInstance("proc", JsonObject(emptyMap()), null))
+        assertEquals(1, client.processInstanceCount("proc"))
+        driver.fetch(listOf("wf/a", "wf/b"), 5, 1.seconds, Duration.ZERO)
+        driver.correlate("go", "wf", "k")
+        Camunda7Driver(Camunda7Client(base, null, engine), "worker").fetch(listOf("wf/a"), 1, 1.seconds, Duration.ZERO)
+
+        val deployment = String(requests[0].body.toByteArray())
+        assertTrue("tenant-id" in deployment && "acme" in deployment, deployment)
+        assertEquals("acme", requests[2].url.parameters["tenantIdIn"])
+        val topics = body(requests[3].body).getValue("topics").jsonArray.map { it.jsonObject }
+        assertEquals(listOf("acme", "acme"), topics.map { it.getValue("tenantIdIn").jsonArray.single().jsonPrimitive.content })
+        assertEquals("acme", body(requests[4].body).getValue("tenantId").jsonPrimitive.content)
+        assertFalse("tenantIdIn" in body(requests[5].body).getValue("topics").jsonArray.single().jsonObject)
     }
 
     @Test

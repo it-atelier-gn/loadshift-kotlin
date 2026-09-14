@@ -96,6 +96,21 @@ class Camunda8DialectTest {
     }
 
     @Test
+    fun rewritesTheScheduleTimerDateToFeel() {
+        val schedule = BpmnCompiler.compileSchedule(
+            workflow<Job>("c8-schedule") {
+                input(emptyList())
+                task("work") { }
+            },
+        )
+        Camunda8Dialect.decorate(schedule.model, schedule.serviceTasks)
+        val xml = Bpmn.convertToString(schedule.model)
+        assertTrue(">=date and time(${EngineNames.NEXT_TICK})<" in xml, xml)
+        assertTrue("type=\"c8-schedule/${EngineNames.SCHEDULE_SEED}\"" in xml, xml)
+        assertTrue("\${" !in xml, xml)
+    }
+
+    @Test
     fun rewritesConditionsToFeel() {
         val wf = workflow<Job>("c8-cond") {
             input(emptyList())

@@ -1,3 +1,4 @@
+description: In-process backend that runs loadshift workflows
 product: jvm/lib
 
 apply:

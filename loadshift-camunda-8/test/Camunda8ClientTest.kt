@@ -2,6 +2,8 @@ package loadshift.camunda8
 
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.engine.mock.toByteArray
+import io.ktor.client.request.HttpRequestData
 import io.ktor.client.request.forms.FormDataContent
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -11,6 +13,7 @@ import io.ktor.http.headersOf
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import loadshift.core.EngineApi
@@ -18,6 +21,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 @OptIn(EngineApi::class)
 class Camunda8ClientTest {
@@ -125,6 +130,75 @@ class Camunda8ClientTest {
         assertEquals(listOf("1" to "a", "2" to null), roots.map { it.id to it.itemKey })
         assertEquals(3, searches.size)
         assertEquals("proc", searches.first().getValue("filter").jsonObject.getValue("processDefinitionId").jsonPrimitive.content)
+    }
+
+    @Test
+    fun tenantIdScopesDeploymentInstancesJobsMessagesAndSearches() = runTest {
+        val requests = mutableListOf<HttpRequestData>()
+        val engine = MockEngine { request ->
+            requests += request
+            when (request.url.encodedPath) {
+                "/v2/deployments" -> respond("{}", HttpStatusCode.OK, jsonHeaders)
+                "/v2/process-instances" -> respond("""{"processInstanceKey":"1"}""", HttpStatusCode.OK, jsonHeaders)
+                "/v2/jobs/activation" -> respond("""{"jobs":[]}""", HttpStatusCode.OK, jsonHeaders)
+                "/v2/messages/correlation" -> respond("""{"messageKey":"1"}""", HttpStatusCode.OK, jsonHeaders)
+                "/v2/process-instances/search" -> respond("""{"items":[],"page":{"totalItems":0}}""", HttpStatusCode.OK, jsonHeaders)
+                "/v2/message-subscriptions/search" -> respond("""{"items":[]}""", HttpStatusCode.OK, jsonHeaders)
+                else -> error("unexpected request ${request.url}")
+            }
+        }
+        val client = Camunda8Client("http://engine", Camunda8Auth.None, engine, tenantId = "acme")
+        val driver = Camunda8Driver(client, "worker")
+
+        client.deploy(listOf("proc.bpmn" to "<definitions/>".toByteArray()))
+        driver.startInstance("proc", JsonObject(emptyMap()), null)
+        driver.fetch(listOf("wf/a"), 1, 1.seconds, Duration.ZERO)
+        driver.correlate("go", "wf", "k")
+        client.instanceCount("proc")
+        driver.activeRoots("proc")
+        driver.correlate("go", "wf", null)
+
+        val deployment = String(requests[0].body.toByteArray())
+        assertTrue("tenantId" in deployment && "acme" in deployment, deployment)
+        assertEquals("acme", body(requests[1].body).getValue("tenantId").jsonPrimitive.content)
+        assertEquals("acme", body(requests[2].body).getValue("tenantIds").jsonArray.single().jsonPrimitive.content)
+        assertEquals("acme", body(requests[3].body).getValue("tenantId").jsonPrimitive.content)
+        for (search in requests.subList(4, 7)) {
+            assertEquals("acme", body(search.body).getValue("filter").jsonObject.getValue("tenantId").jsonPrimitive.content)
+        }
+    }
+
+    @Test
+    fun signalIsBroadcastByNameAndCarriesTheTenant() = runTest {
+        val requests = mutableListOf<Pair<String, JsonObject>>()
+        val engine = MockEngine { request ->
+            requests += request.url.encodedPath to body(request.body)
+            respond("""{"signalKey":"1"}""", HttpStatusCode.OK, jsonHeaders)
+        }
+
+        Camunda8Client("http://engine", Camunda8Auth.None, engine).broadcastSignal("stock-arrived")
+        Camunda8Client("http://engine", Camunda8Auth.None, engine, tenantId = "acme").broadcastSignal("stock-arrived")
+
+        assertEquals(listOf("/v2/signals/broadcast", "/v2/signals/broadcast"), requests.map { it.first })
+        assertEquals("stock-arrived", requests[0].second.getValue("signalName").jsonPrimitive.content)
+        assertFalse("tenantId" in requests[0].second)
+        assertEquals("acme", requests[1].second.getValue("tenantId").jsonPrimitive.content)
+    }
+
+    @Test
+    fun requestsCarryNoTenantWithoutATenantId() = runTest {
+        val bodies = mutableListOf<JsonObject>()
+        val engine = MockEngine { request ->
+            bodies += body(request.body)
+            respond("""{"processInstanceKey":"1","jobs":[]}""", HttpStatusCode.OK, jsonHeaders)
+        }
+        val driver = Camunda8Driver(Camunda8Client("http://engine", Camunda8Auth.None, engine), "worker")
+
+        driver.startInstance("proc", JsonObject(emptyMap()), null)
+        driver.fetch(listOf("wf/a"), 1, 1.seconds, Duration.ZERO)
+
+        assertFalse("tenantId" in bodies[0])
+        assertFalse("tenantIds" in bodies[1])
     }
 
     @Test

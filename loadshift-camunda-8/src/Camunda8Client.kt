@@ -34,11 +34,13 @@ class Camunda8Client internal constructor(
     base: String,
     private val auth: Camunda8Auth,
     private val engine: HttpClientEngine,
+    private val tenantId: String? = null,
 ) {
     constructor(
         base: String = "http://localhost:8080",
         auth: Camunda8Auth = Camunda8Auth.None,
-    ) : this(base, auth, CIO.create())
+        tenantId: String? = null,
+    ) : this(base, auth, CIO.create(), tenantId)
 
     private val v2 = "$base/v2"
 
@@ -54,13 +56,14 @@ class Camunda8Client internal constructor(
 
     private val tokens = (auth as? Camunda8Auth.ClientCredentials)?.let { TokenCache(http, it) }
 
-    suspend fun deploy(resources: List<Pair<String, ByteArray>>) {
+    suspend fun deploy(resources: List<Pair<String, ByteArray>>): Map<String, String> {
         val response = execute {
             method = HttpMethod.Post
             url("$v2/deployments")
             setBody(
                 MultiPartFormDataContent(
                     formData {
+                        tenantId?.let { append("tenantId", it) }
                         for ((fileName, bytes) in resources) {
                             append(
                                 "resources",
@@ -76,16 +79,68 @@ class Camunda8Client internal constructor(
             )
         }
         response.ensureSuccess("deploy")
+        return response.body<DeploymentResponse>().deployments
+            .mapNotNull { it.processDefinition }
+            .associate { it.processDefinitionId to it.processDefinitionKey }
+    }
+
+    suspend fun openUserTasks(processDefinitionId: String, after: String?, limit: Int): UserTaskSearchResponse {
+        val query = buildJsonObject {
+            putJsonObject("filter") {
+                put("processDefinitionId", processDefinitionId)
+                put("state", "CREATED")
+                tenantId?.let { put("tenantId", it) }
+            }
+            putJsonObject("page") {
+                put("limit", limit)
+                if (after != null) put("after", after)
+            }
+        }
+        val response = postJson("$v2/user-tasks/search", query)
+        response.ensureSuccess("openUserTasks")
+        return response.body()
+    }
+
+    suspend fun userTask(userTaskKey: String): UserTaskItem? {
+        val response = execute {
+            method = HttpMethod.Get
+            url("$v2/user-tasks/$userTaskKey")
+        }
+        if (response.status == HttpStatusCode.NotFound) return null
+        response.ensureSuccess("userTask")
+        return response.body()
+    }
+
+    suspend fun completeUserTask(userTaskKey: String, variables: JsonObject): Boolean {
+        val response = postJson("$v2/user-tasks/$userTaskKey/completion", UserTaskCompletionRequest(variables))
+        if (response.status == HttpStatusCode.NotFound || response.status == HttpStatusCode.Conflict) return false
+        response.ensureSuccess("completeUserTask")
+        return true
+    }
+
+    suspend fun processDefinitionXml(processDefinitionKey: String): String {
+        val response = execute {
+            method = HttpMethod.Get
+            url("$v2/process-definitions/$processDefinitionKey/xml")
+            header(HttpHeaders.Accept, ContentType.Text.Xml.toString())
+        }
+        response.ensureSuccess("processDefinitionXml")
+        return response.bodyAsText()
+    }
+
+    suspend fun migrateInstance(processInstanceKey: String, targetProcessDefinitionKey: String, elementIds: Collection<String>) {
+        val request = MigrationRequest(targetProcessDefinitionKey, elementIds.sorted().map { MappingInstruction(it, it) })
+        postJson("$v2/process-instances/$processInstanceKey/migration", request).ensureSuccess("migrateInstance")
     }
 
     suspend fun createInstance(processDefinitionId: String, variables: JsonObject): CreateInstanceResponse {
-        val response = postJson("$v2/process-instances", CreateInstanceRequest(processDefinitionId, variables))
+        val response = postJson("$v2/process-instances", CreateInstanceRequest(processDefinitionId, variables, tenantId))
         response.ensureSuccess("createInstance")
         return response.body()
     }
 
     suspend fun activateJobs(request: ActivateJobsRequest): List<ActivatedJob> {
-        val response = postJson("$v2/jobs/activation", request)
+        val response = postJson("$v2/jobs/activation", tenantId?.let { request.copy(tenantIds = listOf(it)) } ?: request)
         response.ensureSuccess("activateJobs")
         return response.body<ActivateJobsResponse>().jobs
     }
@@ -132,6 +187,7 @@ class Camunda8Client internal constructor(
             putJsonObject("filter") {
                 put("processDefinitionId", processDefinitionId)
                 put("state", "ACTIVE")
+                tenantId?.let { put("tenantId", it) }
             }
             putJsonObject("page") {
                 put("limit", limit)
@@ -165,13 +221,14 @@ class Camunda8Client internal constructor(
     }
 
     suspend fun correlateMessage(name: String, correlationKey: String): Boolean =
-        postJson("$v2/messages/correlation", MessageCorrelationRequest(name, correlationKey)).status.isSuccess()
+        postJson("$v2/messages/correlation", MessageCorrelationRequest(name, correlationKey, tenantId)).status.isSuccess()
 
     suspend fun messageSubscriptions(messageName: String): List<MessageSubscriptionItem> {
         val query = buildJsonObject {
             putJsonObject("filter") {
                 put("messageName", messageName)
                 put("messageSubscriptionState", "CREATED")
+                tenantId?.let { put("tenantId", it) }
             }
             putJsonObject("page") { put("limit", SUBSCRIPTION_PAGE) }
         }
@@ -181,9 +238,13 @@ class Camunda8Client internal constructor(
     }
 
     suspend fun instanceCount(processDefinitionId: String): Long {
-        val response = postJson("$v2/process-instances/search", SearchRequest(SearchFilter(processDefinitionId, state = "ACTIVE")))
+        val response = postJson("$v2/process-instances/search", SearchRequest(SearchFilter(processDefinitionId, state = "ACTIVE", tenantId = tenantId)))
         response.ensureSuccess("instanceCount")
         return response.body<SearchResponse>().page.totalItems
+    }
+
+    suspend fun broadcastSignal(name: String) {
+        postJson("$v2/signals/broadcast", SignalBroadcastRequest(name, tenantId)).ensureSuccess("broadcastSignal")
     }
 
     fun close() {

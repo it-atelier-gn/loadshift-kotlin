@@ -1,3 +1,4 @@
+description: Kotlin DSL for durable workflows, run configuration, Backend API and BPMN compiler
 product: jvm/lib
 
 apply:

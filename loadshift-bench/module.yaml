@@ -1,0 +1,16 @@
+product: jvm/app
+
+settings:
+  kotlin:
+    serialization: json
+
+dependencies:
+  - ../loadshift-core
+  - ../loadshift-local
+  - ../loadshift-camunda-7
+  - ../loadshift-camunda-8
+  - $libs.kotlinx.coroutines.core
+  - $libs.kotlinx.serialization.json
+
+test-dependencies:
+  - $libs.kotlinx.coroutines.test

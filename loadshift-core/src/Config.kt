@@ -63,6 +63,7 @@ class TaskOptions(
 data class RunConfig(
     val start: Start = Start.Now,
     val maxConcurrency: Int = 16,
+    val maxInFlight: Int? = null,
     val rateLimit: Rate? = null,
     val retry: RetryPolicy = RetryPolicy.Default,
     val onError: ErrorPolicy = ErrorPolicy.DeadLetter,
@@ -75,9 +76,11 @@ data class RunConfig(
     val maxLoopIterations: Int = 10_000,
     val logSink: LogSink = NoopLogSink,
     val tracer: Tracer = NoopTracer,
+    val metrics: Metrics = NoopMetrics,
 ) {
     init {
         require(maxConcurrency >= 1) { "maxConcurrency must be at least 1, was $maxConcurrency" }
+        require(maxInFlight == null || maxInFlight >= 1) { "maxInFlight must be at least 1, was $maxInFlight" }
         require(lockDuration.isPositive()) { "lockDuration must be positive, was $lockDuration" }
         require(maxLoopIterations >= 1) { "maxLoopIterations must be at least 1, was $maxLoopIterations" }
     }
@@ -89,6 +92,7 @@ data class Progress(
     val done: Long = 0,
     val failed: Long = 0,
     val skipped: Long = 0,
+    val cancelled: Long = 0,
 )
 
 data class DeadLetter(val key: String?, val topic: String, val error: String)
@@ -98,6 +102,7 @@ data class RunResult(
     val failed: Long,
     val skipped: Long,
     val deadLetters: List<DeadLetter>,
+    val cancelled: Long = 0,
 )
 
 interface RunHandle {
@@ -110,4 +115,6 @@ interface RunHandle {
     suspend fun await(): RunResult
     suspend fun send(message: String, key: String)
     suspend fun broadcast(message: String)
+    suspend fun item(key: String): ItemStatus?
+    suspend fun cancelItem(key: String): Boolean
 }

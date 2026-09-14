@@ -1,3 +1,4 @@
+description: Web console and JSON API for loadshift runs
 product: jvm/lib
 
 apply:
@@ -16,10 +17,12 @@ dependencies:
   - $libs.ktor.server.cio
   - $libs.ktor.server.content.negotiation
   - $libs.ktor.server.auth
+  - $libs.ktor.server.auth.jwt
+  - $libs.ktor.server.sessions
   - $libs.ktor.serialization.kotlinx.json
+  - $libs.ktor.client.cio
+  - $libs.ktor.client.content.negotiation
 
 test-dependencies:
   - ../loadshift-local
   - $libs.kotlinx.coroutines.test
-  - $libs.ktor.client.cio
-  - $libs.ktor.client.content.negotiation

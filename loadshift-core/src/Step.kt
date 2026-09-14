@@ -34,6 +34,18 @@ class Timeout<W : WorkItem>(val id: String, val duration: Duration, val body: St
 
 class AwaitMessage<W : WorkItem>(val id: String, val message: String) : Step<W>
 
+class AwaitSignal<W : WorkItem>(val id: String, val signal: String) : Step<W>
+
+class Call<W : WorkItem>(val id: String, val workflow: Workflow<W>) : Step<W>
+
+class HumanTask<W : WorkItem>(
+    val id: String,
+    val name: String,
+    val assignee: String?,
+    val candidateGroups: List<String>,
+    val onComplete: suspend (W, kotlinx.serialization.json.JsonObject) -> Unit,
+) : Step<W>
+
 class FanOut<W : WorkItem, C : WorkItem>(
     val id: String,
     val childKey: String,

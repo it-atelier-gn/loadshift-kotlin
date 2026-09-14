@@ -25,6 +25,7 @@ import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import java.util.Base64
 
 class BasicCredentials(val username: String, val password: String) {
@@ -38,11 +39,13 @@ class Camunda7Client internal constructor(
     private val base: String,
     credentials: BasicCredentials?,
     private val engine: HttpClientEngine,
+    private val tenantId: String? = null,
 ) {
     constructor(
         base: String = "http://localhost:8080/engine-rest",
         credentials: BasicCredentials? = null,
-    ) : this(base, credentials, CIO.create())
+        tenantId: String? = null,
+    ) : this(base, credentials, CIO.create(), tenantId)
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -66,6 +69,7 @@ class Camunda7Client internal constructor(
                         append("deployment-name", name)
                         append("enable-duplicate-filtering", "true")
                         append("deploy-changed-only", "true")
+                        tenantId?.let { append("tenant-id", it) }
                         for ((fileName, bytes) in resources) {
                             append(
                                 fileName,
@@ -89,7 +93,8 @@ class Camunda7Client internal constructor(
         variables: Map<String, CamundaValue>,
         businessKey: String?,
     ): StartInstanceResponse {
-        val response = postJson("$base/process-definition/key/$processDefinitionKey/start", StartInstanceRequest(variables, businessKey))
+        val definition = tenantId?.let { "$processDefinitionKey/tenant-id/$it" } ?: processDefinitionKey
+        val response = postJson("$base/process-definition/key/$definition/start", StartInstanceRequest(variables, businessKey))
         response.ensureSuccess("start")
         return response.body()
     }
@@ -97,6 +102,7 @@ class Camunda7Client internal constructor(
     suspend fun processInstances(processDefinitionKey: String, firstResult: Int, maxResults: Int): List<ProcessInstanceDto> {
         val response = http.get("$base/process-instance") {
             parameter("processDefinitionKey", processDefinitionKey)
+            tenantId?.let { parameter("tenantIdIn", it) }
             parameter("sortBy", "instanceId")
             parameter("sortOrder", "asc")
             parameter("firstResult", firstResult)
@@ -119,7 +125,8 @@ class Camunda7Client internal constructor(
     }
 
     suspend fun fetchAndLock(request: FetchAndLockRequest): List<ExternalTaskDto> {
-        val response = postJson("$base/external-task/fetchAndLock", request)
+        val scoped = tenantId?.let { tenant -> request.copy(topics = request.topics.map { it.copy(tenantIdIn = listOf(tenant)) }) }
+        val response = postJson("$base/external-task/fetchAndLock", scoped ?: request)
         response.ensureSuccess("fetchAndLock")
         return response.body()
     }
@@ -148,6 +155,7 @@ class Camunda7Client internal constructor(
     suspend fun processInstanceCount(processDefinitionKey: String): Long {
         val response = http.get("$base/process-instance/count") {
             parameter("processDefinitionKey", processDefinitionKey)
+            tenantId?.let { parameter("tenantIdIn", it) }
         }
         response.ensureSuccess("process instance count")
         return response.body<CountDto>().count
@@ -172,9 +180,63 @@ class Camunda7Client internal constructor(
     }
 
     suspend fun correlateMessage(request: MessageRequest): Int {
-        val response = postJson("$base/message", request)
+        val response = postJson("$base/message", tenantId?.let { request.copy(tenantId = it) } ?: request)
         if (!response.status.isSuccess()) return 0
         return if (request.resultEnabled) response.body<JsonArray>().size else 1
+    }
+
+    suspend fun tasks(processDefinitionKey: String, firstResult: Int, maxResults: Int): List<TaskDto> {
+        val response = http.get("$base/task") {
+            parameter("processDefinitionKey", processDefinitionKey)
+            tenantId?.let { parameter("tenantIdIn", it) }
+            parameter("sortBy", "id")
+            parameter("sortOrder", "asc")
+            parameter("firstResult", firstResult)
+            parameter("maxResults", maxResults)
+        }
+        response.ensureSuccess("task query")
+        return response.body()
+    }
+
+    suspend fun task(taskId: String): TaskDto? {
+        val response = http.get("$base/task/$taskId")
+        if (response.status == HttpStatusCode.NotFound) return null
+        response.ensureSuccess("task")
+        return response.body()
+    }
+
+    suspend fun completeTask(taskId: String, variables: Map<String, CamundaValue>): Boolean {
+        val response = postJson("$base/task/$taskId/complete", CompleteTaskRequest(variables))
+        if (response.status == HttpStatusCode.NotFound) return false
+        response.ensureSuccess("complete task")
+        return true
+    }
+
+    suspend fun latestProcessDefinition(processDefinitionKey: String): ProcessDefinitionDto? {
+        val response = http.get("$base/process-definition") {
+            parameter("key", processDefinitionKey)
+            parameter("latestVersion", true)
+            if (tenantId == null) parameter("withoutTenantId", true) else parameter("tenantIdIn", tenantId)
+        }
+        response.ensureSuccess("process definition query")
+        return response.body<List<ProcessDefinitionDto>>().firstOrNull()
+    }
+
+    suspend fun generateMigration(sourceProcessDefinitionId: String, targetProcessDefinitionId: String): JsonObject {
+        val response = postJson(
+            "$base/migration/generate",
+            MigrationGenerateRequest(sourceProcessDefinitionId, targetProcessDefinitionId),
+        )
+        response.ensureSuccess("generate migration")
+        return response.body()
+    }
+
+    suspend fun executeMigration(plan: JsonObject, processInstanceIds: List<String>) {
+        postJson("$base/migration/execute", MigrationExecuteRequest(plan, processInstanceIds)).ensureSuccess("execute migration")
+    }
+
+    suspend fun signal(name: String) {
+        postJson("$base/signal", SignalRequest(name, tenantId)).ensureSuccess("signal")
     }
 
     fun close() {

@@ -7,18 +7,27 @@ import org.camunda.bpm.model.bpmn.instance.BaseElement
 import org.camunda.bpm.model.bpmn.instance.CallActivity
 import org.camunda.bpm.model.bpmn.instance.ExtensionElements
 import org.camunda.bpm.model.bpmn.instance.MultiInstanceLoopCharacteristics
+import org.camunda.bpm.model.bpmn.instance.Process
 import org.camunda.bpm.model.bpmn.instance.ServiceTask
 import org.camunda.bpm.model.bpmn.instance.camunda.CamundaIn
+import org.camunda.bpm.model.bpmn.instance.camunda.CamundaOut
 
 object Camunda7Dialect {
-    fun decorate(model: BpmnModelInstance, serviceTasks: List<ServiceTaskRef>) {
+    fun decorate(model: BpmnModelInstance, serviceTasks: List<ServiceTaskRef>, versionTag: String? = null) {
+        if (versionTag != null) {
+            for (process in model.getModelElementsByType(Process::class.java)) process.camundaVersionTag = versionTag
+        }
         for (ref in serviceTasks) {
             val task = model.getModelElementById(ref.id) as? ServiceTask ?: continue
             task.camundaType = "external"
             task.camundaTopic = ref.jobType
         }
         for (call in model.getModelElementsByType(CallActivity::class.java)) {
-            val mi = call.loopCharacteristics as? MultiInstanceLoopCharacteristics ?: continue
+            val mi = call.loopCharacteristics as? MultiInstanceLoopCharacteristics
+            if (mi == null) {
+                mapCall(model, call)
+                continue
+            }
             mi.camundaCollection?.let { collection ->
                 mi.camundaCollection = collection.removeSuffix("}") + ".elements()}"
             }
@@ -43,6 +52,35 @@ object Camunda7Dialect {
                 },
             )
         }
+    }
+
+    private fun mapCall(model: BpmnModelInstance, call: CallActivity) {
+        val stepId = call.id.removePrefix(EngineNames.callActivity(""))
+        val extensions = ensureExtensions(model, call)
+        extensions.addChildElement(
+            model.newInstance(CamundaIn::class.java).apply {
+                camundaSource = EngineNames.callItem(stepId)
+                camundaTarget = EngineNames.CALL_ITEM
+            },
+        )
+        extensions.addChildElement(
+            model.newInstance(CamundaIn::class.java).apply {
+                camundaSourceExpression = "\${'${call.calledElement}'}"
+                camundaTarget = EngineNames.WORKFLOW
+            },
+        )
+        extensions.addChildElement(
+            model.newInstance(CamundaIn::class.java).apply {
+                camundaSource = EngineNames.ITEM_KEY
+                camundaTarget = EngineNames.ITEM_KEY
+            },
+        )
+        extensions.addChildElement(
+            model.newInstance(CamundaOut::class.java).apply {
+                camundaSource = EngineNames.CALL_ITEM
+                camundaTarget = EngineNames.callItem(stepId)
+            },
+        )
     }
 
     private fun ensureExtensions(model: BpmnModelInstance, element: BaseElement): ExtensionElements {

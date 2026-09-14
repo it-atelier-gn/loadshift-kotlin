@@ -18,11 +18,25 @@ object EngineNames {
     const val OUTCOME = "loadshiftOutcome"
     const val COMPENSATION_PREFIX = "loadshiftCompensation_"
     const val TERMINATE_ERROR = "loadshift-terminate"
+    const val CALL_ITEM = "loadshiftCallItem"
+    const val NEXT_TICK = "loadshiftNextTick"
+    const val SCHEDULE_NEXT = "loadshift_schedule_next"
+    const val SCHEDULE_SEED = "loadshift_schedule_seed"
+    const val SCHEDULE_AWAIT = "loadshift_schedule_await"
 
     private val NON_IDENTIFIER = Regex("[^A-Za-z0-9_]")
 
     fun jobType(workflowKey: String, name: String): String = "$workflowKey/$name"
+    fun scheduleProcess(workflowKey: String): String = "${workflowKey}_loadshift_schedule"
     fun decision(stepId: String): String = "decision_$stepId"
+    fun call(stepId: String): String = "call_$stepId"
+    fun returnCall(stepId: String): String = "return_$stepId"
+    fun callActivity(stepId: String): String = "call_activity_$stepId"
+    fun callItem(stepId: String): String = "${stepId}_call"
+    fun userTask(stepId: String): String = "user_$stepId"
+    fun form(stepId: String): String = "form_$stepId"
+    fun formVariable(stepId: String): String = "${stepId}_form"
+    fun userTaskStep(elementId: String): String? = elementId.takeIf { it.startsWith("user_") }?.removePrefix("user_")
     fun expand(stepId: String): String = "expand_$stepId"
     fun reduce(stepId: String): String = "reduce_$stepId"
     fun timeout(stepId: String): String = "timeout_$stepId"
@@ -71,4 +85,5 @@ interface EngineDriver {
     suspend fun cancel(instanceId: String)
     suspend fun correlate(message: String, workflowKey: String, itemKey: String?): Boolean
     suspend fun activeInstances(processIds: List<String>): Long
+    suspend fun close() {}
 }

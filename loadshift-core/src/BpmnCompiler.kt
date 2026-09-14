@@ -12,15 +12,37 @@ class CompiledProcess(
     val name: String,
     val model: BpmnModelInstance,
     val serviceTasks: List<ServiceTaskRef>,
+    val versionTag: String? = null,
 )
 
 object BpmnCompiler {
     const val TERMINATE_SCOPE_ID = "on_terminate"
 
     fun compile(workflow: Workflow<*>): List<CompiledProcess> {
-        val levels = mutableListOf<SubFlow<*>>()
-        gather(workflow.root, levels)
-        return levels.map { LevelCompiler(workflow.key).compile(it) }
+        val compiled = LinkedHashMap<String, CompiledProcess>()
+        for (owner in listOf(workflow) + workflow.calledWorkflows()) {
+            val levels = mutableListOf<SubFlow<*>>()
+            gather(owner.root, levels)
+            for (level in levels) compiled.getOrPut(level.key) { LevelCompiler(owner.key, owner.version).compile(level) }
+        }
+        return compiled.values.toList()
+    }
+
+    fun compileSchedule(workflow: Workflow<*>): CompiledProcess {
+        val key = EngineNames.scheduleProcess(workflow.key)
+        val (next, seed, await) = listOf(EngineNames.SCHEDULE_NEXT, EngineNames.SCHEDULE_SEED, EngineNames.SCHEDULE_AWAIT)
+            .map { topic -> ServiceTaskRef(topic, topic, EngineNames.jobType(workflow.key, topic)) }
+        val model = Bpmn.createExecutableProcess(key).name(key)
+            .startEvent("start").name("Start")
+            .serviceTask(next.id).name("next tick")
+            .intermediateCatchEvent("tick").name("tick")
+            .timerWithDate("\${${EngineNames.NEXT_TICK}}")
+            .serviceTask(seed.id).name("seed batch")
+            .serviceTask(await.id).name("await batch")
+            .connectTo(next.id)
+            .done()
+        BpmnLayout.apply(model, key)
+        return CompiledProcess(key, key, model, listOf(next, seed, await), workflow.version)
     }
 
     private fun gather(sub: SubFlow<*>, acc: MutableList<SubFlow<*>>) {
@@ -40,11 +62,11 @@ object BpmnCompiler {
             is FanOut<*, *> -> action(step.body)
             is FanIn<*, *, *> -> action(step.body)
             is Timeout -> walkChildren(step.body, action)
-            is Execute, is Wait, is AwaitMessage -> Unit
+            is Execute, is Wait, is AwaitMessage, is AwaitSignal, is Call, is HumanTask -> Unit
         }
     }
 
-    private class LevelCompiler(private val workflowKey: String) {
+    private class LevelCompiler(private val workflowKey: String, private val versionTag: String?) {
         private val refs = mutableListOf<ServiceTaskRef>()
         private val ids = IdGen()
 
@@ -58,7 +80,7 @@ object BpmnCompiler {
             val model = process.done()
             for (gateway in model.getModelElementsByType(Gateway::class.java)) gateway.name = null
             BpmnLayout.apply(model, sub.key)
-            return CompiledProcess(sub.key, sub.key, model, refs.toList())
+            return CompiledProcess(sub.key, sub.key, model, refs.toList(), versionTag)
         }
 
         private fun service(b: AbstractFlowNodeBuilder<*, *>, id: String, topic: String, label: String) =
@@ -132,6 +154,27 @@ object BpmnCompiler {
             is AwaitMessage -> b.intermediateCatchEvent("msg_${step.id}")
                 .name(step.message)
                 .message(step.message)
+
+            is AwaitSignal -> b.intermediateCatchEvent("sig_${step.id}")
+                .name(step.signal)
+                .signal(step.signal)
+
+            is HumanTask -> {
+                val waiting = b.userTask(EngineNames.userTask(step.id)).name(step.name)
+                step.assignee?.let { waiting.camundaAssignee(it) }
+                if (step.candidateGroups.isNotEmpty()) waiting.camundaCandidateGroups(step.candidateGroups.joinToString(","))
+                service(waiting, EngineNames.form(step.id), EngineNames.form(step.id), "apply ${step.name}")
+            }
+
+            is Call -> {
+                val prepare = EngineNames.call(step.id)
+                val finish = EngineNames.returnCall(step.id)
+                val called = service(b, prepare, prepare, "call ${step.workflow.name}")
+                    .callActivity(EngineNames.callActivity(step.id))
+                    .name(step.workflow.name)
+                    .calledElement(step.workflow.root.key)
+                service(called, finish, finish, "return from ${step.workflow.name}")
+            }
         }
 
         private fun forEachChild(b: AbstractFlowNodeBuilder<*, *>, stepId: String, childKey: String) =
