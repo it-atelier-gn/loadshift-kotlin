@@ -7,6 +7,7 @@
 - A worker runs a job at most once at a time. When the engine hands the same job to that worker again while its task body is still running, the worker skips the second copy.
 - A worker that stops hands back the jobs it fetched while stopping.
 - Retries are counted by the engine. Each failure reports the remaining attempts and the backoff. Camunda 8 service tasks are deployed with `retries` set to the task's `maxAttempts`.
+- A caught error ends the job with the BPMN error `loadshift-catch-<id>` and the item variables at the time of the throw; the error boundary event of the task takes it.
 - Every compiled process contains the event subprocess `on_terminate`, which catches the BPMN error `loadshift-terminate`. Dead-lettered and skipped items end through it, so the instance completes and its parent continues.
 - When a task with `compensate` completes, the worker stores a snapshot of the item in the process variable `loadshiftCompensation_<topic>`. Any worker that dead-letters the item runs the compensations from these snapshots, latest first. A task that runs several times in one instance, such as inside a loop, adds one snapshot per run to the variable, and each snapshot is compensated.
 - `send` and `broadcast` reach waiting instances of the same workflow, whichever run started them. A `send` that finds no waiting instance is retried until one waits or the run ends.
@@ -100,5 +101,6 @@ With `tenantId`, the backend deploys the processes to the tenant, starts instanc
 | `loadshiftOutcome` | Any | Policy, topic and error of a dead-lettered or skipped item |
 | `<call id>_call` | Caller | The item handed to a called workflow and returned from it |
 | `loadshiftCallItem` | Called root | The item of a called workflow, with `loadshiftKey` |
+| `loadshiftMessage_<message>` | Any | The data sent with the message until the step's block has applied it; characters other than letters, digits and `_` in the message name become `_` |
 
 Camunda 8 correlates messages on the key `<workflow-key>:<item-key>`. Camunda 7 and CIB seven correlate on the variables `loadshiftWorkflow` and `loadshiftKey`. Camunda 7 and CIB seven receive the item key as business key when it is at most 255 characters long.

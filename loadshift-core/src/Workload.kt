@@ -51,7 +51,9 @@ fun Workflow<*>.humanTasks(): List<HumanTaskRef> = (listOf(this) + calledWorkflo
                 is Parallel<*> -> step.branches.forEach(::walk)
                 is Timeout<*> -> walk(step.body)
                 is HumanTask<*> -> found += HumanTaskRef(owner, level.key, step)
-                is FanOut<*, *>, is FanIn<*, *, *>, is Call<*>, is Execute<*>, is Wait<*>, is AwaitMessage<*>, is AwaitSignal<*> -> Unit
+                is Execute<*> -> step.catches.forEach { walk(it.body) }
+                is AwaitMessage<*> -> step.onTimeout?.let(::walk)
+                is FanOut<*, *>, is FanIn<*, *, *>, is Call<*>, is Wait<*>, is AwaitSignal<*> -> Unit
             }
         }
         walk(level.step)
@@ -83,7 +85,9 @@ fun Workflow<*>.levels(): Map<String, WorkflowLevel> {
                 is Timeout<*> -> walk(step.body)
                 is FanOut<*, *> -> visit(step.body, EngineNames.item(step.id), listOf(sub.codec) + ancestors)
                 is FanIn<*, *, *> -> visit(step.body, EngineNames.item(step.id), listOf(sub.codec) + ancestors)
-                is Execute<*>, is Wait<*>, is AwaitMessage<*>, is AwaitSignal<*>, is Call<*>, is HumanTask<*> -> Unit
+                is Execute<*> -> step.catches.forEach { walk(it.body) }
+                is AwaitMessage<*> -> step.onTimeout?.let(::walk)
+                is Wait<*>, is AwaitSignal<*>, is Call<*>, is HumanTask<*> -> Unit
             }
         }
         walk(sub.step)
@@ -113,7 +117,9 @@ fun Workflow<*>.calledWorkflows(): List<Workflow<*>> {
                 require(known == null || known === target) { "two different workflows with the key '${target.key}' are called" }
                 if (known == null) walk(target.root.step)
             }
-            is Execute<*>, is Wait<*>, is AwaitMessage<*>, is AwaitSignal<*>, is HumanTask<*> -> Unit
+            is Execute<*> -> step.catches.forEach { walk(it.body) }
+            is AwaitMessage<*> -> step.onTimeout?.let(::walk)
+            is Wait<*>, is AwaitSignal<*>, is HumanTask<*> -> Unit
         }
     }
     walk(root.step)

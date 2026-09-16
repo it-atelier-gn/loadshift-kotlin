@@ -1,6 +1,7 @@
 package loadshift.core
 
 import kotlinx.datetime.TimeZone
+import kotlinx.serialization.json.JsonObject
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
@@ -113,8 +114,8 @@ interface RunHandle {
     suspend fun cancel()
     suspend fun detach()
     suspend fun await(): RunResult
-    suspend fun send(message: String, key: String)
-    suspend fun broadcast(message: String)
+    suspend fun send(message: String, key: String, data: JsonObject = JsonObject(emptyMap()))
+    suspend fun broadcast(message: String, data: JsonObject = JsonObject(emptyMap()))
     suspend fun item(key: String): ItemStatus?
     suspend fun cancelItem(key: String): Boolean
 }

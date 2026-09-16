@@ -25,6 +25,7 @@ data class MessageRequest(
     val all: Boolean = true,
     val resultEnabled: Boolean = false,
     val tenantId: String? = null,
+    val processVariables: Map<String, CamundaValue>? = null,
 )
 
 @Serializable

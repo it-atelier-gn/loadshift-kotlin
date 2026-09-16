@@ -35,6 +35,9 @@ object EngineNames {
     fun callItem(stepId: String): String = "${stepId}_call"
     fun userTask(stepId: String): String = "user_$stepId"
     fun form(stepId: String): String = "form_$stepId"
+    fun message(stepId: String): String = "message_$stepId"
+    fun messageVariable(message: String): String = "loadshiftMessage_" + message.replace(NON_IDENTIFIER, "_")
+    fun catchError(catchId: String): String = "loadshift-catch-$catchId"
     fun formVariable(stepId: String): String = "${stepId}_form"
     fun userTaskStep(elementId: String): String? = elementId.takeIf { it.startsWith("user_") }?.removePrefix("user_")
     fun expand(stepId: String): String = "expand_$stepId"
@@ -67,6 +70,7 @@ sealed interface JobOutcome {
     data class Complete(val variables: JsonObject) : JobOutcome
     data class Retry(val retries: Int, val backoff: Duration, val message: String, val details: String) : JobOutcome
     data class Terminate(val message: String, val variables: JsonObject) : JobOutcome
+    data class Catch(val errorCode: String, val message: String, val variables: JsonObject) : JobOutcome
     data class Abort(val cause: Throwable) : JobOutcome
 }
 
@@ -78,12 +82,12 @@ interface EngineDriver {
     suspend fun fetch(jobTypes: List<String>, maxJobs: Int, lock: Duration, wait: Duration): List<EngineJob>
     suspend fun complete(job: EngineJob, variables: JsonObject)
     suspend fun fail(job: EngineJob, retries: Int, backoff: Duration, message: String, details: String)
-    suspend fun terminate(job: EngineJob, message: String, variables: JsonObject)
+    suspend fun throwError(job: EngineJob, errorCode: String, message: String, variables: JsonObject)
     suspend fun extendLock(job: EngineJob, lock: Duration)
     suspend fun release(job: EngineJob)
     suspend fun finished(instanceIds: List<String>): Map<String, Boolean>
     suspend fun cancel(instanceId: String)
-    suspend fun correlate(message: String, workflowKey: String, itemKey: String?): Boolean
+    suspend fun correlate(message: String, workflowKey: String, itemKey: String?, variables: JsonObject): Boolean
     suspend fun activeInstances(processIds: List<String>): Long
     suspend fun close() {}
 }

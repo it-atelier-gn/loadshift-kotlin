@@ -2,6 +2,7 @@ package loadshift.core
 
 import org.camunda.bpm.model.bpmn.Bpmn
 import org.camunda.bpm.model.bpmn.BpmnModelInstance
+import org.camunda.bpm.model.bpmn.builder.AbstractActivityBuilder
 import org.camunda.bpm.model.bpmn.builder.AbstractFlowNodeBuilder
 import org.camunda.bpm.model.bpmn.instance.Gateway
 
@@ -62,7 +63,9 @@ object BpmnCompiler {
             is FanOut<*, *> -> action(step.body)
             is FanIn<*, *, *> -> action(step.body)
             is Timeout -> walkChildren(step.body, action)
-            is Execute, is Wait, is AwaitMessage, is AwaitSignal, is Call, is HumanTask -> Unit
+            is Execute -> step.catches.forEach { walkChildren(it.body, action) }
+            is AwaitMessage -> step.onTimeout?.let { walkChildren(it, action) }
+            is Wait, is AwaitSignal, is Call, is HumanTask -> Unit
         }
     }
 
@@ -89,7 +92,24 @@ object BpmnCompiler {
         private fun step(step: Step<*>, b: AbstractFlowNodeBuilder<*, *>): AbstractFlowNodeBuilder<*, *> = when (step) {
             is Sequence -> step.steps.fold(b) { current, next -> step(next, current) }
 
-            is Execute -> service(b, "ext_${sanitizeId(step.task.topic)}_${ids.next("t")}", step.task.topic, step.task.topic)
+            is Execute -> {
+                val taskId = "ext_${sanitizeId(step.task.topic)}_${ids.next("t")}"
+                val task = service(b, taskId, step.task.topic, step.task.topic)
+                if (step.catches.isEmpty()) {
+                    task
+                } else {
+                    val join = ids.next("gw")
+                    task.exclusiveGateway(join)
+                    for (caught in step.catches) {
+                        val boundary = b.moveToActivity<AbstractActivityBuilder<*, *>>(taskId)
+                            .boundaryEvent("catch_${caught.id}")
+                            .name(caught.type.simpleName ?: "error")
+                            .error(EngineNames.catchError(caught.id))
+                        step(caught.body, boundary).connectTo(join)
+                    }
+                    b.moveToNode(join)
+                }
+            }
 
             is FanOut<*, *> -> forEachChild(b, step.id, step.childKey)
 
@@ -151,9 +171,24 @@ object BpmnCompiler {
                 b.moveToNode(scopeId)
             }
 
-            is AwaitMessage -> b.intermediateCatchEvent("msg_${step.id}")
-                .name(step.message)
-                .message(step.message)
+            is AwaitMessage -> {
+                val timeout = step.timeout
+                if (timeout == null) {
+                    applyMessage(step, b.intermediateCatchEvent("msg_${step.id}").name(step.message).message(step.message))
+                } else {
+                    val gateway = "events_${step.id}"
+                    val join = ids.next("gw")
+                    val received = b.eventBasedGateway().id(gateway)
+                        .intermediateCatchEvent("msg_${step.id}").name(step.message).message(step.message)
+                    applyMessage(step, received).exclusiveGateway(join)
+                    val expired = b.moveToNode(gateway)
+                        .intermediateCatchEvent("expired_${step.id}")
+                        .name("after $timeout")
+                        .timerWithDuration(timeout.toIsoString())
+                    (step.onTimeout?.let { step(it, expired) } ?: expired).connectTo(join)
+                    b.moveToNode(join)
+                }
+            }
 
             is AwaitSignal -> b.intermediateCatchEvent("sig_${step.id}")
                 .name(step.signal)
@@ -176,6 +211,9 @@ object BpmnCompiler {
                 service(called, finish, finish, "return from ${step.workflow.name}")
             }
         }
+
+        private fun applyMessage(step: AwaitMessage<*>, b: AbstractFlowNodeBuilder<*, *>): AbstractFlowNodeBuilder<*, *> =
+            if (step.onMessage == null) b else service(b, EngineNames.message(step.id), EngineNames.message(step.id), "apply ${step.message}")
 
         private fun forEachChild(b: AbstractFlowNodeBuilder<*, *>, stepId: String, childKey: String) =
             service(b, EngineNames.expand(stepId), EngineNames.expand(stepId), "expand children")

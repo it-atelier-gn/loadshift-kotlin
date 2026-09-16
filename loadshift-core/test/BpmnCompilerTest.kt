@@ -5,6 +5,12 @@ import org.camunda.bpm.model.bpmn.Bpmn
 import org.camunda.bpm.model.bpmn.instance.BoundaryEvent
 import org.camunda.bpm.model.bpmn.instance.CallActivity
 import org.camunda.bpm.model.bpmn.instance.ErrorEventDefinition
+import org.camunda.bpm.model.bpmn.instance.EventBasedGateway
+import org.camunda.bpm.model.bpmn.instance.ExclusiveGateway
+import org.camunda.bpm.model.bpmn.instance.IntermediateCatchEvent
+import org.camunda.bpm.model.bpmn.instance.MessageEventDefinition
+import org.camunda.bpm.model.bpmn.instance.ServiceTask
+import org.camunda.bpm.model.bpmn.instance.TimerEventDefinition
 import org.camunda.bpm.model.bpmn.instance.FlowNode
 import org.camunda.bpm.model.bpmn.instance.SequenceFlow
 import org.camunda.bpm.model.bpmn.instance.SignalEventDefinition
@@ -24,6 +30,8 @@ private data class Order(var paid: Boolean) : WorkItem
 
 @Serializable
 private data class Line(var sku: String) : WorkItem
+
+private class OutOfStock : RuntimeException("out of stock")
 
 class BpmnCompilerTest {
     private fun workflowWithEverything(): Workflow<Order> = workflow("order-job") {
@@ -219,6 +227,8 @@ class BpmnCompilerTest {
             loop({ !it.paid }) { task("remind") { } }
             timeout(1.seconds) { task("call") { } }
             awaitMessage("paid")
+            awaitMessage("shipped", timeout = 5.seconds) { _, _ -> } onTimeout { task("chase") { } }
+            task("reserve") { }.catching<OutOfStock> { task("backorder") { } }
             fanOut(expand = { emptyList<Line>() }) { task("price") { } }
         }
         for (process in BpmnCompiler.compile(wf)) {
@@ -235,5 +245,87 @@ class BpmnCompilerTest {
             )
             Bpmn.validateModel(model)
         }
+    }
+
+    @Test
+    fun caughtErrorsLeaveTheTaskThroughAnErrorBoundaryEventAndRejoin() {
+        val wf = workflow<Order>("catching-job") {
+            input(emptyList())
+            task("reserve") { }.catching<OutOfStock> { task("backorder") { } }
+            task("ship") { }
+        }
+        val process = BpmnCompiler.compile(wf).single()
+        val model = process.model
+
+        val boundary = model.getModelElementsByType(BoundaryEvent::class.java).single()
+        assertEquals("catch_ce1", boundary.id)
+        assertEquals("OutOfStock", boundary.name)
+        assertTrue(boundary.cancelActivity())
+        assertEquals(process.serviceTasks.single { it.topic == "reserve" }.id, boundary.attachedTo.id)
+        val code = boundary.eventDefinitions.filterIsInstance<ErrorEventDefinition>().single().error.errorCode
+        assertEquals(EngineNames.catchError("ce1"), code)
+        val backorder = model.getModelElementById<ServiceTask>(process.serviceTasks.single { it.topic == "backorder" }.id)
+        assertEquals(backorder.id, boundary.outgoing.single().target.id)
+        val join = backorder.outgoing.single().target as ExclusiveGateway
+        val reserve = model.getModelElementById<ServiceTask>(boundary.attachedTo.id)
+        assertEquals(join.id, reserve.outgoing.single().target.id)
+        assertEquals(process.serviceTasks.single { it.topic == "ship" }.id, join.outgoing.single().target.id)
+    }
+
+    @Test
+    fun messageDataIsAppliedByAServiceTaskAfterTheCatchEvent() {
+        val wf = workflow<Order>("message-data-job") {
+            input(emptyList())
+            awaitMessage("paid") { order, data -> order.paid = data.isNotEmpty() }
+            awaitMessage("noted")
+        }
+        val process = BpmnCompiler.compile(wf).single()
+
+        assertEquals(listOf(EngineNames.message("msg1")), process.serviceTasks.map { it.topic })
+        val event = process.model.getModelElementById<IntermediateCatchEvent>("msg_msg1")
+        assertEquals(EngineNames.message("msg1"), event.outgoing.single().target.id)
+        assertTrue(process.model.getModelElementsByType(EventBasedGateway::class.java).isEmpty())
+    }
+
+    @Test
+    fun messageWithTimeoutRacesTheMessageAgainstATimerThroughAnEventBasedGateway() {
+        val wf = workflow<Order>("message-timeout-job") {
+            input(emptyList())
+            awaitMessage("paid", timeout = 30.seconds) { _, _ -> } onTimeout { task("remind") { } }
+            task("ship") { }
+        }
+        val process = BpmnCompiler.compile(wf).single()
+        val model = process.model
+
+        val gateway = model.getModelElementsByType(EventBasedGateway::class.java).single()
+        val targets = gateway.outgoing.map { it.target as IntermediateCatchEvent }.associateBy { it.id }
+        assertEquals(setOf("msg_msg1", "expired_msg1"), targets.keys)
+        assertEquals(1, targets.getValue("msg_msg1").eventDefinitions.filterIsInstance<MessageEventDefinition>().size)
+        val timer = targets.getValue("expired_msg1").eventDefinitions.filterIsInstance<TimerEventDefinition>().single()
+        assertEquals("PT30S", timer.timeDuration.textContent)
+        val remind = process.serviceTasks.single { it.topic == "remind" }.id
+        assertEquals(remind, targets.getValue("expired_msg1").outgoing.single().target.id)
+        val apply = model.getModelElementById<ServiceTask>(EngineNames.message("msg1"))
+        val join = apply.outgoing.single().target as ExclusiveGateway
+        assertEquals(join.id, model.getModelElementById<ServiceTask>(remind).outgoing.single().target.id)
+        assertEquals(process.serviceTasks.single { it.topic == "ship" }.id, join.outgoing.single().target.id)
+    }
+
+    @Test
+    fun branchesOfCatchesAndTimeoutsReachFanOutsInsideThem() {
+        val wf = workflow<Order>("nested-branches") {
+            input(emptyList())
+            task("reserve") { }.catching<OutOfStock> {
+                fanOut(expand = { emptyList<Line>() }) { task("split") { } }
+            }
+            awaitMessage("paid", timeout = 1.seconds) onTimeout {
+                fanOut(expand = { emptyList<Line>() }) { task("remind-line") { } }
+            }
+        }
+        val processes = BpmnCompiler.compile(wf).associateBy { it.key }
+
+        assertEquals(setOf("nested-branches", "nested-branches_f2", "nested-branches_f4"), processes.keys)
+        assertEquals(listOf("split"), processes.getValue("nested-branches_f2").serviceTasks.map { it.topic })
+        assertEquals(setOf("nested-branches_f2", "nested-branches_f4"), wf.levels().keys - "nested-branches")
     }
 }

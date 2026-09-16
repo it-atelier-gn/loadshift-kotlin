@@ -81,12 +81,12 @@ internal class Camunda7Driver(
         )
     }
 
-    override suspend fun terminate(job: EngineJob, message: String, variables: JsonObject) {
+    override suspend fun throwError(job: EngineJob, errorCode: String, message: String, variables: JsonObject) {
         client.bpmnError(
             job.id,
             BpmnErrorRequest(
                 workerId = workerId,
-                errorCode = EngineNames.TERMINATE_ERROR,
+                errorCode = errorCode,
                 errorMessage = message.take(MAX_ERROR_MESSAGE),
                 variables = CamundaVariables.toCamunda(variables),
             ),
@@ -110,12 +110,19 @@ internal class Camunda7Driver(
         client.deleteProcessInstance(instanceId)
     }
 
-    override suspend fun correlate(message: String, workflowKey: String, itemKey: String?): Boolean {
+    override suspend fun correlate(message: String, workflowKey: String, itemKey: String?, variables: JsonObject): Boolean {
         val keys = buildMap {
             put(EngineNames.WORKFLOW, CamundaVariables.encode(workflowKey))
             if (itemKey != null) put(EngineNames.ITEM_KEY, CamundaVariables.encode(itemKey))
         }
-        return client.correlateMessage(MessageRequest(message, keys, all = true, resultEnabled = true)) > 0
+        val request = MessageRequest(
+            message,
+            keys,
+            all = true,
+            resultEnabled = true,
+            processVariables = variables.takeIf { it.isNotEmpty() }?.let(CamundaVariables::toCamunda),
+        )
+        return client.correlateMessage(request) > 0
     }
 
     override suspend fun activeInstances(processIds: List<String>): Long =

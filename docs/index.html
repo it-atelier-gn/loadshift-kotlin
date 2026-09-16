@@ -307,6 +307,22 @@ task("fulfil") { fulfil(it) }</code></pre>
   <code>&lt;workflow-key&gt;:&lt;item-key&gt;</code>; Camunda&nbsp;7 and CIB&nbsp;seven correlate on the
   variables <code>loadshiftWorkflow</code> and <code>loadshiftKey</code>.</p>
   <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>Messages.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">awaitMessage("payment-confirmed", timeout = 3.days) { order, data -&gt;
+    order.paidAmount = data.getValue("amount").jsonPrimitive.double
+} onTimeout {
+    task("send-reminder") { remind(it) }
+}
+task("fulfil") { fulfil(it) }
+
+handle.send("payment-confirmed", "order-17", buildJsonObject { put("amount", 99.5) })</code></pre>
+  </div>
+  <p class="note"><code>send(message, key, data)</code> and <code>broadcast(message, data)</code> carry a JSON
+  object that the block of <code>awaitMessage</code> applies to the item. With <code>timeout</code>, an item whose
+  message does not arrive in time runs the <code>onTimeout</code> steps instead; both paths continue with the next
+  step. On an engine the block is a service task after the message catch event, and <code>timeout</code> compiles
+  to an event-based gateway that races the message against a timer.</p>
+  <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>Saga.kt</span><button class="copy" type="button">COPY</button></div>
 <pre><code class="lang-kotlin">task("charge") { charge(it) } compensate { refund(it) }
 task("reserve") { reserve(it) } compensate { release(it) }
@@ -319,6 +335,16 @@ task("ship") { ship(it) }</code></pre>
   <code>loadshiftCompensation_&lt;topic&gt;</code> each time the step completes, so the worker that
   dead-letters the item runs the compensation even when another worker ran the step, once for every run
   of a step inside a loop.</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>Catching.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">task("reserve") { reserve(it) }
+    .catching&lt;OutOfStock&gt; { task("backorder") { backorder(it) } }
+task("ship") { ship(it) }</code></pre>
+  </div>
+  <p class="note">When <code>reserve</code> throws an <code>OutOfStock</code>, the item runs the
+  <code>backorder</code> branch without further attempts and then continues with <code>ship</code>. Other
+  exceptions follow the retry policy and <code>RunConfig.onError</code>. On an engine the branch starts at an
+  error boundary event on the service task.</p>
 </section>
 
 <section id="fan-out" class="block">

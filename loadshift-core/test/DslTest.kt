@@ -121,7 +121,7 @@ class DslTest {
 
     @Test
     fun rejectsTopicsReservedForGeneratedSteps() {
-        for (topic in listOf("decision_c1", "decision_l2", "expand_f3", "reduce_f4", "timeout_to5", "loop_l6")) {
+        for (topic in listOf("decision_c1", "decision_l2", "expand_f3", "reduce_f4", "timeout_to5", "loop_l6", "message_msg7")) {
             assertFailsWith<IllegalArgumentException>(topic) {
                 workflow<Item>("reserved") {
                     input(Item(1))
@@ -193,5 +193,51 @@ class DslTest {
         val seq = wf.root.step as Sequence<Item>
         val m = assertIs<AwaitMessage<Item>>(seq.steps[0])
         assertEquals("payment-confirmed", m.message)
+    }
+
+    @Test
+    fun catchingAddsBranchesToTheTaskInDeclarationOrder() {
+        val wf = workflow<Item>("catches") {
+            input(Item(1))
+            task("reserve") { }
+                .catching<IllegalStateException> { task("retry-later") { } }
+                .catching(IllegalArgumentException::class) { }
+                .compensate { }
+        }
+        val execute = assertIs<Execute<Item>>(assertIs<Sequence<Item>>(wf.root.step).steps.single())
+        assertEquals(listOf(IllegalStateException::class, IllegalArgumentException::class), execute.catches.map { it.type })
+        assertEquals(listOf("ce1", "ce2"), execute.catches.map { it.id })
+        assertTrue(execute.compensation != null)
+        assertTrue("retry-later" in wf.root.tasks)
+    }
+
+    @Test
+    fun topicsInsideCatchAndTimeoutBranchesMustBeUnique() {
+        assertFailsWith<IllegalArgumentException> {
+            workflow<Item>("dup-catch") {
+                task("a") { }.catching<IllegalStateException> { task("a") { } }
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            workflow<Item>("dup-timeout") {
+                task("a") { }
+                awaitMessage("m", timeout = 1.seconds) onTimeout { task("a") { } }
+            }
+        }
+    }
+
+    @Test
+    fun awaitMessageKeepsItsTimeoutHandlerAndTimeoutBranch() {
+        val wf = workflow<Item>("messages") {
+            awaitMessage("paid", timeout = 5.minutes) { item, _ -> item.n++ } onTimeout { task("remind") { } }
+        }
+        val await = assertIs<AwaitMessage<Item>>(assertIs<Sequence<Item>>(wf.root.step).steps.single())
+        assertEquals(5.minutes, await.timeout)
+        assertTrue(await.onMessage != null)
+        assertIs<Sequence<Item>>(await.onTimeout)
+
+        assertFailsWith<IllegalArgumentException> { workflow<Item>("no-timeout") { awaitMessage("paid") onTimeout { } } }
+        assertFailsWith<IllegalArgumentException> { workflow<Item>("zero") { awaitMessage("paid", timeout = 0.seconds) } }
+        assertFailsWith<IllegalArgumentException> { workflow<Item>("blank") { awaitMessage(" ") } }
     }
 }

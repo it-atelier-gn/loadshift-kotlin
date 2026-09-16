@@ -7,7 +7,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import loadshift.core.DeadLetter
 import loadshift.core.EngineNames
 import loadshift.core.ErrorPolicy
@@ -54,6 +56,8 @@ import kotlin.time.TimeSource
 private data class Customer(var id: String, var note: String? = null) : WorkItem {
     override val key get() = id
 }
+
+private class OutOfStock(id: String) : RuntimeException("$id is out of stock")
 
 @Serializable
 private data class Contact(var id: String, var label: String = "") : WorkItem {
@@ -250,6 +254,43 @@ class Camunda8E2eTest {
 
         assertEquals(2, result.done)
         assertEquals(setOf("a-1", "a-2", "b-1", "b-2", "a", "b"), progressed.toSet())
+    }
+
+    @Test
+    fun messageDataTimeoutsAndCaughtErrorsTakeTheirBranches() = e2e { base ->
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Customer>(uniqueName("branches")) {
+            input(listOf(Customer("paid"), Customer("silent"), Customer("sold-out")))
+            fanOut(expand = { c -> listOf(Contact("${c.id}-1")) }) {
+                awaitMessage("confirm") { contact, data -> contact.label = data.getValue("by").jsonPrimitive.content }
+                task("confirmed") { seen += "confirmed:${it.id}:${it.label}" }
+            }
+            awaitMessage("payment", timeout = 15.seconds) { customer, data ->
+                customer.note = data.getValue("amount").jsonPrimitive.content
+            } onTimeout {
+                task("remind") { seen += "remind:${it.id}" }
+            }
+            task("reserve") { if (it.id == "sold-out") throw OutOfStock(it.id) }.catching<OutOfStock> {
+                task("backorder") { seen += "backorder:${it.id}" }
+            }
+            task("ship") { seen += "ship:${it.id}:${it.note}" }
+        }
+
+        val handle = Camunda8Backend(base).run(wf, RunConfig(retry = RetryPolicy(maxAttempts = 3, baseDelay = 100.milliseconds)))
+        handle.broadcast("confirm", buildJsonObject { put("by", "ops") })
+        handle.send("payment", "paid", buildJsonObject { put("amount", "42") })
+        handle.send("payment", "sold-out", buildJsonObject { put("amount", "7") })
+        val result = handle.await()
+
+        assertEquals(RunResult(done = 3, failed = 0, skipped = 0, deadLetters = emptyList()), result)
+        assertEquals(
+            setOf(
+                "confirmed:paid-1:ops", "confirmed:silent-1:ops", "confirmed:sold-out-1:ops",
+                "remind:silent", "backorder:sold-out",
+                "ship:paid:42", "ship:silent:null", "ship:sold-out:7",
+            ),
+            seen.toSet(),
+        )
     }
 
     @Test

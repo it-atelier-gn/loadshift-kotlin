@@ -11,6 +11,7 @@ import loadshift.core.Workflow
 import loadshift.core.fanOut
 import loadshift.core.task
 import loadshift.core.workflow
+import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.minutes
 import org.camunda.bpm.model.bpmn.Bpmn
 import org.camunda.bpm.model.bpmn.instance.CallActivity
@@ -37,6 +38,8 @@ class Order(var id: String, var total: Int = 0, var attempts: Int = 0) : WorkIte
 class Line(var sku: String, var qty: Int = 0) : WorkItem {
     override val key get() = sku
 }
+
+class OutOfStock : RuntimeException("out of stock")
 
 class Example(
     val id: String,
@@ -219,6 +222,47 @@ val examples = listOf(
             task("invoice") { }
             awaitMessage("payment-confirmed")
             task("fulfil") { }
+        },
+    ),
+    Example(
+        id = "await-timeout",
+        title = "Event with data or a deadline",
+        blurb = "awaitMessage with a block applies the data sent along with the message to the item. With a timeout, an event-based gateway races the message against a timer; when the timer wins, the item runs the onTimeout steps. Both paths join before the next task.",
+        dsl = """
+            workflow<Order>("await-or-remind") {
+                input(orders)
+                awaitMessage("payment-confirmed", timeout = 3.days) { order, data ->
+                    order.total = data.getValue("amount").jsonPrimitive.int
+                } onTimeout {
+                    task("send-reminder") { remind(it) }
+                }
+                task("fulfil") { fulfil(it) }
+            }
+        """.trimIndent(),
+        flow = workflow<Order>("await-or-remind") {
+            input(emptyList())
+            awaitMessage("payment-confirmed", timeout = 3.days) { _, _ -> } onTimeout {
+                task("send-reminder") { }
+            }
+            task("fulfil") { }
+        },
+    ),
+    Example(
+        id = "catching",
+        title = "Caught business error",
+        blurb = "catching attaches an error boundary event to the task. When the task throws the caught exception, the worker ends the job with a BPMN error and the item takes the branch without further attempts, then continues with the next task.",
+        dsl = """
+            workflow<Order>("reserve-or-backorder") {
+                input(orders)
+                task("reserve") { reserve(it) }
+                    .catching<OutOfStock> { task("backorder") { backorder(it) } }
+                task("ship") { ship(it) }
+            }
+        """.trimIndent(),
+        flow = workflow<Order>("reserve-or-backorder") {
+            input(emptyList())
+            task("reserve") { }.catching<OutOfStock> { task("backorder") { } }
+            task("ship") { }
         },
     ),
     Example(

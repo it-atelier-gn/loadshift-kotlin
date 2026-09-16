@@ -3,6 +3,8 @@ package loadshift.core
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.serialization.json.JsonObject
+import kotlin.reflect.KClass
 import kotlin.time.Duration
 
 @DslMarker
@@ -36,7 +38,7 @@ open class FlowSpec<W : WorkItem> internal constructor(
         tasks[t.topic] = t
         val e = Execute(t, TaskOptions(retry, timeout, rateLimit))
         steps += e
-        return TaskHandle(e)
+        return TaskHandle(this, e)
     }
 
     fun task(
@@ -80,15 +82,23 @@ open class FlowSpec<W : WorkItem> internal constructor(
         steps += Timeout(idgen.next("to"), duration, bodySpec.toStep())
     }
 
-    fun awaitMessage(message: String) {
-        steps += AwaitMessage(idgen.next("msg"), message)
+    fun awaitMessage(
+        message: String,
+        timeout: Duration? = null,
+        onMessage: (suspend (W, JsonObject) -> Unit)? = null,
+    ): MessageHandle<W> {
+        require(message.isNotBlank()) { "message name must not be blank" }
+        require(timeout == null || timeout.isPositive()) { "message timeout must be positive, was $timeout" }
+        val step = AwaitMessage(idgen.next("msg"), message, timeout, onMessage)
+        steps += step
+        return MessageHandle(this, step)
     }
 
     fun userTask(
         name: String,
         assignee: String? = null,
         candidateGroups: List<String> = emptyList(),
-        onComplete: suspend (W, kotlinx.serialization.json.JsonObject) -> Unit = { _, _ -> },
+        onComplete: suspend (W, JsonObject) -> Unit = { _, _ -> },
     ) {
         require(name.isNotBlank()) { "user task name must not be blank" }
         require(assignee == null || assignee.isNotBlank()) { "user task assignee must not be blank" }
@@ -166,9 +176,30 @@ fun <W : WorkItem> FlowSpec<W>.task(
     return task(t, retry, timeout, rateLimit)
 }
 
-class TaskHandle<W : WorkItem> internal constructor(private val step: Execute<W>) {
-    infix fun compensate(block: suspend (W) -> Unit) {
+class TaskHandle<W : WorkItem> internal constructor(private val owner: FlowSpec<W>, private val step: Execute<W>) {
+    infix fun compensate(block: suspend (W) -> Unit): TaskHandle<W> {
         step.compensation = block
+        return this
+    }
+
+    fun catching(type: KClass<out Throwable>, block: FlowSpec<W>.() -> Unit): TaskHandle<W> {
+        val id = owner.idgen.next("ce")
+        val spec = owner.child().apply(block)
+        owner.absorb(spec)
+        step.catches += Catch(id, type, spec.toStep())
+        return this
+    }
+
+    inline fun <reified E : Throwable> catching(noinline block: FlowSpec<W>.() -> Unit): TaskHandle<W> =
+        catching(E::class, block)
+}
+
+class MessageHandle<W : WorkItem> internal constructor(private val owner: FlowSpec<W>, private val step: AwaitMessage<W>) {
+    infix fun onTimeout(block: FlowSpec<W>.() -> Unit) {
+        require(step.timeout != null) { "onTimeout requires a timeout on awaitMessage('${step.message}')" }
+        val spec = owner.child().apply(block)
+        owner.absorb(spec)
+        step.onTimeout = spec.toStep()
     }
 }
 
@@ -337,7 +368,7 @@ inline fun <reified W : WorkItem> workflow(
 
 private val WORKFLOW_KEY = Regex("^[a-z_][a-z0-9_\\-]*$")
 
-private val RESERVED_TOPIC = Regex("^(decision_[cl]|expand_f|reduce_f|timeout_to|loop_l|call_cw|return_cw|form_ut)\\d+$")
+private val RESERVED_TOPIC = Regex("^(decision_[cl]|expand_f|reduce_f|timeout_to|loop_l|call_cw|return_cw|form_ut|message_msg)\\d+$")
 
 private fun validateTopics(workflowName: String, root: SubFlow<*>) {
     val seen = HashSet<String>()
@@ -352,6 +383,7 @@ private fun validateTopics(workflowName: String, root: SubFlow<*>) {
                 require(seen.add(topic)) {
                     "topic '$topic' is used by more than one task in workflow '$workflowName'; topics must be unique within a workflow"
                 }
+                step.catches.forEach { visit(it.body) }
             }
             is Conditional<*> -> {
                 visit(step.onTrue)
@@ -362,7 +394,8 @@ private fun validateTopics(workflowName: String, root: SubFlow<*>) {
             is Timeout<*> -> visit(step.body)
             is FanOut<*, *> -> visit(step.body.step)
             is FanIn<*, *, *> -> visit(step.body.step)
-            is Wait<*>, is AwaitMessage<*>, is AwaitSignal<*>, is Call<*>, is HumanTask<*> -> Unit
+            is AwaitMessage<*> -> step.onTimeout?.let(::visit)
+            is Wait<*>, is AwaitSignal<*>, is Call<*>, is HumanTask<*> -> Unit
         }
     }
     visit(root.step)

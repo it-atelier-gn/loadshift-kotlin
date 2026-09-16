@@ -14,7 +14,10 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
+import loadshift.core.EngineNames
 import kotlinx.serialization.json.jsonPrimitive
 import loadshift.core.EngineApi
 import kotlin.test.Test
@@ -153,10 +156,10 @@ class Camunda8ClientTest {
         client.deploy(listOf("proc.bpmn" to "<definitions/>".toByteArray()))
         driver.startInstance("proc", JsonObject(emptyMap()), null)
         driver.fetch(listOf("wf/a"), 1, 1.seconds, Duration.ZERO)
-        driver.correlate("go", "wf", "k")
+        driver.correlate("go", "wf", "k", JsonObject(emptyMap()))
         client.instanceCount("proc")
         driver.activeRoots("proc")
-        driver.correlate("go", "wf", null)
+        driver.correlate("go", "wf", null, JsonObject(emptyMap()))
 
         val deployment = String(requests[0].body.toByteArray())
         assertTrue("tenantId" in deployment && "acme" in deployment, deployment)
@@ -204,6 +207,7 @@ class Camunda8ClientTest {
     @Test
     fun broadcastCorrelatesEverySubscriptionOfTheWorkflowOnly() = runTest {
         val correlated = mutableListOf<String>()
+        val payloads = mutableListOf<JsonObject?>()
         val engine = MockEngine { request ->
             when (request.url.encodedPath) {
                 "/v2/message-subscriptions/search" -> respond(
@@ -212,7 +216,9 @@ class Camunda8ClientTest {
                     jsonHeaders,
                 )
                 "/v2/messages/correlation" -> {
-                    correlated += body(request.body).getValue("correlationKey").jsonPrimitive.content
+                    val sent = body(request.body)
+                    correlated += sent.getValue("correlationKey").jsonPrimitive.content
+                    payloads += sent["variables"]?.jsonObject
                     respond("""{"messageKey":"1"}""", HttpStatusCode.OK, jsonHeaders)
                 }
                 else -> error("unexpected request ${request.url}")
@@ -220,7 +226,9 @@ class Camunda8ClientTest {
         }
         val driver = Camunda8Driver(Camunda8Client("http://engine", Camunda8Auth.None, engine), "worker")
 
-        assertTrue(driver.correlate("go", "wf", null))
+        val variables = buildJsonObject { put(EngineNames.messageVariable("go"), buildJsonObject { put("amount", 12) }) }
+        assertTrue(driver.correlate("go", "wf", null, variables))
         assertEquals(setOf("wf:a", "wf:b"), correlated.toSet())
+        assertEquals<List<JsonObject?>>(listOf(variables, variables), payloads)
     }
 }

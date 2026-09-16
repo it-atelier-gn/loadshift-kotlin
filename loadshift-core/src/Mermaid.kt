@@ -24,7 +24,8 @@ private class MermaidWriter {
 
     private fun node(n: FlowNode): Frag = when (n.type) {
         "sequence" -> sequence(n.children)
-        "task" -> box(n.label).let { Frag(it, it) }
+        "task" -> escapes(box(n.label), n.children)
+        "awaitMessage" -> escapes(round("message ${n.label}"), n.children)
         "wait" -> round("wait").let { Frag(it, it) }
         "if" -> branch(n)
         "loop" -> loop(n)
@@ -90,6 +91,18 @@ private class MermaidWriter {
             dottedEdge(frag.exit, join)
         } else {
             edge(head, join)
+        }
+        return Frag(head, join)
+    }
+
+    private fun escapes(head: String, branches: List<FlowNode>): Frag {
+        if (branches.isEmpty()) return Frag(head, head)
+        val join = dot()
+        edge(head, join)
+        for (branch in branches) {
+            val frag = node(branch.children.single())
+            dottedEdge(head, frag.entry, branch.label)
+            edge(frag.exit, join)
         }
         return Frag(head, join)
     }

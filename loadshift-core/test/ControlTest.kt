@@ -2,6 +2,7 @@ package loadshift.core
 
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -92,8 +93,8 @@ class ControlTest {
             override suspend fun cancel() { cancelled = true }
             override suspend fun detach() { detached = true }
             override suspend fun await() = RunResult(0, 0, 0, emptyList())
-            override suspend fun send(message: String, key: String) {}
-            override suspend fun broadcast(message: String) {}
+            override suspend fun send(message: String, key: String, data: JsonObject) {}
+            override suspend fun broadcast(message: String, data: JsonObject) {}
             override suspend fun item(key: String) =
                 if (key == "known") ItemStatus(key, ItemState.Running, "yes", emptyList()) else null
             override suspend fun cancelItem(key: String) = key == "known"

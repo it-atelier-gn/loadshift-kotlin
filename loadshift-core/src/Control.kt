@@ -229,7 +229,15 @@ fun describeFlow(workflow: Workflow<*>): FlowNode =
 
 private fun describeStep(step: Step<*>): FlowNode = when (step) {
     is Sequence<*> -> FlowNode("sequence", "", step.steps.map { describeStep(it) })
-    is Execute<*> -> FlowNode("task", step.task.topic)
+    is Execute<*> -> if (step.catches.isEmpty()) {
+        FlowNode("task", step.task.topic)
+    } else {
+        FlowNode(
+            "task",
+            step.task.topic,
+            step.catches.map { FlowNode("catch", it.type.simpleName ?: it.id, listOf(describeStep(it.body))) },
+        )
+    }
     is Conditional<*> -> FlowNode(
         "if",
         step.id,
@@ -242,7 +250,11 @@ private fun describeStep(step: Step<*>): FlowNode = when (step) {
     is Parallel<*> -> FlowNode("parallel", "", step.branches.map { describeStep(it) })
     is Wait<*> -> FlowNode("wait", step.id)
     is Timeout<*> -> FlowNode("timeout", step.id, listOf(describeStep(step.body)))
-    is AwaitMessage<*> -> FlowNode("awaitMessage", step.message)
+    is AwaitMessage<*> -> FlowNode(
+        "awaitMessage",
+        step.message,
+        listOfNotNull(step.onTimeout?.let { FlowNode("onTimeout", step.timeout.toString(), listOf(describeStep(it))) }),
+    )
     is AwaitSignal<*> -> FlowNode("awaitSignal", step.signal)
     is Call<*> -> FlowNode("call", step.workflow.name)
     is HumanTask<*> -> FlowNode("userTask", step.name)

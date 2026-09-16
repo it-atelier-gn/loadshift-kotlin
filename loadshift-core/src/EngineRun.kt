@@ -275,7 +275,10 @@ class EngineRun(
 
         when (step) {
             is Sequence<*> -> step.steps.forEach(::descend)
-            is Execute<*> -> add(TaskHandler(owner, step as Execute<WorkItem>, codec, itemVariable, parents, limit))
+            is Execute<*> -> {
+                add(TaskHandler(owner, step as Execute<WorkItem>, codec, itemVariable, parents, limit))
+                step.catches.forEach { descend(it.body) }
+            }
             is Conditional<*> -> {
                 add(ConditionHandler(owner, step as Conditional<WorkItem>, codec, itemVariable))
                 descend(step.onTrue)
@@ -306,7 +309,12 @@ class EngineRun(
                 add(CallHandler(owner, step.id, codec, itemVariable, parents))
                 add(ReturnHandler(owner, step.id, codec, itemVariable, parents))
             }
-            is Wait<*>, is AwaitMessage<*>, is AwaitSignal<*> -> Unit
+            is AwaitMessage<*> -> {
+                val await = step as AwaitMessage<WorkItem>
+                if (await.onMessage != null) add(MessageHandler(owner, await, codec, itemVariable, parents))
+                await.onTimeout?.let(::descend)
+            }
+            is Wait<*>, is AwaitSignal<*> -> Unit
         }
     }
 
@@ -381,7 +389,14 @@ class EngineRun(
             val source = source(variables)
             val item = codec.decode(source)
             val parents = parents(source)
-            if (levelLimit == null) invoke(item, parents) else levelLimit.withPermit { invoke(item, parents) }
+            try {
+                if (levelLimit == null) invoke(item, parents) else levelLimit.withPermit { invoke(item, parents) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                val caught = step.catches.firstOrNull { it.type.isInstance(e) } ?: throw e
+                return JobOutcome.Catch(EngineNames.catchError(caught.id), e.message ?: e.toString(), write(variables, source, item))
+            }
             val written = write(variables, source, item)
             if (step.compensation == null) return JobOutcome.Complete(written)
             val name = EngineNames.compensation(topic)
@@ -540,6 +555,28 @@ class EngineRun(
             val source = source(variables)
             val item = codec.decode(source)
             withContext(context(item, parents(source), topic)) { step.onComplete(item, form) }
+            return JobOutcome.Complete(JsonObject(write(variables, source, item) + (name to JsonNull)))
+        }
+    }
+
+    private inner class MessageHandler(
+        owner: Workflow<*>,
+        private val step: AwaitMessage<WorkItem>,
+        codec: WorkItemCodec<WorkItem>,
+        itemVariable: String?,
+        parentCodecs: List<WorkItemCodec<WorkItem>>,
+    ) : JobHandler(owner, EngineNames.message(step.id), codec, itemVariable, parentCodecs, config.retry) {
+        override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
+            val name = EngineNames.messageVariable(step.message)
+            val data = when (val raw = variables[name]) {
+                is JsonObject -> raw
+                is JsonPrimitive -> raw.contentOrNull?.let { Json.parseToJsonElement(it) as? JsonObject }
+                else -> null
+            } ?: JsonObject(emptyMap())
+            val source = source(variables)
+            val item = codec.decode(source)
+            val onMessage = requireNotNull(step.onMessage)
+            withContext(context(item, parents(source), topic)) { onMessage(item, data) }
             return JobOutcome.Complete(JsonObject(write(variables, source, item) + (name to JsonNull)))
         }
     }

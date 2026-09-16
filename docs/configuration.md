@@ -90,8 +90,8 @@ With `deadLetters` set, the in-process backend encodes items with their serializ
 | `resume()` | Continues a paused run |
 | `cancel()` | Stops the run; on an engine, its process instances are cancelled |
 | `detach()` | On an engine: stops seeding and fetching, waits for running task bodies and leaves the process instances on the engine. In-process: same as `cancel()` |
-| `send(message, key)` | Delivers the message to the item with that key once it waits for it |
-| `broadcast(message)` | Releases every item waiting for the message, including items that reach the wait later |
+| `send(message, key, data)` | Delivers the message to the item with that key once it waits for it; `data` is an optional JSON object for the step's block |
+| `broadcast(message, data)` | Releases every item waiting for the message, including items that reach the wait later; `data` is an optional JSON object for the step's block |
 | `item(key)` | `ItemStatus` of the top-level item with that key: state, current topic and dead letters; `null` for a key the run does not know |
 | `cancelItem(key)` | Stops the top-level item with that key without running its compensations; on an engine, its root process instance is cancelled. Returns `false` when the item is not waiting or running |
 | `progress()` | Current counters |

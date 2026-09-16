@@ -93,7 +93,7 @@ class Camunda7ClientTest {
         assertEquals("pi-1", driver.startInstance("proc", JsonObject(emptyMap()), null))
         assertEquals(1, client.processInstanceCount("proc"))
         driver.fetch(listOf("wf/a", "wf/b"), 5, 1.seconds, Duration.ZERO)
-        driver.correlate("go", "wf", "k")
+        driver.correlate("go", "wf", "k", JsonObject(emptyMap()))
         Camunda7Driver(Camunda7Client(base, null, engine), "worker").fetch(listOf("wf/a"), 1, 1.seconds, Duration.ZERO)
 
         val deployment = String(requests[0].body.toByteArray())
@@ -138,7 +138,7 @@ class Camunda7ClientTest {
     }
 
     @Test
-    fun terminateThrowsTheTerminateErrorWithOutcomeVariables() = runTest {
+    fun thrownErrorsCarryTheirCodeAndVariables() = runTest {
         var path: String? = null
         var sent: JsonObject? = null
         val engine = MockEngine { request ->
@@ -149,7 +149,7 @@ class Camunda7ClientTest {
         val driver = Camunda7Driver(Camunda7Client(base, null, engine), "worker-1")
         val job = EngineJob("task-1", "wf/ship", "pi-1", JsonObject(emptyMap()), null)
 
-        driver.terminate(job, "no carrier", buildJsonObject { putJsonObject(EngineNames.OUTCOME) { put("topic", "ship") } })
+        driver.throwError(job, EngineNames.TERMINATE_ERROR, "no carrier", buildJsonObject { putJsonObject(EngineNames.OUTCOME) { put("topic", "ship") } })
 
         assertEquals("/engine-rest/external-task/task-1/bpmnError", path)
         val request = assertNotNull(sent)
@@ -177,14 +177,19 @@ class Camunda7ClientTest {
         }
         val driver = Camunda7Driver(Camunda7Client(base, null, engine), "worker")
 
-        assertTrue(driver.correlate("go", "wf", "a"))
-        assertFalse(driver.correlate("go", "wf", "b"))
-        assertFalse(driver.correlate("go", "wf", null))
+        val payload = buildJsonObject { put(EngineNames.messageVariable("go"), buildJsonObject { put("amount", 12) }) }
+        assertTrue(driver.correlate("go", "wf", "a", payload))
+        assertFalse(driver.correlate("go", "wf", "b", JsonObject(emptyMap())))
+        assertFalse(driver.correlate("go", "wf", null, JsonObject(emptyMap())))
 
         val targeted = requests[0].getValue("correlationKeys").jsonObject
         assertEquals("wf", targeted.getValue(EngineNames.WORKFLOW).jsonObject.getValue("value").jsonPrimitive.content)
         assertEquals("a", targeted.getValue(EngineNames.ITEM_KEY).jsonObject.getValue("value").jsonPrimitive.content)
         assertFalse(EngineNames.ITEM_KEY in requests[2].getValue("correlationKeys").jsonObject)
+        val sent = requests[0].getValue("processVariables").jsonObject.getValue(EngineNames.messageVariable("go")).jsonObject
+        assertEquals("json", sent.getValue("type").jsonPrimitive.content)
+        assertTrue("12" in sent.getValue("value").jsonPrimitive.content)
+        assertFalse("processVariables" in requests[1])
         assertTrue(requests.all { it.getValue("all").jsonPrimitive.content == "true" })
     }
 }

@@ -65,6 +65,7 @@ data class MessageCorrelationRequest(
     val name: String,
     val correlationKey: String,
     val tenantId: String? = null,
+    val variables: JsonObject? = null,
 )
 
 @Serializable

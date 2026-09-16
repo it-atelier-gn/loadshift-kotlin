@@ -220,8 +220,8 @@ class Camunda8Client internal constructor(
         if (response.status != HttpStatusCode.NotFound) response.ensureSuccess("cancelInstance")
     }
 
-    suspend fun correlateMessage(name: String, correlationKey: String): Boolean =
-        postJson("$v2/messages/correlation", MessageCorrelationRequest(name, correlationKey, tenantId)).status.isSuccess()
+    suspend fun correlateMessage(name: String, correlationKey: String, variables: JsonObject? = null): Boolean =
+        postJson("$v2/messages/correlation", MessageCorrelationRequest(name, correlationKey, tenantId, variables)).status.isSuccess()
 
     suspend fun messageSubscriptions(messageName: String): List<MessageSubscriptionItem> {
         val query = buildJsonObject {

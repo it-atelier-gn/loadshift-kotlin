@@ -28,4 +28,18 @@ class MermaidTest {
         assertTrue("-.->|each child|" in mermaid, mermaid)
         assertTrue("([\"start\"])" in mermaid && "([\"end\"])" in mermaid, mermaid)
     }
+
+    @Test
+    fun rendersCaughtErrorsAndMessageTimeoutsAsDottedBranches() {
+        val wf = workflow<M>("branches") {
+            input(M())
+            task("reserve") { }.catching<IllegalStateException> { task("backorder") { } }
+            awaitMessage("paid", timeout = 5.minutes) onTimeout { task("remind") { } }
+        }
+        val mermaid = wf.toMermaid()
+        assertTrue("-.->|IllegalStateException|" in mermaid, mermaid)
+        assertTrue("[\"backorder\"]" in mermaid, mermaid)
+        assertTrue("([\"message paid\"])" in mermaid, mermaid)
+        assertTrue("-.->|5m|" in mermaid && "[\"remind\"]" in mermaid, mermaid)
+    }
 }

@@ -10,6 +10,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -43,6 +45,9 @@ private class FakeDriver : EngineDriver {
     val schedulers = CopyOnWriteArrayList<RootInstance>()
     val failures = CopyOnWriteArrayList<Failure>()
     val terminated = CopyOnWriteArrayList<String>()
+    val thrownErrors = CopyOnWriteArrayList<Pair<String, String>>()
+    val thrownVariables = ConcurrentHashMap<String, JsonObject>()
+    val correlatedVariables = CopyOnWriteArrayList<JsonObject>()
     val cancelled = CopyOnWriteArrayList<String>()
     val finished = ConcurrentHashMap<String, Boolean>()
     val waiting: MutableSet<Pair<String, String?>> = ConcurrentHashMap.newKeySet()
@@ -93,8 +98,9 @@ private class FakeDriver : EngineDriver {
         failures += Failure(job.id, retries, backoff)
     }
 
-    override suspend fun terminate(job: EngineJob, message: String, variables: JsonObject) {
-        terminated += job.id
+    override suspend fun throwError(job: EngineJob, errorCode: String, message: String, variables: JsonObject) {
+        if (errorCode == EngineNames.TERMINATE_ERROR) terminated += job.id else thrownErrors += job.id to errorCode
+        thrownVariables[job.id] = variables
     }
 
     @Volatile
@@ -117,9 +123,11 @@ private class FakeDriver : EngineDriver {
         finished[instanceId] = false
     }
 
-    override suspend fun correlate(message: String, workflowKey: String, itemKey: String?): Boolean {
+    override suspend fun correlate(message: String, workflowKey: String, itemKey: String?, variables: JsonObject): Boolean {
         correlationAttempts.incrementAndGet()
-        return waiting.remove(message to itemKey)
+        val correlated = waiting.remove(message to itemKey)
+        if (correlated) correlatedVariables += variables
+        return correlated
     }
 
     override suspend fun activeInstances(processIds: List<String>): Long = (started.size - finished.size).toLong()
@@ -357,6 +365,50 @@ class EngineRunnerTest {
         val settled = driver.correlationAttempts.get()
         delay(150.milliseconds)
         assertEquals(settled, driver.correlationAttempts.get())
+        handle.cancel()
+    }
+
+    @Test
+    fun sentAndBroadcastDataTravelsAsTheMessageVariable() = runBlocking {
+        val (handle, driver) = launch(flow("send-data", "a"))
+        eventually { driver.started.size == 1 }
+        val paid = buildJsonObject { put("amount", 42) }
+        val opened = buildJsonObject { put("by", "ops") }
+
+        driver.waiting += "paid" to "a"
+        handle.send("paid", "a", paid)
+        driver.waiting += "open" to null
+        handle.broadcast("open", opened)
+        driver.waiting += "plain" to "a"
+        handle.send("plain", "a")
+
+        eventually { driver.correlatedVariables.size == 3 }
+        assertEquals(
+            listOf(
+                JsonObject(mapOf(EngineNames.messageVariable("paid") to paid)),
+                JsonObject(mapOf(EngineNames.messageVariable("open") to opened)),
+                JsonObject(emptyMap()),
+            ),
+            driver.correlatedVariables.toList(),
+        )
+        handle.cancel()
+    }
+
+    @Test
+    fun caughtErrorsAreThrownToTheEngineWithTheirCode() = runBlocking {
+        val wf = workflow<RunnerItem>("catch-runner") {
+            input(RunnerItem("a"))
+            task("work") { throw IllegalStateException("sold out") }.catching<IllegalStateException> { }
+        }
+        val (handle, driver) = launch(wf, RunConfig(retry = RetryPolicy(maxAttempts = 3)))
+        eventually { driver.started.size == 1 }
+        driver.enqueueWork(wf)
+
+        eventually { driver.thrownErrors.size == 1 }
+        assertEquals("job-pi-1" to EngineNames.catchError("ce1"), driver.thrownErrors.single())
+        assertEquals(JsonPrimitive("a"), driver.thrownVariables.getValue("job-pi-1")["id"])
+        assertTrue(driver.failures.isEmpty())
+        assertTrue(driver.terminated.isEmpty())
         handle.cancel()
     }
 

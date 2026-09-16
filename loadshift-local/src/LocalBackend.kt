@@ -23,6 +23,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import loadshift.core.AwaitMessage
 import loadshift.core.AwaitSignal
 import loadshift.core.Call
+import loadshift.core.Catch
 import loadshift.core.HumanTask
 import loadshift.core.UserTask
 import loadshift.core.calledWorkflows
@@ -135,6 +136,7 @@ private sealed class UnitSignal(val topic: String, val reason: String) : Excepti
 private class DeadLetterSignal(topic: String, reason: String) : UnitSignal(topic, reason)
 private class SkipSignal(topic: String) : UnitSignal(topic, "skipped")
 private class RunFailure(cause: Throwable) : Exception(cause)
+private class CaughtSignal(val caught: Catch<*>, cause: Throwable) : Exception(cause)
 
 private fun Throwable.unwrapRunFailure(): Throwable {
     var error = this
@@ -217,9 +219,9 @@ private class LocalRun<W : WorkItem>(
     private val globalLimiter = config.rateLimit?.let { RateLimiter(it) }
     private val taskLimiters = ConcurrentHashMap<String, RateLimiter>()
 
-    private val waiters = mutableMapOf<Pair<String, String?>, MutableList<CompletableDeferred<Unit>>>()
-    private val delivered = mutableSetOf<Pair<String, String?>>()
-    private val broadcasted = mutableSetOf<String>()
+    private val waiters = mutableMapOf<Pair<String, String?>, MutableList<CompletableDeferred<JsonObject>>>()
+    private val delivered = mutableMapOf<Pair<String, String?>, JsonObject>()
+    private val broadcasted = mutableMapOf<String, JsonObject>()
     private val signalWaiters = mutableMapOf<String, MutableList<CompletableDeferred<Unit>>>()
     private val openUserTasks = ConcurrentHashMap<String, PendingUserTask>()
     private val waitersMutex = Mutex()
@@ -297,21 +299,44 @@ private class LocalRun<W : WorkItem>(
 
     override suspend fun await(): RunResult = completion.await()
 
-    override suspend fun send(message: String, key: String) {
+    override suspend fun send(message: String, key: String, data: JsonObject) {
         val list = waitersMutex.withLock {
             val l = waiters.remove(message to key)
-            if (l.isNullOrEmpty()) delivered.add(message to key)
+            if (l.isNullOrEmpty()) delivered[message to key] = data
             l
         }
-        list?.forEach { it.complete(Unit) }
+        list?.forEach { it.complete(data) }
     }
 
-    override suspend fun broadcast(message: String) {
+    override suspend fun broadcast(message: String, data: JsonObject) {
         val lists = waitersMutex.withLock {
-            broadcasted.add(message)
+            broadcasted[message] = data
             waiters.keys.filter { it.first == message }.mapNotNull { waiters.remove(it) }
         }
-        lists.flatten().forEach { it.complete(Unit) }
+        lists.flatten().forEach { it.complete(data) }
+    }
+
+    private suspend fun receive(message: String, key: String?, timeout: Duration?): JsonObject? {
+        val waitKey = message to key
+        val signal = CompletableDeferred<JsonObject>()
+        val ready = waitersMutex.withLock {
+            delivered.remove(waitKey) ?: broadcasted[message] ?: run {
+                waiters.getOrPut(waitKey) { mutableListOf() }.add(signal)
+                null
+            }
+        }
+        if (ready != null) return ready
+        if (timeout == null) return signal.await()
+        withTimeoutOrNull(timeout) { signal.await() }?.let { return it }
+        val expired = withContext(NonCancellable) {
+            waitersMutex.withLock {
+                val waiting = waiters[waitKey]
+                val removed = waiting?.remove(signal) == true
+                if (waiting != null && waiting.isEmpty()) waiters.remove(waitKey)
+                removed
+            }
+        }
+        return if (expired) null else signal.await()
     }
 
     suspend fun signal(name: String) {
@@ -535,13 +560,22 @@ private class LocalRun<W : WorkItem>(
 
             is Execute<*> -> {
                 val e = step as Execute<WorkItem>
-                config.tracer.span("task ${e.task.topic}", mapOf("item" to item.key.orEmpty())) {
-                    withContext(currentExecutionContext().withTopic(e.task.topic)) {
-                        runTask(e.task, e.options, item)
+                val caught = try {
+                    config.tracer.span("task ${e.task.topic}", mapOf("item" to item.key.orEmpty())) {
+                        withContext(currentExecutionContext().withTopic(e.task.topic)) {
+                            runTask(e.task, e.options, item, e.catches)
+                        }
                     }
+                    null
+                } catch (signal: CaughtSignal) {
+                    signal.caught as Catch<WorkItem>
                 }
-                e.compensation?.let { comp ->
-                    currentCoroutineContext()[CompensationStack.Key]?.actions?.add(Compensation(e.task.topic, item) { comp(item) })
+                if (caught != null) {
+                    interpret(caught.body, item)
+                } else {
+                    e.compensation?.let { comp ->
+                        currentCoroutineContext()[CompensationStack.Key]?.actions?.add(Compensation(e.task.topic, item) { comp(item) })
+                    }
                 }
             }
 
@@ -569,18 +603,23 @@ private class LocalRun<W : WorkItem>(
             is Wait<*> -> delay(step.duration)
 
             is AwaitMessage<*> -> {
-                val k = step.message to item.key
-                val signal = CompletableDeferred<Unit>()
-                val resumeNow = waitersMutex.withLock {
-                    if (k in delivered || step.message in broadcasted) {
-                        delivered.remove(k)
-                        true
-                    } else {
-                        waiters.getOrPut(k) { mutableListOf() }.add(signal)
-                        false
+                val await = step as AwaitMessage<WorkItem>
+                val data = receive(await.message, item.key, await.timeout)
+                val onMessage = await.onMessage
+                if (data == null) {
+                    await.onTimeout?.let { interpret(it, item) }
+                } else if (onMessage != null) {
+                    val topic = EngineNames.message(await.id)
+                    withContext(currentExecutionContext().withTopic(topic)) {
+                        try {
+                            executeWithRetry(config.retry, null, topic) { onMessage(item, data) }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Throwable) {
+                            throw failureSignal(topic, e)
+                        }
                     }
                 }
-                if (!resumeNow) signal.await()
             }
 
             is HumanTask<*> -> {
@@ -724,7 +763,7 @@ private class LocalRun<W : WorkItem>(
         ErrorPolicy.Skip -> SkipSignal(topic)
     }
 
-    private suspend fun runTask(task: Task<WorkItem>, options: TaskOptions, item: WorkItem) {
+    private suspend fun runTask(task: Task<WorkItem>, options: TaskOptions, item: WorkItem, catches: List<Catch<WorkItem>>) {
         paused.first { !it }
         currentCoroutineContext()[TopItem.Key]?.tracker?.topic = task.topic
 
@@ -739,15 +778,23 @@ private class LocalRun<W : WorkItem>(
         val policy = options.retry ?: config.retry
         val timeout = options.timeout ?: policy.timeout
         try {
-            executeWithRetry(policy, timeout, task.topic) { task.execute(item) }
+            executeWithRetry(policy, timeout, task.topic, catches) { task.execute(item) }
         } catch (e: CancellationException) {
+            throw e
+        } catch (e: CaughtSignal) {
             throw e
         } catch (e: Throwable) {
             throw failureSignal(task.topic, e)
         }
     }
 
-    private suspend fun executeWithRetry(policy: RetryPolicy, timeout: Duration?, topic: String, block: suspend () -> Unit) {
+    private suspend fun executeWithRetry(
+        policy: RetryPolicy,
+        timeout: Duration?,
+        topic: String,
+        catches: List<Catch<WorkItem>> = emptyList(),
+        block: suspend () -> Unit,
+    ) {
         var attempt = 0
         while (true) {
             attempt++
@@ -760,6 +807,7 @@ private class LocalRun<W : WorkItem>(
                 throw e
             } catch (e: Throwable) {
                 counters.taskDuration(topic, false, started.elapsedNow())
+                catches.firstOrNull { it.type.isInstance(e) }?.let { throw CaughtSignal(it, e) }
                 if (attempt >= policy.maxAttempts || !policy.retryOn(e)) throw e
                 counters.retry(topic)
                 delay(policy.backoff(attempt))

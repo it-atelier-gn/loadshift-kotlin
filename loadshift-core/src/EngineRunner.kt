@@ -70,8 +70,8 @@ class EngineRunner(
     private val finishedItems = FinishedItems()
     private val finishedRoots: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val executing: MutableSet<String> = ConcurrentHashMap.newKeySet()
-    private val pendingSends: MutableSet<Pair<String, String>> = ConcurrentHashMap.newKeySet()
-    private val broadcasts: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private val pendingSends: MutableSet<PendingSend> = ConcurrentHashMap.newKeySet()
+    private val broadcasts = ConcurrentHashMap<String, JsonObject>()
     private val pollers = mutableListOf<Job>()
     private val stateLock = Any()
 
@@ -146,13 +146,13 @@ class EngineRunner(
         return true
     }
 
-    override suspend fun send(message: String, key: String) {
-        if (!correlate(message, key)) pendingSends += message to key
+    override suspend fun send(message: String, key: String, data: JsonObject) {
+        if (!correlate(message, key, data)) pendingSends += PendingSend(message, key, data)
     }
 
-    override suspend fun broadcast(message: String) {
-        broadcasts += message
-        correlate(message, null)
+    override suspend fun broadcast(message: String, data: JsonObject) {
+        broadcasts[message] = data
+        correlate(message, null, data)
     }
 
     override fun progress(): Progress = run.progress()
@@ -464,7 +464,10 @@ class EngineRunner(
                 is JobOutcome.Retry -> deliver {
                     driver.fail(job, outcome.retries, outcome.backoff, outcome.message, outcome.details)
                 }
-                is JobOutcome.Terminate -> deliver { driver.terminate(job, outcome.message, outcome.variables) }
+                is JobOutcome.Terminate -> deliver {
+                    driver.throwError(job, EngineNames.TERMINATE_ERROR, outcome.message, outcome.variables)
+                }
+                is JobOutcome.Catch -> deliver { driver.throwError(job, outcome.errorCode, outcome.message, outcome.variables) }
                 is JobOutcome.Abort -> {
                     val cause = outcome.cause
                     attempt { driver.fail(job, 0, Duration.ZERO, cause.message ?: cause.toString(), cause.stackTraceToString()) }
@@ -496,18 +499,21 @@ class EngineRunner(
 
     private suspend fun deliverMessages() {
         for (pending in pendingSends.toList()) {
-            if (correlate(pending.first, pending.second)) pendingSends.remove(pending)
+            if (correlate(pending.message, pending.key, pending.data)) pendingSends.remove(pending)
         }
-        for (message in broadcasts.toList()) correlate(message, null)
+        for ((message, data) in broadcasts.entries.toList()) correlate(message, null, data)
     }
 
-    private suspend fun correlate(message: String, key: String?): Boolean {
+    private suspend fun correlate(message: String, key: String?, data: JsonObject): Boolean {
+        val variables = if (data.isEmpty()) data else JsonObject(mapOf(EngineNames.messageVariable(message) to data))
         var correlated = false
         for (workflowKey in run.correlationKeys) {
-            if (attempt { driver.correlate(message, workflowKey, key) } == true) correlated = true
+            if (attempt { driver.correlate(message, workflowKey, key, variables) } == true) correlated = true
         }
         return correlated
     }
+
+    private data class PendingSend(val message: String, val key: String, val data: JsonObject)
 
     private suspend fun awaitRunning() {
         paused.first { !it }

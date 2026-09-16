@@ -36,6 +36,8 @@ private data class EngineLine(var id: String, var qty: Int = 1) : WorkItem {
     override val key get() = id
 }
 
+private class Unavailable(message: String) : RuntimeException(message)
+
 @OptIn(EngineApi::class)
 class EngineRunTest {
 
@@ -68,6 +70,8 @@ class EngineRunTest {
             fanOut(expand = { emptyList<EngineLine>() }) {
                 condition({ it.qty > 1 }) { task("bulk") { } }
             }.reduce(0, { acc, _ -> acc }) { _, _ -> }
+            task("reserve") { }.catching<Unavailable> { task("backorder") { } }
+            awaitMessage("paid", timeout = 1.seconds) { _, _ -> } onTimeout { task("remind") { } }
         }
         val run = EngineRun(wf, RunConfig())
         val compiled = BpmnCompiler.compile(wf).flatMap { it.serviceTasks }.map { it.jobType }
@@ -642,5 +646,59 @@ class EngineRunTest {
         first.await()
         second.await()
         assertEquals(1, peak.get())
+    }
+
+    @Test
+    fun caughtErrorEndsTheTaskWithItsErrorCodeAndTheItemWithoutRetrying() = runTest {
+        val attempts = AtomicInteger()
+        val wf = workflow<EngineOrder>("reservations") {
+            input(emptyList())
+            task("reserve") { order ->
+                attempts.incrementAndGet()
+                order.note = "tried"
+                if (order.total > 5) throw Unavailable("only 5 left") else error("database down")
+            }.catching<Unavailable> { task("backorder") { } }
+        }
+        val run = EngineRun(wf, RunConfig(retry = RetryPolicy(maxAttempts = 3, jitter = false)))
+
+        val caught = assertIs<JobOutcome.Catch>(run.execute(job(run.type("reserve"), run.rootVariables(EngineOrder("o-1", total = 9)), retries = 3)))
+        assertEquals(EngineNames.catchError("ce1"), caught.errorCode)
+        assertEquals("only 5 left", caught.message)
+        assertEquals(JsonPrimitive("tried"), caught.variables["note"])
+        assertEquals(1, attempts.get())
+        assertTrue(run.deadLetters().isEmpty())
+
+        val other = run.execute(job(run.type("reserve"), run.rootVariables(EngineOrder("o-2", total = 1)), retries = 3))
+        assertEquals(2, assertIs<JobOutcome.Retry>(other).retries)
+    }
+
+    @Test
+    fun messageHandlerAppliesTheSentDataToTheItemAndClearsIt() = runTest {
+        val wf = workflow<EngineOrder>("payments") {
+            input(emptyList())
+            fanOut(expand = { emptyList<EngineLine>() }) {
+                awaitMessage("line-paid") { line, data -> line.qty = data.getValue("qty").jsonPrimitive.content.toInt() }
+            }
+            awaitMessage("paid") { order, data -> order.total = data["amount"]?.jsonPrimitive?.content?.toInt() ?: -1 }
+        }
+        val run = EngineRun(wf, RunConfig())
+        val name = EngineNames.messageVariable("paid")
+
+        val root = JsonObject(run.rootVariables(EngineOrder("o-1")) + (name to JsonPrimitive(buildJsonObject { put("amount", 42) }.toString())))
+        val written = assertIs<JobOutcome.Complete>(run.execute(job(run.type(EngineNames.message("msg3")), root))).variables
+        assertEquals(JsonPrimitive(42), written["total"])
+        assertEquals(JsonNull, written[name])
+
+        val lineName = EngineNames.messageVariable("line-paid")
+        val child = buildJsonObject {
+            put("f1_item", buildJsonObject { put("id", "l-1"); put(EngineNames.ITEM_KEY, "l-1") })
+            put(lineName, buildJsonObject { put("qty", 3) })
+        }
+        val childWritten = assertIs<JobOutcome.Complete>(run.execute(job(run.type(EngineNames.message("msg2")), child))).variables
+        assertEquals(JsonPrimitive(3), childWritten.getValue("f1_item").jsonObject["qty"])
+
+        val empty = assertIs<JobOutcome.Complete>(run.execute(job(run.type(EngineNames.message("msg3")), run.rootVariables(EngineOrder("o-2")))))
+        assertEquals(JsonPrimitive(-1), empty.variables["total"])
+        assertEquals(JsonNull, empty.variables[name])
     }
 }

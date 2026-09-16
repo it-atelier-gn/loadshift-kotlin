@@ -155,8 +155,8 @@ internal class Camunda8Driver(
         client.failJob(job.id, FailJobRequest(retries, message, backoff.inWholeMilliseconds))
     }
 
-    override suspend fun terminate(job: EngineJob, message: String, variables: JsonObject) {
-        client.throwError(job.id, JobErrorRequest(EngineNames.TERMINATE_ERROR, message, variables))
+    override suspend fun throwError(job: EngineJob, errorCode: String, message: String, variables: JsonObject) {
+        client.throwError(job.id, JobErrorRequest(errorCode, message, variables))
     }
 
     override suspend fun extendLock(job: EngineJob, lock: Duration) {
@@ -177,15 +177,16 @@ internal class Camunda8Driver(
         client.cancelInstance(instanceId)
     }
 
-    override suspend fun correlate(message: String, workflowKey: String, itemKey: String?): Boolean {
-        if (itemKey != null) return client.correlateMessage(message, EngineNames.correlationKey(workflowKey, itemKey))
+    override suspend fun correlate(message: String, workflowKey: String, itemKey: String?, variables: JsonObject): Boolean {
+        val payload = variables.takeIf { it.isNotEmpty() }
+        if (itemKey != null) return client.correlateMessage(message, EngineNames.correlationKey(workflowKey, itemKey), payload)
         val prefix = EngineNames.correlationKey(workflowKey, "")
         val keys = client.messageSubscriptions(message)
             .mapNotNull { it.correlationKey }
             .filter { it.startsWith(prefix) }
             .toSet()
         var correlated = false
-        for (key in keys) if (client.correlateMessage(message, key)) correlated = true
+        for (key in keys) if (client.correlateMessage(message, key, payload)) correlated = true
         return correlated
     }
 

@@ -1,10 +1,14 @@
 package loadshift.local
 
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.runTest
 import kotlin.time.Clock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -56,6 +60,8 @@ private data class Cust(var id: String, var n: Int = 0) : WorkItem {
 private data class Kid(var label: String) : WorkItem {
     override val key get() = label
 }
+
+private class OutOfStock : RuntimeException("out of stock")
 
 class LocalBackendTest {
 
@@ -557,6 +563,96 @@ class LocalBackendTest {
         handle.broadcast("open")
         handle.await()
         assertEquals(setOf("a", "b"), seen.toSet())
+    }
+
+    @Test
+    fun awaitMessageHandsTheSentDataToTheItem() = runTest {
+        val amounts = Collections.synchronizedMap(mutableMapOf<String, Int>())
+        val wf = workflow<Cust>("await-data") {
+            input(listOf(Cust("early"), Cust("late"), Cust("plain")))
+            awaitMessage("paid") { cust, data -> cust.n = data["amount"]?.jsonPrimitive?.content?.toInt() ?: -1 }
+            task("book") { amounts[it.id] = it.n }
+        }
+        val handle = LocalBackend().run(wf)
+        handle.send("paid", "early", buildJsonObject { put("amount", 10) })
+        withContext(Dispatchers.Default) { delay(100.milliseconds) }
+        handle.send("paid", "late", buildJsonObject { put("amount", 20) })
+        handle.send("paid", "plain")
+
+        assertEquals(3, handle.await().done)
+        assertEquals(mapOf("early" to 10, "late" to 20, "plain" to -1), amounts.toMap())
+    }
+
+    @Test
+    fun broadcastDataReachesEveryWaitingItem() = runTest {
+        val notes = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("broadcast-data") {
+            input(listOf(Cust("a"), Cust("b")))
+            awaitMessage("open") { cust, data -> notes += "${cust.id}:${data.getValue("by").jsonPrimitive.content}" }
+        }
+        val handle = LocalBackend().run(wf)
+        handle.broadcast("open", buildJsonObject { put("by", "ops") })
+        handle.await()
+        assertEquals(setOf("a:ops", "b:ops"), notes.toSet())
+    }
+
+    @Test
+    fun messageTimeoutTakesTheTimeoutBranchAndTheItemContinues() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("await-timeout") {
+            input(listOf(Cust("paid"), Cust("silent")))
+            awaitMessage("paid", timeout = 300.milliseconds) { cust, _ -> seen += "paid:${cust.id}" } onTimeout {
+                task("remind") { seen += "remind:${it.id}" }
+            }
+            task("after") { seen += "after:${it.id}" }
+        }
+        val handle = LocalBackend().run(wf)
+        handle.send("paid", "paid")
+
+        assertEquals(RunResult(done = 2, failed = 0, skipped = 0, deadLetters = emptyList()), handle.await())
+        assertEquals(setOf("paid:paid", "after:paid", "remind:silent", "after:silent"), seen.toSet())
+    }
+
+    @Test
+    fun messageSentAfterTheTimeoutDoesNotReachTheItem() = runTest {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("late-message") {
+            input(listOf(Cust("a")))
+            awaitMessage("paid", timeout = 100.milliseconds) { _, _ -> seen += "paid" } onTimeout { task("remind") { seen += "remind" } }
+            wait(300.milliseconds)
+        }
+        val handle = LocalBackend().run(wf)
+        withContext(Dispatchers.Default) { delay(200.milliseconds) }
+        handle.send("paid", "a")
+        handle.await()
+        assertEquals(listOf("remind"), seen.toList())
+    }
+
+    @Test
+    fun caughtErrorRunsTheBranchWithoutRetriesAndTheItemContinues() = runTest {
+        val attempts = AtomicInteger()
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val wf = workflow<Cust>("catching") {
+            input(listOf(Cust("sold-out"), Cust("in-stock"), Cust("broken")))
+            task("reserve") { cust ->
+                attempts.incrementAndGet()
+                cust.n = 7
+                when (cust.id) {
+                    "sold-out" -> throw OutOfStock()
+                    "broken" -> error("database down")
+                }
+            }.catching<OutOfStock> {
+                task("backorder") { seen += "backorder:${it.id}:${it.n}" }
+            } compensate { seen += "release:${it.id}" }
+            task("ship") { seen += "ship:${it.id}" }
+        }
+
+        val result = LocalBackend().run(wf, RunConfig(retry = RetryPolicy(maxAttempts = 2, baseDelay = 10.milliseconds))).await()
+
+        assertEquals(2, result.done)
+        assertEquals(listOf(DeadLetter("broken", "reserve", "database down")), result.deadLetters)
+        assertEquals(1 + 1 + 2, attempts.get())
+        assertEquals(setOf("backorder:sold-out:7", "ship:sold-out", "ship:in-stock"), seen.toSet())
     }
 
     @Test
