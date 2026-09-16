@@ -308,7 +308,7 @@ class EngineRunnerTest {
         val driver = FakeDriver().apply { heldStarts["b"] = CompletableDeferred() }
         val (handle, _) = launch(wf, RunConfig(onError = ErrorPolicy.Fail, retry = RetryPolicy.None), driver)
         eventually { driver.started.size == 2 }
-        val (first, variables) = driver.started.first()
+        val (first, variables) = driver.started.single { it.second["id"] == JsonPrimitive("a") }
         driver.jobs.trySend(EngineJob("job-$first", EngineNames.jobType(wf.key, "work"), first, variables, null))
 
         val failure = runCatching { handle.await() }.exceptionOrNull()
