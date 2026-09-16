@@ -6,7 +6,9 @@
 [![Kotlin Toolchain](https://img.shields.io/badge/build-kotlin--toolchain-blue)](https://github.com/JetBrains/kotlin-toolchain)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A Kotlin DSL for durable workflows. Define a workflow once and run it in-process, on Camunda 7, on CIB seven or on Camunda 8.
+Write Camunda workflows in Kotlin instead of BPMN. The same code runs on Camunda 7, CIB seven and Camunda 8, or in-process for tests. Loadshift compiles each workflow to the BPMN of its engine and works the external tasks or jobs with your Kotlin task bodies, with retries, fan-out, messages, sagas and dead letters.
+
+Moving from Camunda 7 to Camunda 8: **[one workflow, both engines](https://it-atelier-gn.github.io/loadshift-kotlin/camunda-7-to-8.html)**
 
 Full examples and reference: **[it-atelier-gn.github.io/loadshift-kotlin](https://it-atelier-gn.github.io/loadshift-kotlin/)**
 

@@ -517,7 +517,16 @@ fun generate(target: File, verified: Map<String, Int>) {
         <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>loadshift · DSL to BPMN examples</title>
+        <title>loadshift · Kotlin DSL to Camunda 7 and Camunda 8 BPMN examples</title>
+        <meta name="description" content="Kotlin workflow definitions next to the Camunda 7 and Camunda 8 BPMN they compile to: pipelines, conditions, retries, fan-out, messages with timeouts, caught errors and time-boxed scopes.">
+        <link rel="canonical" href="https://it-atelier-gn.github.io/loadshift-kotlin/examples.html">
+        <meta property="og:type" content="website">
+        <meta property="og:site_name" content="loadshift">
+        <meta property="og:title" content="Kotlin DSL to Camunda 7 and Camunda 8 BPMN">
+        <meta property="og:description" content="Kotlin workflow definitions next to the BPMN they compile to for Camunda 7 and Camunda 8.">
+        <meta property="og:url" content="https://it-atelier-gn.github.io/loadshift-kotlin/examples.html">
+        <meta property="og:image" content="https://it-atelier-gn.github.io/loadshift-kotlin/og.png">
+        <meta name="twitter:card" content="summary_large_image">
         <style>
         $css
         </style>

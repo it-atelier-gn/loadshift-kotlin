@@ -3,8 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>loadshift: a Kotlin DSL for durable execution</title>
-<meta name="description" content="loadshift-kotlin: describe a workflow once, run it in-process or durably on Camunda 7, CIB seven or Camunda 8. Examples and reference.">
+<title>loadshift: Camunda workflows in Kotlin for Camunda 7 and Camunda 8</title>
+<meta name="description" content="Write Camunda workflows in Kotlin instead of BPMN. The same code compiles to BPMN and runs on Camunda 7, CIB seven and Camunda 8, or in-process for tests, with retries, fan-out, messages, sagas and dead letters.">
+<link rel="canonical" href="https://it-atelier-gn.github.io/loadshift-kotlin/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="loadshift">
+<meta property="og:title" content="loadshift: Camunda workflows in Kotlin">
+<meta property="og:description" content="Write Camunda workflows in Kotlin instead of BPMN. The same code runs on Camunda 7, CIB seven and Camunda 8, or in-process for tests.">
+<meta property="og:url" content="https://it-atelier-gn.github.io/loadshift-kotlin/">
+<meta property="og:image" content="https://it-atelier-gn.github.io/loadshift-kotlin/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -22,6 +32,7 @@
   <nav class="topnav">
     <a href="#examples">Examples</a>
     <a href="examples.html">DSL→BPMN</a>
+    <a href="camunda-7-to-8.html">Camunda 7→8</a>
     <a href="#backends">Backends</a>
     <a href="#modules">Modules</a>
     <a class="gh" href="https://github.com/it-atelier-gn/loadshift-kotlin">GitHub ↗</a>
@@ -36,7 +47,7 @@
   <div class="hero-inner">
     <p class="hero-kicker reveal"><span class="tick"></span>DURABLE EXECUTION · UNIT 01</p>
     <h1 class="reveal">SHIFT HEAVY<br>WORK<span class="accent">LOADS.</span></h1>
-    <p class="hero-sub reveal">A Kotlin DSL for durable execution. Describe the flow once
+    <p class="hero-sub reveal">Write Camunda workflows in Kotlin instead of BPMN. Describe the flow once
     (fan-out, retries, rate limits, dead letters), then run it in-process for tests
     or compile it to BPMN and run it durably on Camunda&nbsp;7, CIB&nbsp;seven or Camunda&nbsp;8.
     <strong>Make your AI workflows durable.</strong></p>
@@ -519,7 +530,8 @@ backend.requeue(cleanup, page.records, RunConfig(deadLetters = store)).await()</
   <p>The definition is backend-agnostic. <code>LocalBackend</code> interprets it in-process.
   <code>Camunda7Backend</code>, for Camunda&nbsp;7 and CIB&nbsp;seven, and <code>Camunda8Backend</code>
   compile the same definition to BPMN, deploy it, start one process instance per item and work the jobs
-  with your Kotlin task bodies.</p>
+  with your Kotlin task bodies. <a href="camunda-7-to-8.html">Camunda 7 to Camunda 8</a> shows what the BPMN
+  contains for each engine and how to switch a workflow over.</p>
   <div class="codecard" data-lang="kotlin">
     <div class="codecard-head"><span>Backends.kt</span><button class="copy" type="button">COPY</button></div>
 <pre><code class="lang-kotlin">LocalBackend().dryRun(cleanup).forEach(::println)

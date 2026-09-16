@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camunda 7 to Camunda 8 with one Kotlin workflow · loadshift</title>
+<meta name="description" content="Run the same Kotlin workflow on Camunda 7, CIB seven and Camunda 8. loadshift compiles it to the BPMN dialect of each engine, works its external tasks or jobs, and finishes Camunda 7 instances while Camunda 8 takes new items.">
+<link rel="canonical" href="https://it-atelier-gn.github.io/loadshift-kotlin/camunda-7-to-8.html">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="loadshift">
+<meta property="og:title" content="Camunda 7 to Camunda 8 with one Kotlin workflow">
+<meta property="og:description" content="The same Kotlin workflow compiles to Camunda 7 and Camunda 8 BPMN and runs on both engines.">
+<meta property="og:url" content="https://it-atelier-gn.github.io/loadshift-kotlin/camunda-7-to-8.html">
+<meta property="og:image" content="https://it-atelier-gn.github.io/loadshift-kotlin/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230a0b0d'/><path d='M6 6h6v14h14v6H6z' fill='%23ffb000'/></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="index.html">
+    <span class="brand-mark"></span>
+    <span class="brand-name">LOADSHIFT</span>
+    <span class="brand-lang">/KOTLIN</span>
+  </a>
+  <nav class="topnav">
+    <a href="index.html#examples">Examples</a>
+    <a href="examples.html">DSL→BPMN</a>
+    <a href="camunda-7-to-8.html">Camunda 7→8</a>
+    <a class="gh" href="https://github.com/it-atelier-gn/loadshift-kotlin">GitHub ↗</a>
+  </nav>
+</header>
+
+<main id="top">
+
+<div class="layout">
+
+<aside class="sidenav">
+  <p class="sidenav-title">CAMUNDA 7 → 8</p>
+  <a href="#one-workflow"><b>00</b> One workflow</a>
+  <a href="#compiled"><b>01</b> Compiled BPMN</a>
+  <a href="#connecting"><b>02</b> Connecting</a>
+  <a href="#switching"><b>03</b> Switching over</a>
+  <a href="#versions"><b>04</b> Versions</a>
+</aside>
+
+<div class="content">
+
+<section id="one-workflow" class="block">
+  <h2><span class="num">00</span>One workflow, both engines</h2>
+  <p>Camunda&nbsp;7 and Camunda&nbsp;8 use different BPMN extensions, different expression languages and
+  different worker APIs. With loadshift the workflow is Kotlin code. The backend compiles it to the BPMN
+  of its engine, deploys it, starts one process instance per item and works the external tasks or jobs
+  with your task bodies.</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>Fulfilment.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">val fulfilment = workflow&lt;Order&gt;("fulfilment") {
+    input(openOrders)
+    task("reserve") { reserve(it) }
+        .catching&lt;OutOfStock&gt; { task("backorder") { backorder(it) } }
+    awaitMessage("payment-confirmed", timeout = 3.days) { order, data -&gt;
+        order.paidAmount = data.getValue("amount").jsonPrimitive.double
+    } onTimeout {
+        task("send-reminder") { remind(it) }
+    }
+    task("ship") { ship(it) }
+}
+
+Camunda7Backend("http://camunda7:8080/engine-rest").run(fulfilment).await()
+
+Camunda8Backend("http://camunda8:8080").run(fulfilment).await()</code></pre>
+  </div>
+  <p class="note">The same definition also runs in-process on <code>LocalBackend</code>, so tests of the
+  workflow need no engine. <code>examples.html</code> shows the BPMN each example compiles to for both
+  engines.</p>
+</section>
+
+<section id="compiled" class="block">
+  <h2><span class="num">01</span>What the compiled BPMN contains</h2>
+  <p>Element ids are the same for both engines. The extensions differ:</p>
+  <table class="modtable">
+    <thead><tr><th>STEP</th><th>CAMUNDA 7, CIB SEVEN</th><th>CAMUNDA 8</th></tr></thead>
+    <tbody>
+      <tr><td><code>task</code></td><td>External task with <code>camunda:topic</code> <code>&lt;workflow-key&gt;/&lt;topic&gt;</code></td><td><code>zeebe:taskDefinition</code> with that job type and <code>retries</code> set to the task's <code>maxAttempts</code></td></tr>
+      <tr><td><code>condition</code>, <code>loop</code></td><td>JUEL conditions on the gateway flows</td><td>FEEL conditions on the gateway flows</td></tr>
+      <tr><td><code>fanOut</code></td><td>Multi-instance call activity over <code>&lt;id&gt;_items.elements()</code> with <code>camunda:in</code> mappings</td><td>Multi-instance call activity with <code>zeebe:loopCharacteristics</code> and input mappings</td></tr>
+      <tr><td><code>awaitMessage</code></td><td>Correlated on the variables <code>loadshiftWorkflow</code> and <code>loadshiftKey</code></td><td>Subscription with the correlation key <code>&lt;workflow-key&gt;:&lt;item-key&gt;</code></td></tr>
+      <tr><td><code>userTask</code></td><td><code>camunda:assignee</code>, <code>camunda:candidateGroups</code></td><td>Camunda user task with <code>zeebe:assignmentDefinition</code></td></tr>
+      <tr><td><code>version(tag)</code></td><td><code>camunda:versionTag</code></td><td><code>zeebe:versionTag</code></td></tr>
+      <tr><td><code>.catching&lt;E&gt;</code>, <code>timeout</code>, dead letters</td><td colspan="2">The same BPMN errors, boundary events and <code>on_terminate</code> event subprocess on both engines</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="connecting" class="block">
+  <h2><span class="num">02</span>Connecting to each engine</h2>
+  <table class="modtable">
+    <thead><tr><th></th><th>CAMUNDA 7, CIB SEVEN</th><th>CAMUNDA 8</th></tr></thead>
+    <tbody>
+      <tr><td>Backend</td><td><code>Camunda7Backend(base)</code></td><td><code>Camunda8Backend(base)</code></td></tr>
+      <tr><td>API</td><td>REST API, history level <code>activity</code> or higher</td><td>REST API v2 with secondary storage</td></tr>
+      <tr><td>Authentication</td><td><code>credentials = BasicCredentials(username, password)</code></td><td><code>auth = Camunda8Auth.Bearer(token)</code> or <code>Camunda8Auth.ClientCredentials(tokenUrl, clientId, clientSecret, audience, scope)</code></td></tr>
+      <tr><td>Tenants</td><td><code>tenantId = "acme"</code></td><td><code>tenantId = "acme"</code></td></tr>
+      <tr><td>Fetching work</td><td>Long polling of external tasks</td><td>Long polling of jobs, or jobs pushed over gRPC with <code>jobStream = CamundaJobStream(...)</code></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="switching" class="block">
+  <h2><span class="num">03</span>Switching over</h2>
+  <p>Process instances stay on the engine that started them. Finish the Camunda&nbsp;7 instances with a
+  worker that takes them over, then seed on Camunda&nbsp;8. When every run uses the same checkpoint
+  store, including the Camunda&nbsp;7 run that is still active, the Camunda&nbsp;8 run skips every item
+  that finished on Camunda&nbsp;7.</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>Switchover.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">val config = RunConfig(checkpoints = SqliteCheckpointStore("checkpoints.db"))
+
+camunda7Handle.detach()
+Camunda7Backend(camunda7Base).attach(fulfilment, config).await()
+
+Camunda8Backend(camunda8Base).run(fulfilment, config).await()</code></pre>
+  </div>
+  <table class="modtable">
+    <thead><tr><th>STEP</th><th>EFFECT</th></tr></thead>
+    <tbody>
+      <tr><td><code>detach()</code></td><td>The Camunda&nbsp;7 run stops seeding and fetching, waits for running task bodies and leaves its instances on the engine</td></tr>
+      <tr><td><code>attach(workflow, config)</code></td><td>Works the active Camunda&nbsp;7 instances of the workflow until none are left and marks each finished item in the checkpoint store</td></tr>
+      <tr><td><code>run(workflow, config)</code></td><td>Seeds on Camunda&nbsp;8 and skips items the checkpoint store lists as complete</td></tr>
+    </tbody>
+  </table>
+  <p class="note">While <code>attach</code> runs, its handle delivers <code>send</code> and <code>broadcast</code>
+  to the waiting Camunda&nbsp;7 instances. Instances that wait for a message, a timer or a person keep the
+  <code>attach</code> run open until they finish.</p>
+</section>
+
+<section id="versions" class="block">
+  <h2><span class="num">04</span>Versions on one engine</h2>
+  <p>Within one engine, <code>version(tag)</code> tags every process of a workflow, and
+  <code>backend.migrate(workflow)</code> deploys the workflow and moves the active instances of older
+  definitions to it, matching elements by id. Instances that wait in an element the new version no
+  longer has are reported with the engine's error.</p>
+  <div class="codecard" data-lang="kotlin">
+    <div class="codecard-head"><span>Migrate.kt</span><button class="copy" type="button">COPY</button></div>
+<pre><code class="lang-kotlin">val result = Camunda8Backend(camunda8Base).migrate(fulfilment)
+println("migrated ${result.migrated}")</code></pre>
+  </div>
+</section>
+
+</div>
+</div>
+
+<footer class="footer">
+  <div class="hazard"></div>
+  <div class="footer-inner">
+    <span class="brand-mark"></span>
+    <p>LOADSHIFT/KOTLIN, MIT licensed.
+    <a href="https://github.com/it-atelier-gn/loadshift-kotlin">github.com/it-atelier-gn/loadshift-kotlin</a></p>
+  </div>
+</footer>
+
+</main>
+<script src="app.js"></script>
+</body>
+</html>

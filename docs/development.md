@@ -76,4 +76,4 @@ To try local changes in another project, publish the library modules to the loca
 
 ## Docs site
 
-[index.html](index.html) and [examples.html](examples.html) in this folder make up the [docs site](https://it-atelier-gn.github.io/loadshift-kotlin/). [pages.yml](../.github/workflows/pages.yml) deploys the folder to GitHub Pages on every push to `main` that touches `docs/`.
+[index.html](index.html), [camunda-7-to-8.html](camunda-7-to-8.html) and [examples.html](examples.html) in this folder make up the [docs site](https://it-atelier-gn.github.io/loadshift-kotlin/). [pages.yml](../.github/workflows/pages.yml) deploys the folder to GitHub Pages on every push to `main` that touches `docs/`.
