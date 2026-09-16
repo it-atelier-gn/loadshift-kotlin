@@ -17,49 +17,55 @@
 <meta name="twitter:card" content="summary_large_image">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230a0b0d'/><path d='M6 6h6v14h14v6H6z' fill='%23ffb000'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 22'><rect width='22' height='22' rx='4' fill='%23f3f5f2'/><circle cx='5' cy='11' r='3.2' fill='none' stroke='%2317202b' stroke-width='1.8'/><rect x='10' y='5' width='10' height='12' rx='2.5' fill='none' stroke='%2317202b' stroke-width='1.8'/><path d='M8.2 11H10' stroke='%2317202b' stroke-width='1.8'/></svg>">
 </head>
 <body>
 
+<a class="skip" href="#main">Skip to content</a>
+
 <header class="topbar">
-  <a class="brand" href="index.html">
-    <span class="brand-mark"></span>
-    <span class="brand-name">LOADSHIFT</span>
-    <span class="brand-lang">/KOTLIN</span>
-  </a>
-  <nav class="topnav">
-    <a href="index.html#examples">Examples</a>
-    <a href="examples.html">DSL→BPMN</a>
-    <a href="camunda-7-to-8.html">Camunda 7→8</a>
-    <a class="gh" href="https://github.com/it-atelier-gn/loadshift-kotlin">GitHub ↗</a>
-  </nav>
+  <div class="wrap">
+    <a class="brand" href="index.html"><svg class="brand-mark" viewBox="0 0 22 22" aria-hidden="true"><circle cx="5" cy="11" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="10" y="5" width="10" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.2 11H10" stroke="currentColor" stroke-width="1.8"/></svg><span>loadshift</span><span class="brand-lang">kotlin</span></a>
+    <nav class="topnav" aria-label="Main">
+      <a class="nav-guide" href="index.html#guide">Guide</a>
+      <a href="examples.html">BPMN examples</a>
+      <a href="camunda-7-to-8.html" aria-current="page">Camunda 7 to 8</a>
+      <a href="https://github.com/it-atelier-gn/loadshift-kotlin">GitHub</a>
+    </nav>
+  </div>
 </header>
 
-<main id="top">
+<main id="main">
 
-<div class="layout">
+<section class="hero hero-page">
+  <div class="wrap">
+    <h1>Camunda 7 to Camunda 8 with one Kotlin workflow</h1>
+    <p class="hero-sub">The same workflow compiles to the BPMN of each engine and runs on both. Finish the instances on Camunda&nbsp;7 while Camunda&nbsp;8 takes new items.</p>
+  </div>
+</section>
 
-<aside class="sidenav">
-  <p class="sidenav-title">CAMUNDA 7 → 8</p>
-  <a href="#one-workflow"><b>00</b> One workflow</a>
-  <a href="#compiled"><b>01</b> Compiled BPMN</a>
-  <a href="#connecting"><b>02</b> Connecting</a>
-  <a href="#switching"><b>03</b> Switching over</a>
-  <a href="#versions"><b>04</b> Versions</a>
-</aside>
-
-<div class="content">
+<section class="guide">
+  <div class="wrap">
+    <div class="layout">
+      <nav class="sidenav" aria-label="On this page">
+        <a href="#one-workflow">One workflow</a>
+        <a href="#compiled">Compiled BPMN</a>
+        <a href="#connecting">Connecting</a>
+        <a href="#switching">Switching over</a>
+        <a href="#versions">Versions</a>
+      </nav>
+      <div class="content">
 
 <section id="one-workflow" class="block">
-  <h2><span class="num">00</span>One workflow, both engines</h2>
+  <h2>One workflow, both engines</h2>
   <p>Camunda&nbsp;7 and Camunda&nbsp;8 use different BPMN extensions, different expression languages and
   different worker APIs. With loadshift the workflow is Kotlin code. The backend compiles it to the BPMN
   of its engine, deploys it, starts one process instance per item and works the external tasks or jobs
   with your task bodies.</p>
   <div class="codecard" data-lang="kotlin">
-    <div class="codecard-head"><span>Fulfilment.kt</span><button class="copy" type="button">COPY</button></div>
+    <div class="codecard-head"><span>Fulfilment.kt</span><button class="copy" type="button">Copy</button></div>
 <pre><code class="lang-kotlin">val fulfilment = workflow&lt;Order&gt;("fulfilment") {
     input(openOrders)
     task("reserve") { reserve(it) }
@@ -82,7 +88,7 @@ Camunda8Backend("http://camunda8:8080").run(fulfilment).await()</code></pre>
 </section>
 
 <section id="compiled" class="block">
-  <h2><span class="num">01</span>What the compiled BPMN contains</h2>
+  <h2>What the compiled BPMN contains</h2>
   <p>Element ids are the same for both engines. The extensions differ:</p>
   <table class="modtable">
     <thead><tr><th>STEP</th><th>CAMUNDA 7, CIB SEVEN</th><th>CAMUNDA 8</th></tr></thead>
@@ -99,7 +105,7 @@ Camunda8Backend("http://camunda8:8080").run(fulfilment).await()</code></pre>
 </section>
 
 <section id="connecting" class="block">
-  <h2><span class="num">02</span>Connecting to each engine</h2>
+  <h2>Connecting to each engine</h2>
   <table class="modtable">
     <thead><tr><th></th><th>CAMUNDA 7, CIB SEVEN</th><th>CAMUNDA 8</th></tr></thead>
     <tbody>
@@ -113,13 +119,13 @@ Camunda8Backend("http://camunda8:8080").run(fulfilment).await()</code></pre>
 </section>
 
 <section id="switching" class="block">
-  <h2><span class="num">03</span>Switching over</h2>
+  <h2>Switching over</h2>
   <p>Process instances stay on the engine that started them. Finish the Camunda&nbsp;7 instances with a
   worker that takes them over, then seed on Camunda&nbsp;8. When every run uses the same checkpoint
   store, including the Camunda&nbsp;7 run that is still active, the Camunda&nbsp;8 run skips every item
   that finished on Camunda&nbsp;7.</p>
   <div class="codecard" data-lang="kotlin">
-    <div class="codecard-head"><span>Switchover.kt</span><button class="copy" type="button">COPY</button></div>
+    <div class="codecard-head"><span>Switchover.kt</span><button class="copy" type="button">Copy</button></div>
 <pre><code class="lang-kotlin">val config = RunConfig(checkpoints = SqliteCheckpointStore("checkpoints.db"))
 
 camunda7Handle.detach()
@@ -141,31 +147,49 @@ Camunda8Backend(camunda8Base).run(fulfilment, config).await()</code></pre>
 </section>
 
 <section id="versions" class="block">
-  <h2><span class="num">04</span>Versions on one engine</h2>
+  <h2>Versions on one engine</h2>
   <p>Within one engine, <code>version(tag)</code> tags every process of a workflow, and
   <code>backend.migrate(workflow)</code> deploys the workflow and moves the active instances of older
   definitions to it, matching elements by id. Instances that wait in an element the new version no
   longer has are reported with the engine's error.</p>
   <div class="codecard" data-lang="kotlin">
-    <div class="codecard-head"><span>Migrate.kt</span><button class="copy" type="button">COPY</button></div>
+    <div class="codecard-head"><span>Migrate.kt</span><button class="copy" type="button">Copy</button></div>
 <pre><code class="lang-kotlin">val result = Camunda8Backend(camunda8Base).migrate(fulfilment)
 println("migrated ${result.migrated}")</code></pre>
   </div>
 </section>
 
-</div>
-</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<aside class="about" aria-label="About the author">
+  <div class="wrap about-inner">
+    <p>Built by <a href="http://www.georg-nelles.de" rel="noopener">Georg Nelles</a>, freelance software engineer
+    specializing in automation, modernization and pragmatic tooling. loadshift is open source and runs wherever
+    your workflows need to.</p>
+    <div class="about-links">
+      <a class="btn btn-plain" href="http://www.georg-nelles.de" rel="noopener">georg-nelles.de</a>
+      <a class="btn btn-plain" href="https://github.com/it-atelier-gn" rel="noopener">More on GitHub</a>
+    </div>
+  </div>
+</aside>
 
 <footer class="footer">
-  <div class="hazard"></div>
-  <div class="footer-inner">
-    <span class="brand-mark"></span>
-    <p>LOADSHIFT/KOTLIN, MIT licensed.
-    <a href="https://github.com/it-atelier-gn/loadshift-kotlin">github.com/it-atelier-gn/loadshift-kotlin</a></p>
+  <div class="wrap">
+    <a class="brand" href="index.html"><svg class="brand-mark" viewBox="0 0 22 22" aria-hidden="true"><circle cx="5" cy="11" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="10" y="5" width="10" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.2 11H10" stroke="currentColor" stroke-width="1.8"/></svg><span>loadshift</span></a>
+    <p>&copy; 2026 Georg Nelles. MIT License.</p>
+    <nav class="footer-links" aria-label="Project">
+      <a href="https://github.com/it-atelier-gn/loadshift-kotlin">GitHub</a>
+      <a href="https://github.com/it-atelier-gn/loadshift-kotlin/releases">Releases</a>
+      <a href="https://github.com/it-atelier-gn/loadshift-kotlin/issues">Issues</a>
+    </nav>
   </div>
 </footer>
 
-</main>
 <script src="app.js"></script>
 </body>
 </html>

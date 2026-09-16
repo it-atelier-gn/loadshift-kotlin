@@ -38,6 +38,10 @@
     el.innerHTML = highlightKotlin(el.textContent);
   });
 
+  document.querySelectorAll('.stage-code .ln').forEach(function (el) {
+    el.innerHTML = highlightKotlin(el.textContent);
+  });
+
   document.querySelectorAll('code.lang-shell').forEach(function (el) {
     el.innerHTML = el.textContent.split('\n').map(function (line) {
       return line ? '<span class="tok-prompt">$ </span>' + esc(line) : line;
@@ -48,7 +52,9 @@
     btn.addEventListener('click', function () {
       var card = btn.closest('.codecard');
       card.querySelectorAll('.tab').forEach(function (t) {
-        t.classList.toggle('active', t === btn);
+        var on = t === btn;
+        t.classList.toggle('active', on);
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
       });
       card.querySelectorAll('.tab-panel').forEach(function (p) {
         p.classList.toggle('active', p.dataset.tab === btn.dataset.tab);
@@ -62,10 +68,10 @@
       var code = (card.querySelector('.tab-panel.active code') || card.querySelector('code'));
       var text = code.textContent.replace(/^\$ /gm, '');
       navigator.clipboard.writeText(text).then(function () {
-        btn.textContent = 'COPIED';
+        btn.textContent = 'Copied';
         btn.classList.add('done');
         setTimeout(function () {
-          btn.textContent = 'COPY';
+          btn.textContent = 'Copy';
           btn.classList.remove('done');
         }, 1400);
       });
@@ -74,24 +80,152 @@
 
   var blocks = document.querySelectorAll('.block');
   var navLinks = document.querySelectorAll('.sidenav a');
-
-  var revealer = new IntersectionObserver(function (entries) {
-    entries.forEach(function (e) {
-      if (e.isIntersecting) {
-        e.target.classList.add('in');
-        revealer.unobserve(e.target);
-      }
-    });
-  }, { rootMargin: '0px 0px -8% 0px' });
-  blocks.forEach(function (b) { revealer.observe(b); });
-
-  var spy = new IntersectionObserver(function (entries) {
-    entries.forEach(function (e) {
-      if (!e.isIntersecting) return;
-      navLinks.forEach(function (a) {
-        a.classList.toggle('active', a.getAttribute('href') === '#' + e.target.id);
+  if (navLinks.length && 'IntersectionObserver' in window) {
+    var spy = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (!e.isIntersecting) return;
+        navLinks.forEach(function (a) {
+          a.classList.toggle('active', a.getAttribute('href') === '#' + e.target.id);
+        });
       });
+    }, { rootMargin: '-30% 0px -60% 0px' });
+    blocks.forEach(function (b) { if (b.id) spy.observe(b); });
+  }
+
+  var stage = document.querySelector('.stage');
+  if (!stage) return;
+
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var tokenEl = stage.querySelector('.token');
+  var logEl = stage.querySelector('.stage-log');
+  var buttons = stage.querySelectorAll('.scenario');
+  var nodes = stage.querySelectorAll('.bpmn-node');
+  var lines = stage.querySelectorAll('.stage-code .ln');
+
+  var P = {
+    start: [40, 110], extract: [170, 110], boundary: [200, 146], review: [200, 226],
+    gw: [270, 110], approve: [390, 110], file: [560, 110], end: [690, 110]
+  };
+
+  var TAIL = [
+    { to: [P.gw, P.approve], node: 'approve', state: 'wait', dwell: 1500,
+      log: '<b>approve</b> <span class="state state-wait">waits</span> for someone in legal to complete the user task.' },
+    { node: 'approve', state: 'flow', dwell: 700,
+      log: '<b>approve</b> is completed with <code>approved = true</code>.' },
+    { to: [P.file], node: 'file', state: 'flow', dwell: 900, log: '<b>file</b> archives the contract.' },
+    { to: [P.end], node: 'end', state: 'flow', dwell: 0,
+      log: '<span class="state state-flow">Done.</span> The contract reached the end of the workflow.' }
+  ];
+
+  var SCENARIOS = {
+    first: [
+      { at: P.start, node: 'start', state: 'flow', dwell: 700, log: 'An uploaded contract starts one instance of <b>contract-review</b>.' },
+      { to: [P.extract], node: 'extract', state: 'flow', dwell: 1300,
+        log: '<b>extract</b> attempt 1 of 5 <span class="state state-flow">returns the clauses</span>.' },
+      { to: [P.gw], node: 'gw', state: 'flow', dwell: 0, log: null }
+    ].concat(TAIL),
+    retry: [
+      { at: P.start, node: 'start', state: 'flow', dwell: 700, log: 'An uploaded contract starts one instance of <b>contract-review</b>.' },
+      { to: [P.extract], node: 'extract', state: 'fault', dwell: 1600,
+        log: '<b>extract</b> attempt 1 of 5 gets a <span class="state state-fault">busy response</span>. The next attempt follows after a backoff, within <code>perSecond(5)</code>.' },
+      { node: 'extract', state: 'flow', dwell: 1200,
+        log: '<b>extract</b> attempt 2 of 5 <span class="state state-flow">returns the clauses</span>.' },
+      { to: [P.gw], node: 'gw', state: 'flow', dwell: 0, log: null }
+    ].concat(TAIL),
+    review: [
+      { at: P.start, node: 'start', state: 'flow', dwell: 700, log: 'An uploaded contract starts one instance of <b>contract-review</b>.' },
+      { to: [P.extract], node: 'extract', state: 'flow', dwell: 1300,
+        log: '<b>extract</b> gets clauses with a confidence of 0.41 and throws <code>LowConfidence</code>.' },
+      { to: [P.boundary], node: 'boundary', state: 'fault', dwell: 1300,
+        log: '<code>.catching&lt;LowConfidence&gt;</code> <span class="state state-fault">takes the branch</span> without further attempts.' },
+      { to: [P.review], node: 'review', state: 'wait', dwell: 1500,
+        log: '<b>review-by-paralegal</b> <span class="state state-wait">waits</span> while a person checks the clauses.' },
+      { to: [[270, 226], P.gw], node: 'gw', state: 'flow', dwell: 0, log: null }
+    ].concat(TAIL)
+  };
+
+  var runId = 0;
+  var position = P.start.slice();
+
+  function place(p) {
+    position = p.slice();
+    tokenEl.setAttribute('cx', p[0]);
+    tokenEl.setAttribute('cy', p[1]);
+  }
+
+  function mark(nodeName, state) {
+    nodes.forEach(function (n) {
+      var on = n.dataset.node === nodeName;
+      n.classList.toggle('on', on && state === 'flow');
+      n.classList.toggle('fault', on && state === 'fault');
+      n.classList.toggle('wait', on && state === 'wait');
     });
-  }, { rootMargin: '-30% 0px -60% 0px' });
-  blocks.forEach(function (b) { if (b.id) spy.observe(b); });
+    lines.forEach(function (l) {
+      var on = l.dataset.step === nodeName;
+      l.classList.toggle('on', on);
+      l.classList.toggle('fault', on && state === 'fault');
+      l.classList.toggle('wait', on && state === 'wait');
+    });
+    tokenEl.classList.toggle('fault', state === 'fault');
+    tokenEl.classList.toggle('wait', state === 'wait');
+  }
+
+  function wait(ms, id) {
+    return new Promise(function (resolve, reject) {
+      setTimeout(function () { id === runId ? resolve() : reject(); }, reduced ? Math.min(ms, 900) : ms);
+    });
+  }
+
+  function travel(from, to, id) {
+    return new Promise(function (resolve, reject) {
+      var dx = to[0] - from[0];
+      var dy = to[1] - from[1];
+      var duration = reduced ? 0 : Math.max(220, Math.hypot(dx, dy) * 3.2);
+      var began = null;
+      function frame(t) {
+        if (id !== runId) return reject();
+        if (began === null) began = t;
+        var k = duration === 0 ? 1 : Math.min(1, (t - began) / duration);
+        var e = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+        place([from[0] + dx * e, from[1] + dy * e]);
+        if (k < 1) requestAnimationFrame(frame); else resolve();
+      }
+      requestAnimationFrame(frame);
+    });
+  }
+
+  async function play(name) {
+    var id = ++runId;
+    buttons.forEach(function (b) { b.setAttribute('aria-pressed', b.dataset.scenario === name ? 'true' : 'false'); });
+    try {
+      for (var step of SCENARIOS[name]) {
+        if (step.at) place(step.at);
+        if (step.to) {
+          for (var point of step.to) await travel(position, point, id);
+        }
+        mark(step.node, step.state);
+        if (step.log) logEl.innerHTML = step.log;
+        await wait(step.dwell, id);
+      }
+    } catch (e) {
+      return;
+    }
+  }
+
+  buttons.forEach(function (b) {
+    b.addEventListener('click', function () { play(b.dataset.scenario); });
+  });
+
+  place(P.start);
+  if (reduced || !('IntersectionObserver' in window)) {
+    mark('start', 'flow');
+    return;
+  }
+  var starter = new IntersectionObserver(function (entries) {
+    if (entries.some(function (e) { return e.isIntersecting; })) {
+      starter.disconnect();
+      play('retry');
+    }
+  }, { threshold: .45 });
+  starter.observe(stage);
 })();
