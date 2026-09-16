@@ -174,7 +174,7 @@ class EngineRunnerTest {
         return runner to driver
     }
 
-    private suspend fun eventually(condition: () -> Boolean) {
+    private suspend fun eventually(condition: suspend () -> Boolean) {
         withTimeout(5.seconds) { while (!condition()) delay(10.milliseconds) }
     }
 
@@ -495,8 +495,7 @@ class EngineRunnerTest {
         eventually { driver.started.size == 2 }
 
         assertEquals(setOf(wf.key, "${wf.key}_f1"), driver.startedProcesses.toSet())
-        assertTrue(store.list(wf.key).records.isEmpty())
-        assertEquals(2L, handle.progress().seeded)
+        eventually { store.list(wf.key).records.isEmpty() && handle.progress().seeded == 2L }
         driver.finishAll()
         assertEquals(2, handle.await().done)
     }
