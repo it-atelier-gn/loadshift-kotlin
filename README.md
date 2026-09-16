@@ -1,5 +1,6 @@
 # loadshift-kotlin
 
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.it-atelier-gn/loadshift-core)](https://central.sonatype.com/namespace/io.github.it-atelier-gn)
 [![CI](https://github.com/it-atelier-gn/loadshift-kotlin/actions/workflows/ci.yml/badge.svg)](https://github.com/it-atelier-gn/loadshift-kotlin/actions)
 [![Kotlin](https://img.shields.io/badge/kotlin-2.x-blueviolet?logo=kotlin)](https://kotlinlang.org/)
 [![Kotlin Toolchain](https://img.shields.io/badge/build-kotlin--toolchain-blue)](https://github.com/JetBrains/kotlin-toolchain)
@@ -44,22 +45,24 @@ Full examples and reference: **[it-atelier-gn.github.io/loadshift-kotlin](https:
 
 ## Add as a dependency
 
-Published to Maven Central under group `io.github.it-atelier-gn`, version `0.6.0`. Pick the modules you need.
+Published to Maven Central under group `io.github.it-atelier-gn`. Replace `VERSION` with the version shown on the Maven Central badge at the top. Pick the modules you need.
 
 <details>
 <summary>Gradle (Kotlin DSL)</summary>
 
 ```kotlin
+val loadshiftVersion = "VERSION"
+
 dependencies {
-    implementation("io.github.it-atelier-gn:loadshift-core:0.6.0")
-    implementation("io.github.it-atelier-gn:loadshift-local:0.6.0")
-    implementation("io.github.it-atelier-gn:loadshift-camunda-7:0.6.0")
-    implementation("io.github.it-atelier-gn:loadshift-camunda-8:0.6.0")
-    implementation("io.github.it-atelier-gn:loadshift-camunda-8-stream:0.6.0")
-    implementation("io.github.it-atelier-gn:loadshift-web:0.6.0")
-    implementation("io.github.it-atelier-gn:loadshift-sqlite:0.6.0")
-    implementation("io.github.it-atelier-gn:loadshift-otel:0.6.0")
-    implementation("io.github.it-atelier-gn:loadshift-micrometer:0.6.0")
+    implementation("io.github.it-atelier-gn:loadshift-core:$loadshiftVersion")
+    implementation("io.github.it-atelier-gn:loadshift-local:$loadshiftVersion")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-7:$loadshiftVersion")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-8:$loadshiftVersion")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-8-stream:$loadshiftVersion")
+    implementation("io.github.it-atelier-gn:loadshift-web:$loadshiftVersion")
+    implementation("io.github.it-atelier-gn:loadshift-sqlite:$loadshiftVersion")
+    implementation("io.github.it-atelier-gn:loadshift-otel:$loadshiftVersion")
+    implementation("io.github.it-atelier-gn:loadshift-micrometer:$loadshiftVersion")
 }
 ```
 </details>
@@ -68,16 +71,18 @@ dependencies {
 <summary>Gradle (Groovy DSL)</summary>
 
 ```groovy
+def loadshiftVersion = 'VERSION'
+
 dependencies {
-    implementation 'io.github.it-atelier-gn:loadshift-core:0.6.0'
-    implementation 'io.github.it-atelier-gn:loadshift-local:0.6.0'
-    implementation 'io.github.it-atelier-gn:loadshift-camunda-7:0.6.0'
-    implementation 'io.github.it-atelier-gn:loadshift-camunda-8:0.6.0'
-    implementation 'io.github.it-atelier-gn:loadshift-camunda-8-stream:0.6.0'
-    implementation 'io.github.it-atelier-gn:loadshift-web:0.6.0'
-    implementation 'io.github.it-atelier-gn:loadshift-sqlite:0.6.0'
-    implementation 'io.github.it-atelier-gn:loadshift-otel:0.6.0'
-    implementation 'io.github.it-atelier-gn:loadshift-micrometer:0.6.0'
+    implementation "io.github.it-atelier-gn:loadshift-core:$loadshiftVersion"
+    implementation "io.github.it-atelier-gn:loadshift-local:$loadshiftVersion"
+    implementation "io.github.it-atelier-gn:loadshift-camunda-7:$loadshiftVersion"
+    implementation "io.github.it-atelier-gn:loadshift-camunda-8:$loadshiftVersion"
+    implementation "io.github.it-atelier-gn:loadshift-camunda-8-stream:$loadshiftVersion"
+    implementation "io.github.it-atelier-gn:loadshift-web:$loadshiftVersion"
+    implementation "io.github.it-atelier-gn:loadshift-sqlite:$loadshiftVersion"
+    implementation "io.github.it-atelier-gn:loadshift-otel:$loadshiftVersion"
+    implementation "io.github.it-atelier-gn:loadshift-micrometer:$loadshiftVersion"
 }
 ```
 </details>
@@ -86,50 +91,54 @@ dependencies {
 <summary>Maven</summary>
 
 ```xml
+<properties>
+    <loadshift.version>VERSION</loadshift.version>
+</properties>
+
 <dependency>
     <groupId>io.github.it-atelier-gn</groupId>
     <artifactId>loadshift-core</artifactId>
-    <version>0.6.0</version>
+    <version>${loadshift.version}</version>
 </dependency>
 <dependency>
     <groupId>io.github.it-atelier-gn</groupId>
     <artifactId>loadshift-local</artifactId>
-    <version>0.6.0</version>
+    <version>${loadshift.version}</version>
 </dependency>
 <dependency>
     <groupId>io.github.it-atelier-gn</groupId>
     <artifactId>loadshift-camunda-7</artifactId>
-    <version>0.6.0</version>
+    <version>${loadshift.version}</version>
 </dependency>
 <dependency>
     <groupId>io.github.it-atelier-gn</groupId>
     <artifactId>loadshift-camunda-8</artifactId>
-    <version>0.6.0</version>
+    <version>${loadshift.version}</version>
 </dependency>
 <dependency>
     <groupId>io.github.it-atelier-gn</groupId>
     <artifactId>loadshift-camunda-8-stream</artifactId>
-    <version>0.6.0</version>
+    <version>${loadshift.version}</version>
 </dependency>
 <dependency>
     <groupId>io.github.it-atelier-gn</groupId>
     <artifactId>loadshift-web</artifactId>
-    <version>0.6.0</version>
+    <version>${loadshift.version}</version>
 </dependency>
 <dependency>
     <groupId>io.github.it-atelier-gn</groupId>
     <artifactId>loadshift-sqlite</artifactId>
-    <version>0.6.0</version>
+    <version>${loadshift.version}</version>
 </dependency>
 <dependency>
     <groupId>io.github.it-atelier-gn</groupId>
     <artifactId>loadshift-otel</artifactId>
-    <version>0.6.0</version>
+    <version>${loadshift.version}</version>
 </dependency>
 <dependency>
     <groupId>io.github.it-atelier-gn</groupId>
     <artifactId>loadshift-micrometer</artifactId>
-    <version>0.6.0</version>
+    <version>${loadshift.version}</version>
 </dependency>
 ```
 </details>
@@ -627,19 +636,14 @@ The [Dependencies](.github/workflows/dependencies.yml) workflow runs the check e
 
 ## Publishing
 
-The library modules publish under the group `io.github.it-atelier-gn`. The group and version are set in [templates/library.module-template.yaml](templates/library.module-template.yaml).
+To try local changes in another project, publish the library modules to the local Maven repository. They publish under the group `io.github.it-atelier-gn`. The group and version are set in [templates/library.module-template.yaml](templates/library.module-template.yaml).
 
 ```sh
-./kotlin publish mavenLocal
+./kotlin publish mavenLocal \
+  -m loadshift-core -m loadshift-local \
+  -m loadshift-camunda-7 -m loadshift-camunda-8 -m loadshift-camunda-8-stream \
+  -m loadshift-web -m loadshift-sqlite -m loadshift-otel -m loadshift-micrometer
 ```
-
-Pushing a tag `v<version>` runs [release.yml](.github/workflows/release.yml): it checks that the tag matches the version in the template, runs all tests, publishes the library modules with sources, javadoc and signatures to Maven Central, and creates the GitHub release. The workflow reads these repository secrets:
-
-| Secret | Content |
-| --- | --- |
-| `MAVEN_CENTRAL_USERNAME`, `MAVEN_CENTRAL_PASSWORD` | Central Portal user token |
-| `SIGNING_KEY` | ASCII-armored private PGP key |
-| `SIGNING_KEY_PASSPHRASE` | Passphrase of the key |
 
 ## Documentation
 

@@ -9,14 +9,3 @@ settings:
     enabled: true
     group: io.github.it-atelier-gn
     version: 0.6.0
-    mavenCentral: enabled
-    signArtifacts: true
-    publishSources: true
-    pom:
-      url: https://github.com/it-atelier-gn/loadshift-kotlin
-      scm: https://github.com/it-atelier-gn/loadshift-kotlin.git
-      developers:
-        - name: it-atelier-gn
-      licenses:
-        - name: MIT
-          url: https://opensource.org/license/mit
