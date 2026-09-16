@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://it-atelier-gn.github.io/loadshift-kotlin/sitemap.xml
