@@ -77,6 +77,7 @@ class EngineRunner(
 
     @Volatile private var runState = if (config.start is Start.Now) RunState.Running else RunState.Scheduled
     @Volatile private var ending: RunState? = null
+    @Volatile private var halting = false
     private lateinit var lifecycle: Job
 
     fun begin(): EngineRunner {
@@ -101,6 +102,7 @@ class EngineRunner(
     override suspend fun cancel() {
         if (completion.isCompleted) return
         ending = RunState.Cancelled
+        halting = true
         scope.cancel()
         withContext(NonCancellable) { cancelRoots() }
         finish(RunState.Cancelled)
@@ -217,8 +219,7 @@ class EngineRunner(
 
     private suspend fun startScheduler(processId: String) {
         awaitRunning()
-        scheduler = driver.activeRoots(processId).minByOrNull { it.id }?.id
-            ?: driver.startInstance(processId, JsonObject(mapOf(EngineNames.WORKFLOW to JsonPrimitive(run.workflow.key))), null)
+        scheduler = driver.activeRoots(processId).minByOrNull { it.id }?.id ?: startSchedulerInstance(processId)
         synchronized(pollers) { pollers += scope.launch { pollSchedule() } }
     }
 
@@ -282,6 +283,14 @@ class EngineRunner(
         return JsonObject(mapOf(EngineNames.NEXT_TICK to JsonPrimitive(tick.toString().removeSuffix("Z") + "+00:00")))
     }
 
+    private suspend fun startSchedulerInstance(processId: String): String = withContext(NonCancellable) {
+        val variables = JsonObject(mapOf(EngineNames.WORKFLOW to JsonPrimitive(run.workflow.key)))
+        driver.startInstance(processId, variables, null).also { id ->
+            scheduler = id
+            if (halting) attempt { driver.cancel(id) }
+        }
+    }
+
     private suspend fun awaitBatch() {
         while (pendingRoots.isNotEmpty()) delay(pollInterval)
         run.clearInstanceState()
@@ -309,11 +318,10 @@ class EngineRunner(
                 launch {
                     try {
                         val rootKey = record.deadLetter.key.takeIf { record.itemVariable == null }
-                        val id = startHoldingPermit { driver.startInstance(record.level, run.requeueVariables(record), rootKey) }
-                        pendingRoots[id] = Root(rootKey, inFlight != null)
-                        rootKey?.let { rootsByKey[it] = id }
-                        run.recordAttached(1)
-                        config.deadLetters?.remove(record.id)
+                        if (startRoot(rootKey) { driver.startInstance(record.level, run.requeueVariables(record), rootKey) }) {
+                            run.recordAttached(1)
+                            config.deadLetters?.remove(record.id)
+                        }
                     } finally {
                         starts.release()
                     }
@@ -340,9 +348,7 @@ class EngineRunner(
                 starts.acquire()
                 launch {
                     try {
-                        val id = startHoldingPermit { driver.startInstance(rootProcessId, run.rootVariables(item), item.key) }
-                        pendingRoots[id] = Root(item.key, inFlight != null)
-                        item.key?.let { rootsByKey[it] = id }
+                        startRoot(item.key) { driver.startInstance(rootProcessId, run.rootVariables(item), item.key) }
                     } finally {
                         starts.release()
                     }
@@ -351,13 +357,18 @@ class EngineRunner(
         }
     }
 
-    private suspend fun startHoldingPermit(start: suspend () -> String): String =
-        try {
+    private suspend fun startRoot(key: String?, start: suspend () -> String): Boolean = withContext(NonCancellable) {
+        val id = try {
             start()
         } catch (e: Throwable) {
             inFlight?.release()
             throw e
         }
+        pendingRoots[id] = Root(key, inFlight != null)
+        key?.let { rootsByKey[it] = id }
+        if (halting) cancelRoot(id)
+        !halting
+    }
 
     private fun releaseInFlight(root: Root) {
         if (root.holdsPermit) inFlight?.release()
@@ -467,6 +478,7 @@ class EngineRunner(
 
     private suspend fun abort(cause: Throwable) {
         if (completion.isCompleted) return
+        halting = true
         withContext(NonCancellable) { cancelRoots() }
         finishExceptionally(cause)
         scope.cancel()
@@ -474,10 +486,12 @@ class EngineRunner(
 
     private suspend fun cancelRoots() {
         scheduler?.let { attempt { driver.cancel(it) } }
-        for (id in pendingRoots.keys.toList()) {
-            attempt { driver.cancel(id) }
-            pendingRoots.remove(id)
-        }
+        for (id in pendingRoots.keys.toList()) cancelRoot(id)
+    }
+
+    private suspend fun cancelRoot(id: String) {
+        attempt { driver.cancel(id) }
+        pendingRoots.remove(id)
     }
 
     private suspend fun deliverMessages() {

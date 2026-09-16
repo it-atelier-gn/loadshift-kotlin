@@ -62,11 +62,13 @@ private class FakeDriver : EngineDriver {
         (if (processId.endsWith(EngineNames.scheduleProcess(""))) schedulers else roots).filter { finished[it.id] == null }
 
     val startedProcesses = CopyOnWriteArrayList<String>()
+    val heldStarts = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
 
     override suspend fun startInstance(processId: String, variables: JsonObject, businessKey: String?): String {
         val id = "pi-${ids.incrementAndGet()}"
         started += id to variables
         startedProcesses += processId
+        businessKey?.let { heldStarts[it] }?.await()
         return id
     }
 
@@ -301,6 +303,35 @@ class EngineRunnerTest {
     }
 
     @Test
+    fun failPolicyCancelsInstancesWhoseStartIsStillInFlight() = runBlocking {
+        val wf = flow("abort-starting", "a", "b") { if (it.id == "a") error("fatal") }
+        val driver = FakeDriver().apply { heldStarts["b"] = CompletableDeferred() }
+        val (handle, _) = launch(wf, RunConfig(onError = ErrorPolicy.Fail, retry = RetryPolicy.None), driver)
+        eventually { driver.started.size == 2 }
+        val (first, variables) = driver.started.first()
+        driver.jobs.trySend(EngineJob("job-$first", EngineNames.jobType(wf.key, "work"), first, variables, null))
+
+        val failure = runCatching { handle.await() }.exceptionOrNull()
+        driver.heldStarts.getValue("b").complete(Unit)
+
+        assertEquals("fatal", failure?.message)
+        eventually { driver.cancelled.toSet() == driver.started.map { it.first }.toSet() }
+    }
+
+    @Test
+    fun cancelCancelsInstancesWhoseStartIsStillInFlight() = runBlocking {
+        val driver = FakeDriver().apply { heldStarts["b"] = CompletableDeferred() }
+        val (handle, _) = launch(flow("cancel-starting", "a", "b"), driver = driver)
+        eventually { driver.started.size == 2 }
+
+        handle.cancel()
+        driver.heldStarts.getValue("b").complete(Unit)
+
+        assertEquals(RunState.Cancelled, handle.state())
+        eventually { driver.cancelled.toSet() == driver.started.map { it.first }.toSet() }
+    }
+
+    @Test
     fun cancelCancelsPendingInstances() = runBlocking {
         val (handle, driver) = launch(flow("cancel", "a", "b"))
         eventually { driver.started.size == 2 }
@@ -416,6 +447,28 @@ class EngineRunnerTest {
         assertEquals(2L, handle.progress().seeded)
         driver.finishAll()
         assertEquals(2, handle.await().done)
+    }
+
+    @Test
+    fun requeueKeepsTheRecordWhenTheRunEndsWhileItsInstanceStarts() = runBlocking {
+        val store = InMemoryDeadLetterStore()
+        val wf = flow("requeue-halted", "unused")
+        val record = DeadLetterRecord(
+            "held", wf.key, wf.key, null, DeadLetter("held", "work", "boom"),
+            JsonObject(mapOf("id" to JsonPrimitive("held"), EngineNames.ITEM_KEY to JsonPrimitive("held"))),
+            kotlin.time.Instant.fromEpochMilliseconds(0),
+        )
+        store.record(record)
+        val driver = FakeDriver().apply { heldStarts["held"] = CompletableDeferred() }
+        val (handle, _) = launch(wf, RunConfig(deadLetters = store), driver, requeue = listOf(record))
+        eventually { driver.started.size == 1 }
+
+        handle.cancel()
+        driver.heldStarts.getValue("held").complete(Unit)
+
+        eventually { driver.cancelled.toSet() == driver.started.map { it.first }.toSet() }
+        delay(100.milliseconds)
+        assertEquals(listOf(record.id), store.list(wf.key).records.map { it.id })
     }
 
     @Test
