@@ -409,139 +409,182 @@ fun htmlEscape(s: String): String = s
 
 fun generate(target: File, verified: Map<String, Int>) {
     val sections = StringBuilder()
+    val index = StringBuilder()
     for (example in examples) {
         val c7 = compile(example.flow, "camunda7")
         val c8 = compile(example.flow, "camunda8")
         val tabs = StringBuilder()
         val panes = StringBuilder()
         val xmlBlocks = StringBuilder()
-        c7.levels.forEachIndexed { index, level ->
-            val active = if (index == 0) " active" else ""
-            tabs.append("""<button class="tab$active" data-target="${example.id}-$index">${level.key}</button>""")
-            panes.append("""<div class="pane$active" id="${example.id}-$index" data-xml="xml-${example.id}-$index"></div>""")
-            xmlBlocks.append("<script type=\"text/xml\" id=\"xml-${example.id}-$index\">${c7.xml.getValue(level.key)}</script>\n")
+        c7.levels.forEachIndexed { levelIndex, level ->
+            val active = levelIndex == 0
+            val label = if (levelIndex == 0) "Process" else "Child ${level.key.substringAfterLast('_')}"
+            tabs.append(
+                """<button class="leveltab${if (active) " active" else ""}" type="button" aria-pressed="$active" data-target="${example.id}-$levelIndex">$label</button>""",
+            )
+            panes.append(
+                """<div class="pane${if (active) " active" else ""}" id="${example.id}-$levelIndex" data-xml="xml-${example.id}-$levelIndex" role="img" aria-label="BPMN diagram of ${level.key}"></div>""",
+            )
+            xmlBlocks.append("<script type=\"text/xml\" id=\"xml-${example.id}-$levelIndex\">${c7.xml.getValue(level.key)}</script>\n")
         }
         val rawXml = StringBuilder()
         for ((dialect, compiled) in listOf("Camunda 7" to c7, "Camunda 8" to c8)) {
             for (level in compiled.levels) {
                 rawXml.append(
-                    """<details><summary>$dialect · ${level.key}.bpmn</summary><pre class="xml">${htmlEscape(compiled.xml.getValue(level.key))}</pre></details>""",
+                    """<details class="xml-source"><summary>$dialect BPMN of ${level.key}</summary><pre><code>${htmlEscape(compiled.xml.getValue(level.key))}</code></pre></details>
+""",
                 )
             }
         }
+        val levelTabs = if (c7.levels.size > 1) """<div class="leveltabs" role="group" aria-label="Processes of ${example.id}">$tabs</div>""" else ""
+        index.append("""<a href="#${example.id}">${example.title}</a>
+""")
         sections.append(
-            """
-            <section class="example" id="${example.id}">
-              <header>
-                <h2>${example.title}</h2>
-                <span class="badge">verified · ${verified.getValue(example.id)} checks</span>
-              </header>
-              <p>${example.blurb}</p>
-              <div class="split">
-                <div class="left">
-                  <div class="label">DSL</div>
-                  <pre class="dsl"><code>${htmlEscape(example.dsl)}</code></pre>
-                </div>
-                <div class="right">
-                  <div class="label">BPMN <span class="tabs">$tabs</span></div>
-                  $panes
-                </div>
-              </div>
-              $rawXml
-              $xmlBlocks
-            </section>
-            """.trimIndent(),
+            """<section class="block example" id="${example.id}">
+<h2>${example.title}</h2>
+<p class="example-meta">Compiled for Camunda 7 and Camunda 8 and verified with ${verified.getValue(example.id)} checks.</p>
+<p>${example.blurb}</p>
+<div class="split">
+<div class="codecard">
+<div class="codecard-head"><span>Kotlin</span><button class="copy" type="button">Copy</button></div>
+<pre><code class="lang-kotlin">${htmlEscape(example.dsl)}</code></pre>
+</div>
+<div class="diagram-panel">
+<div class="diagram-head"><span>BPMN</span>$levelTabs</div>
+$panes
+</div>
+</div>
+$rawXml$xmlBlocks</section>
+""",
         )
     }
 
     val js = """
-    document.querySelectorAll('.tabs').forEach(function (tabs) {
-      tabs.addEventListener('click', function (event) {
-        var button = event.target.closest('.tab');
-        if (!button) return;
-        var section = button.closest('.example');
-        section.querySelectorAll('.tab').forEach(function (t) { t.classList.remove('active'); });
-        section.querySelectorAll('.pane').forEach(function (p) { p.classList.remove('active'); });
-        button.classList.add('active');
-        var pane = section.querySelector('#' + button.dataset.target);
-        pane.classList.add('active');
-        render(pane);
-      });
+document.querySelectorAll('.leveltabs').forEach(function (group) {
+  group.addEventListener('click', function (event) {
+    var button = event.target.closest('.leveltab');
+    if (!button) return;
+    var section = button.closest('.example');
+    section.querySelectorAll('.leveltab').forEach(function (t) {
+      var on = t === button;
+      t.classList.toggle('active', on);
+      t.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
+    section.querySelectorAll('.pane').forEach(function (p) { p.classList.toggle('active', p.id === button.dataset.target); });
+    render(section.querySelector('#' + button.dataset.target));
+  });
+});
 
-    var rendered = {};
-    function render(pane) {
-      if (rendered[pane.id]) return;
-      rendered[pane.id] = true;
-      var xml = document.getElementById(pane.dataset.xml).textContent;
-      var viewer = new BpmnJS({ container: pane });
-      viewer.importXML(xml).then(function () {
-        viewer.get('canvas').zoom('fit-viewport', 'auto');
-      }).catch(function (err) {
-        pane.textContent = 'render failed: ' + err.message;
-      });
-    }
+var rendered = {};
+function render(pane) {
+  if (rendered[pane.id]) return;
+  rendered[pane.id] = true;
+  var xml = document.getElementById(pane.dataset.xml).textContent;
+  var viewer = new BpmnJS({ container: pane });
+  viewer.importXML(xml).then(function () {
+    viewer.get('canvas').zoom('fit-viewport', 'auto');
+  }).catch(function (err) {
+    pane.textContent = 'The diagram could not be rendered: ' + err.message;
+  });
+}
 
-    document.querySelectorAll('.pane.active').forEach(render);
-    """.trimIndent()
-
-    val css = """
-    :root { --bg:#0b0e0c; --ink:#d8e6d2; --dim:#6d7f6a; --line:#243126; --amber:#ffb454; --green:#7ce38b; }
-    * { box-sizing:border-box; margin:0; padding:0; }
-    body { background:var(--bg); color:var(--ink); font-family:ui-monospace,'Cascadia Code',Consolas,monospace; padding:2rem; }
-    h1 { color:var(--amber); letter-spacing:.25em; text-transform:uppercase; font-size:1.3rem; margin-bottom:.4rem; }
-    .sub { color:var(--dim); font-size:.8rem; margin-bottom:2rem; }
-    .example { border:1px solid var(--line); margin-bottom:2rem; padding:1.2rem 1.4rem; }
-    .example header { display:flex; align-items:baseline; gap:1rem; margin-bottom:.4rem; }
-    .example h2 { font-size:1rem; letter-spacing:.05em; }
-    .badge { font-size:.65rem; color:var(--green); border:1px solid var(--green); padding:.15em .6em; letter-spacing:.15em; text-transform:uppercase; }
-    .example p { color:var(--dim); font-size:.8rem; margin-bottom:1rem; }
-    .split { display:grid; grid-template-columns:minmax(320px,5fr) minmax(380px,7fr); gap:1rem; }
-    @media (max-width:900px) { .split { grid-template-columns:1fr; } }
-    .label { font-size:.65rem; color:var(--dim); letter-spacing:.2em; text-transform:uppercase; margin-bottom:.4rem; display:flex; gap:1rem; align-items:center; }
-    .dsl { background:#080a09; border:1px solid var(--line); padding:1rem; overflow-x:auto; font-size:.78rem; line-height:1.5; height:420px; }
-    .pane { display:none; background:#f6f8f6; border:1px solid var(--line); height:420px; }
-    .pane.active { display:block; }
-    .tab { background:none; border:1px solid var(--line); color:var(--dim); font:inherit; font-size:.65rem; padding:.15em .6em; cursor:pointer; }
-    .tab.active { color:var(--amber); border-color:var(--amber); }
-    details { margin-top:.6rem; font-size:.7rem; color:var(--dim); }
-    details summary { cursor:pointer; }
-    .xml { max-height:240px; overflow:auto; font-size:.65rem; background:#080a09; border:1px solid var(--line); padding:.8rem; margin-top:.4rem; color:var(--ink); }
-    a { color:var(--amber); }
-    """.trimIndent()
+document.querySelectorAll('.pane.active').forEach(render);
+"""
 
     target.writeText(
-        """
-        <!doctype html>
-        <html lang="en">
-        <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>loadshift · Kotlin DSL to Camunda 7 and Camunda 8 BPMN examples</title>
-        <meta name="description" content="Kotlin workflow definitions next to the Camunda 7 and Camunda 8 BPMN they compile to: pipelines, conditions, retries, fan-out, messages with timeouts, caught errors and time-boxed scopes.">
-        <link rel="canonical" href="https://it-atelier-gn.github.io/loadshift-kotlin/examples.html">
-        <meta property="og:type" content="website">
-        <meta property="og:site_name" content="loadshift">
-        <meta property="og:title" content="Kotlin DSL to Camunda 7 and Camunda 8 BPMN">
-        <meta property="og:description" content="Kotlin workflow definitions next to the BPMN they compile to for Camunda 7 and Camunda 8.">
-        <meta property="og:url" content="https://it-atelier-gn.github.io/loadshift-kotlin/examples.html">
-        <meta property="og:image" content="https://it-atelier-gn.github.io/loadshift-kotlin/og.png">
-        <meta name="twitter:card" content="summary_large_image">
-        <style>
-        $css
-        </style>
-        </head>
-        <body>
-        <h1>▞▞ loadshift examples</h1>
-        <div class="sub">left: the Kotlin DSL · right: the BPMN it compiles to · every process contains the on_terminate event subprocess, which ends dead-lettered and skipped items · generated by scripts/examples · <a href="index.html">back to docs</a></div>
-        $sections
-        <script src="https://unpkg.com/bpmn-js@17.11.1/dist/bpmn-navigated-viewer.production.min.js"></script>
-        <script>
-        $js
-        </script>
-        </body>
-        </html>
-        """.trimIndent(),
+        """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>loadshift: Kotlin workflows and the Camunda 7 and Camunda 8 BPMN they compile to</title>
+<meta name="description" content="Kotlin workflow definitions next to the Camunda 7 and Camunda 8 BPMN they compile to: pipelines, conditions, retries, fan-out, messages with timeouts, caught errors and time-boxed scopes.">
+<link rel="canonical" href="https://it-atelier-gn.github.io/loadshift-kotlin/examples.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="loadshift">
+<meta property="og:title" content="Kotlin workflows and the BPMN they compile to">
+<meta property="og:description" content="Kotlin workflow definitions next to the BPMN they compile to for Camunda 7 and Camunda 8.">
+<meta property="og:url" content="https://it-atelier-gn.github.io/loadshift-kotlin/examples.html">
+<meta property="og:image" content="https://it-atelier-gn.github.io/loadshift-kotlin/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/bpmn-js@17.11.1/dist/assets/bpmn-js.css">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 22'><rect width='22' height='22' rx='4' fill='%23f3f5f2'/><circle cx='5' cy='11' r='3.2' fill='none' stroke='%2317202b' stroke-width='1.8'/><rect x='10' y='5' width='10' height='12' rx='2.5' fill='none' stroke='%2317202b' stroke-width='1.8'/><path d='M8.2 11H10' stroke='%2317202b' stroke-width='1.8'/></svg>">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="index.html"><svg class="brand-mark" viewBox="0 0 22 22" aria-hidden="true"><circle cx="5" cy="11" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="10" y="5" width="10" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.2 11H10" stroke="currentColor" stroke-width="1.8"/></svg><span>loadshift</span><span class="brand-lang">kotlin</span></a>
+    <nav class="topnav" aria-label="Main">
+      <a class="nav-guide" href="index.html#guide">Guide</a>
+      <a href="examples.html" aria-current="page">BPMN examples</a>
+      <a href="camunda-7-to-8.html">Camunda 7 to 8</a>
+      <a href="https://github.com/it-atelier-gn/loadshift-kotlin">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero hero-page">
+  <div class="wrap">
+    <h1>Kotlin workflows and the BPMN they compile to</h1>
+    <p class="hero-sub">Each example shows the workflow code next to the process it becomes. Every example is compiled for Camunda&nbsp;7 and Camunda&nbsp;8 and checked before this page is generated. Every process also contains the <code>on_terminate</code> event subprocess, which ends dead-lettered and skipped items.</p>
+  </div>
+</section>
+
+<section class="guide">
+  <div class="wrap">
+    <div class="layout">
+      <nav class="sidenav" aria-label="Examples">
+$index      </nav>
+      <div class="content">
+$sections      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<aside class="about" aria-label="About the author">
+  <div class="wrap about-inner">
+    <p>Built by <a href="http://www.georg-nelles.de" rel="noopener">Georg Nelles</a>, freelance software engineer
+    specializing in automation, modernization and pragmatic tooling. loadshift is open source and runs wherever
+    your workflows need to.</p>
+    <div class="about-links">
+      <a class="btn btn-plain" href="http://www.georg-nelles.de" rel="noopener">georg-nelles.de</a>
+      <a class="btn btn-plain" href="https://github.com/it-atelier-gn" rel="noopener">More on GitHub</a>
+    </div>
+  </div>
+</aside>
+
+<footer class="footer">
+  <div class="wrap">
+    <a class="brand" href="index.html"><svg class="brand-mark" viewBox="0 0 22 22" aria-hidden="true"><circle cx="5" cy="11" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="10" y="5" width="10" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.2 11H10" stroke="currentColor" stroke-width="1.8"/></svg><span>loadshift</span></a>
+    <p>&copy; 2026 Georg Nelles. MIT License.</p>
+    <nav class="footer-links" aria-label="Project">
+      <a href="https://github.com/it-atelier-gn/loadshift-kotlin">GitHub</a>
+      <a href="https://github.com/it-atelier-gn/loadshift-kotlin/releases">Releases</a>
+      <a href="https://github.com/it-atelier-gn/loadshift-kotlin/issues">Issues</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="app.js"></script>
+<script src="https://unpkg.com/bpmn-js@17.11.1/dist/bpmn-navigated-viewer.production.min.js"></script>
+<script>
+$js
+</script>
+</body>
+</html>
+""",
     )
 }
 
