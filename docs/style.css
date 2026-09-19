@@ -181,7 +181,7 @@ code { font-family: var(--mono); font-size: .86em; background: var(--code-bg); p
 .band > .wrap > p, .block > p, .note { max-width: var(--measure); }
 .lead { font-size: 19px; color: var(--graphite); margin: 0 0 32px; }
 
-.film { display: block; width: 100%; height: auto; background: var(--sheet); border: 1px solid var(--rule); border-radius: 10px; }
+.film { display: block; width: 100%; max-width: 720px; height: auto; background: var(--sheet); border: 1px solid var(--rule); border-radius: 10px; }
 .film-credit { margin: 12px 0 0; font-size: 14px; color: var(--graphite); }
 
 .needs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 48px; margin: 0; }
