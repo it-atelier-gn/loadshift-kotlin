@@ -22,6 +22,8 @@ dependencies:
   - $libs.ktor.serialization.kotlinx.json
   - $libs.ktor.client.cio
   - $libs.ktor.client.content.negotiation
+  - $libs.jackson.core
+  - $libs.jackson.databind
 
 test-dependencies:
   - ../loadshift-local

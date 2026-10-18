@@ -6,9 +6,11 @@ ktor = "3.5.2"
 testcontainers = "2.0.5"
 opentelemetry = "1.66.0"
 micrometer = "1.17.1"
-camunda-client = "8.9.19"
+camunda-client = "8.9.24"
 sqlite-jdbc = "3.53.4.0"
 camunda-bpmn-model = "7.24.0"
+jackson = "2.22.3"
+netty = "4.2.18.Final"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
@@ -34,3 +36,11 @@ camunda-client-java = { module = "io.camunda:camunda-client-java", version.ref =
 micrometer-core = { module = "io.micrometer:micrometer-core", version.ref = "micrometer" }
 sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite-jdbc" }
 camunda-bpmn-model = { module = "org.camunda.bpm.model:camunda-bpmn-model", version.ref = "camunda-bpmn-model" }
+jackson-core = { module = "com.fasterxml.jackson.core:jackson-core", version.ref = "jackson" }
+jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
+netty-codec = { module = "io.netty:netty-codec", version.ref = "netty" }
+netty-codec-compression = { module = "io.netty:netty-codec-compression", version.ref = "netty" }
+netty-codec-http = { module = "io.netty:netty-codec-http", version.ref = "netty" }
+netty-codec-http2 = { module = "io.netty:netty-codec-http2", version.ref = "netty" }
+netty-codec-socks = { module = "io.netty:netty-codec-socks", version.ref = "netty" }
+netty-handler-proxy = { module = "io.netty:netty-handler-proxy", version.ref = "netty" }

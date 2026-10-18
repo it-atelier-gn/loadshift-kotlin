@@ -14,6 +14,14 @@ dependencies:
   - $libs.kotlinx.coroutines.core
   - $libs.kotlinx.serialization.json
   - $libs.camunda.client.java
+  - $libs.jackson.core
+  - $libs.jackson.databind
+  - $libs.netty.codec
+  - $libs.netty.codec.compression
+  - $libs.netty.codec.http
+  - $libs.netty.codec.http2
+  - $libs.netty.codec.socks
+  - $libs.netty.handler.proxy
 
 test-dependencies:
   - $libs.kotlinx.coroutines.test
