@@ -135,7 +135,7 @@ class EngineRunner(
     override suspend fun cancelItem(key: String): Boolean {
         val id = rootsByKey[key] ?: return false
         val root = pendingRoots.remove(id) ?: return false
-        if (attempt { driver.cancel(id) } == null) {
+        if (!cancelInstance(id)) {
             pendingRoots[id] = root
             return false
         }
@@ -290,7 +290,7 @@ class EngineRunner(
         val variables = JsonObject(mapOf(EngineNames.WORKFLOW to JsonPrimitive(run.workflow.key)))
         driver.startInstance(processId, variables, null).also { id ->
             scheduler = id
-            if (halting) attempt { driver.cancel(id) }
+            if (halting) cancelInstance(id)
         }
     }
 
@@ -497,13 +497,21 @@ class EngineRunner(
     }
 
     private suspend fun cancelRoots() {
-        scheduler?.let { attempt { driver.cancel(it) } }
+        scheduler?.let { cancelInstance(it) }
         for (id in pendingRoots.keys.toList()) cancelRoot(id)
     }
 
     private suspend fun cancelRoot(id: String) {
-        attempt { driver.cancel(id) }
+        cancelInstance(id)
         pendingRoots.remove(id)
+    }
+
+    private suspend fun cancelInstance(id: String): Boolean {
+        repeat(CANCEL_ATTEMPTS) { index ->
+            if (attempt { driver.cancel(id) } != null) return true
+            delay(CANCEL_BACKOFF * (index + 1))
+        }
+        return false
     }
 
     private suspend fun deliverMessages() {
@@ -562,6 +570,8 @@ class EngineRunner(
         const val MAX_BATCH = 10
         const val DELIVERY_ATTEMPTS = 5
         val DELIVERY_BACKOFF = 150.milliseconds
+        const val CANCEL_ATTEMPTS = 5
+        val CANCEL_BACKOFF = 200.milliseconds
         val FETCH_ERROR_BACKOFF = 1.seconds
     }
 }

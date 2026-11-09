@@ -118,7 +118,13 @@ private class FakeDriver : EngineDriver {
     override suspend fun finished(instanceIds: List<String>): Map<String, Boolean> =
         instanceIds.mapNotNull { id -> finished[id]?.let { id to it } }.toMap()
 
+    var cancelRejections = 0
+
     override suspend fun cancel(instanceId: String) {
+        if (cancelRejections > 0) {
+            cancelRejections--
+            error("optimistic locking conflict")
+        }
         cancelled += instanceId
         finished[instanceId] = false
     }
@@ -665,6 +671,18 @@ class EngineRunnerTest {
         driver.finished["pi-waiting"] = true
 
         assertEquals(1, handle.await().done)
+    }
+
+    @Test
+    fun cancelRetriesInstanceTheEngineRejectsAtFirst() = runBlocking {
+        val driver = FakeDriver().apply { cancelRejections = 2 }
+        val (handle, _) = launch(flow("cancel-retry", "a"), driver = driver)
+        eventually { driver.started.size == 1 }
+
+        handle.cancel()
+
+        assertEquals(listOf("pi-1"), driver.cancelled.toList())
+        assertEquals(0, driver.cancelRejections)
     }
 
     @Test
