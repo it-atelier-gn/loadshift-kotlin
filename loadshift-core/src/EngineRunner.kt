@@ -74,6 +74,7 @@ class EngineRunner(
     private val broadcasts = ConcurrentHashMap<String, JsonObject>()
     private val pollers = mutableListOf<Job>()
     private val stateLock = Any()
+    private val adopted = CompletableDeferred<Unit>()
 
     @Volatile private var runState = if (config.start is Start.Now) RunState.Running else RunState.Scheduled
     @Volatile private var ending: RunState? = null
@@ -147,10 +148,12 @@ class EngineRunner(
     }
 
     override suspend fun send(message: String, key: String, data: JsonObject) {
+        if (attach) adopted.await()
         if (!correlate(message, key, data)) pendingSends += PendingSend(message, key, data)
     }
 
     override suspend fun broadcast(message: String, data: JsonObject) {
+        if (attach) adopted.await()
         broadcasts[message] = data
         correlate(message, null, data)
     }
@@ -296,16 +299,22 @@ class EngineRunner(
         run.clearInstanceState()
     }
 
-    private suspend fun adopt(): Boolean {
+    private suspend fun adopt(): Boolean = try {
         awaitRunning()
-        val roots = attempt { driver.activeRoots(rootProcessId) } ?: return true
-        val fresh = roots.count { root ->
-            val added = root.id !in finishedRoots && pendingRoots.putIfAbsent(root.id, Root(root.itemKey, false)) == null
-            if (added) root.itemKey?.let { rootsByKey[it] = root.id }
-            added
+        val roots = attempt { driver.activeRoots(rootProcessId) }
+        if (roots == null) {
+            true
+        } else {
+            val fresh = roots.count { root ->
+                val added = root.id !in finishedRoots && pendingRoots.putIfAbsent(root.id, Root(root.itemKey, false)) == null
+                if (added) root.itemKey?.let { rootsByKey[it] = root.id }
+                added
+            }
+            run.recordAttached(fresh)
+            pendingRoots.isNotEmpty()
         }
-        run.recordAttached(fresh)
-        return pendingRoots.isNotEmpty()
+    } finally {
+        adopted.complete(Unit)
     }
 
     private suspend fun startRequeued(records: List<DeadLetterRecord>) {
@@ -529,12 +538,14 @@ class EngineRunner(
     private fun finish(state: RunState): Boolean = synchronized(stateLock) {
         if (completion.isCompleted) return false
         runState = state
+        adopted.complete(Unit)
         completion.complete(run.result())
     }
 
     private fun finishExceptionally(cause: Throwable): Boolean = synchronized(stateLock) {
         if (completion.isCompleted) return false
         runState = RunState.Failed
+        adopted.complete(Unit)
         completion.completeExceptionally(cause)
     }
 

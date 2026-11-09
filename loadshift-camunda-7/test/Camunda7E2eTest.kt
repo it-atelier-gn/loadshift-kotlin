@@ -371,6 +371,7 @@ abstract class Camunda7Scenarios internal constructor(private val engine: Camund
 
         val second = Camunda7Backend(base)
         val takeover = second.attach(flow())
+        eventually { second.control.runs().singleOrNull()?.progress?.seeded == 2L }
         takeover.send("ship", "ok")
         takeover.send("ship", "broken")
         val result = takeover.await()

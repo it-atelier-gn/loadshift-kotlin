@@ -654,6 +654,20 @@ class EngineRunnerTest {
     }
 
     @Test
+    fun attachedRunCountsInstanceThatFinishesRightAfterMessage() = runBlocking {
+        val wf = flow("attached-message", "unused")
+        val driver = FakeDriver().apply {
+            roots += RootInstance("pi-waiting", "x")
+            waiting += "go" to "x"
+        }
+        val (handle, _) = launch(wf, driver = driver, attach = true)
+        handle.send("go", "x")
+        driver.finished["pi-waiting"] = true
+
+        assertEquals(1, handle.await().done)
+    }
+
+    @Test
     fun attachRejectsCronStarts() {
         assertFailsWith<IllegalArgumentException> {
             launch(flow("attach-cron", "a"), RunConfig(start = Start.Cron("* * * * *")), attach = true)
