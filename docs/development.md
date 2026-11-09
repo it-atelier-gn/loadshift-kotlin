@@ -36,12 +36,11 @@ The run prints a table with the items per second and the 50th, 95th and 99th per
 
 | Command | Engine |
 | --- | --- |
-| `./kotlin run -m engine c7` | Camunda 7 Run on port 8080, Cockpit at `/camunda` (demo/demo) |
 | `./kotlin run -m engine cib7` | CIB seven on port 8080, Cockpit at `/camunda/app/` (demo/demo) |
 | `./kotlin run -m engine c8` | Camunda 8 on port 8080, Operate at `/operate` (demo/demo), H2 storage |
 | `./kotlin run -m engine c8 logs` | Follows the engine log |
 | `./kotlin run -m engine c8 stop` | Stops the engine |
-| `./kotlin run -m engine c7 start 9090` | Starts the engine on another port |
+| `./kotlin run -m engine cib7 start 9090` | Starts the engine on another port |
 
 The command uses Podman when it is installed and Docker otherwise. Run it from the repository root.
 
