@@ -34,7 +34,7 @@ Full examples and reference: **[it-atelier-gn.github.io/loadshift-kotlin](https:
 
 | Engine | Backend | Image used by the end-to-end tests |
 | --- | --- | --- |
-| Camunda 7 | `Camunda7Backend` | `camunda/camunda-bpm-platform:run-7.24.0` |
+| Camunda 7 | `Camunda7Backend` | not covered by the end-to-end tests |
 | CIB seven | `Camunda7Backend` | `cibseven/cibseven:run-2.2.0` |
 | Camunda 8 | `Camunda8Backend` | `camunda/camunda:8.9.19` |
 

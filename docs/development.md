@@ -4,7 +4,6 @@
 
 | Suite | Container image | Variable for another image | Variable for an engine that is already running |
 | --- | --- | --- | --- |
-| `Camunda7E2eTest` | `camunda/camunda-bpm-platform:run-7.24.0` | `LOADSHIFT_C7_IMAGE` | `LOADSHIFT_C7_BASE=http://localhost:8080/engine-rest` |
 | `CibSevenE2eTest` | `cibseven/cibseven:run-2.2.0` | `LOADSHIFT_CIB7_IMAGE` | `LOADSHIFT_CIB7_BASE=http://localhost:8080/engine-rest` |
 | `Camunda8E2eTest` | `camunda/camunda:8.9.19` with H2 secondary storage | `LOADSHIFT_C8_IMAGE` | `LOADSHIFT_C8_BASE=http://localhost:8080` |
 
@@ -12,7 +11,6 @@ Without Docker and without the base variable, a suite is reported as skipped. Th
 
 | Engine | Images |
 | --- | --- |
-| Camunda 7 | `camunda/camunda-bpm-platform:run-7.23.0`, `run-7.24.0` |
 | CIB seven | `cibseven/cibseven:run-2.1.0`, `run-2.2.0` |
 | Camunda 8 | `camunda/camunda:8.9.19` |
 

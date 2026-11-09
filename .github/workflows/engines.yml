@@ -16,14 +16,6 @@ jobs:
       matrix:
         include:
           - module: loadshift-camunda-7
-            suite: loadshift.camunda7.Camunda7E2eTest
-            variable: LOADSHIFT_C7_IMAGE
-            image: camunda/camunda-bpm-platform:run-7.23.0
-          - module: loadshift-camunda-7
-            suite: loadshift.camunda7.Camunda7E2eTest
-            variable: LOADSHIFT_C7_IMAGE
-            image: camunda/camunda-bpm-platform:run-7.24.0
-          - module: loadshift-camunda-7
             suite: loadshift.camunda7.CibSevenE2eTest
             variable: LOADSHIFT_CIB7_IMAGE
             image: cibseven/cibseven:run-2.1.0

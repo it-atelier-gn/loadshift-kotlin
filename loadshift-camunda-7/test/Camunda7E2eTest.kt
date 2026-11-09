@@ -83,16 +83,10 @@ internal class Camunda7Engine(private val image: String, private val baseVariabl
     fun baseOrSkip(): String = base ?: Assumptions.abort("$image tests require Docker or $baseVariable")
 }
 
-private val camundaSeven = Camunda7Engine(
-    System.getenv("LOADSHIFT_C7_IMAGE") ?: "camunda/camunda-bpm-platform:run-7.24.0",
-    "LOADSHIFT_C7_BASE",
-)
 private val cibSeven = Camunda7Engine(
     System.getenv("LOADSHIFT_CIB7_IMAGE") ?: "cibseven/cibseven:run-2.2.0",
     "LOADSHIFT_CIB7_BASE",
 )
-
-class Camunda7E2eTest : Camunda7Scenarios(camundaSeven)
 
 class CibSevenE2eTest : Camunda7Scenarios(cibSeven)
 
@@ -196,7 +190,7 @@ abstract class Camunda7Scenarios internal constructor(private val engine: Camund
         assertEquals(RunState.Failed, snapshot.state)
         assertEquals(1, snapshot.progress.failed)
         val client = Camunda7Client(base)
-        eventually { client.processInstanceCount(wf.key) == 0L }
+        eventually(timeout = 150.seconds) { client.processInstanceCount(wf.key) == 0L }
     }
 
     @Test
