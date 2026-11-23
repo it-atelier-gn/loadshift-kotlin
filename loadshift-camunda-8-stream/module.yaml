@@ -6,7 +6,7 @@ apply:
 
 settings:
   kotlin:
-    serialization: json
+    serialization: enabled
 
 dependencies:
   - ../loadshift-core
