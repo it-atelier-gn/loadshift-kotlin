@@ -201,7 +201,7 @@ done=3 failed=0 deadLetters=3
   <p class="note">Children run concurrently, so the order of the lines varies between runs.</p>
 
   <p>Or pull it into an existing project from Maven Central
-  (<code>io.github.it-atelier-gn</code>, version <code>0.7.2</code>):</p>
+  (<code>io.github.it-atelier-gn</code>, version <code>0.8.0</code>):</p>
   <div class="codecard">
     <div class="codecard-head">
       <div class="tabs" role="tablist">
@@ -212,71 +212,78 @@ done=3 failed=0 deadLetters=3
       <button class="copy" type="button">Copy</button>
     </div>
     <pre class="tab-panel active" data-tab="kts"><code class="lang-kotlin">dependencies {
-    implementation("io.github.it-atelier-gn:loadshift-core:0.7.2")
-    implementation("io.github.it-atelier-gn:loadshift-local:0.7.2")
-    implementation("io.github.it-atelier-gn:loadshift-camunda-7:0.7.2")
-    implementation("io.github.it-atelier-gn:loadshift-camunda-8:0.7.2")
-    implementation("io.github.it-atelier-gn:loadshift-camunda-8-stream:0.7.2")
-    implementation("io.github.it-atelier-gn:loadshift-web:0.7.2")
-    implementation("io.github.it-atelier-gn:loadshift-sqlite:0.7.2")
-    implementation("io.github.it-atelier-gn:loadshift-otel:0.7.2")
-    implementation("io.github.it-atelier-gn:loadshift-micrometer:0.7.2")
+    implementation("io.github.it-atelier-gn:loadshift-core:0.8.0")
+    implementation("io.github.it-atelier-gn:loadshift-local:0.8.0")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-7:0.8.0")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-7-embedded:0.8.0")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-8:0.8.0")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-8-stream:0.8.0")
+    implementation("io.github.it-atelier-gn:loadshift-web:0.8.0")
+    implementation("io.github.it-atelier-gn:loadshift-sqlite:0.8.0")
+    implementation("io.github.it-atelier-gn:loadshift-otel:0.8.0")
+    implementation("io.github.it-atelier-gn:loadshift-micrometer:0.8.0")
 }</code></pre>
     <pre class="tab-panel" data-tab="groovy"><code class="lang-groovy">dependencies {
-    implementation 'io.github.it-atelier-gn:loadshift-core:0.7.2'
-    implementation 'io.github.it-atelier-gn:loadshift-local:0.7.2'
-    implementation 'io.github.it-atelier-gn:loadshift-camunda-7:0.7.2'
-    implementation 'io.github.it-atelier-gn:loadshift-camunda-8:0.7.2'
-    implementation 'io.github.it-atelier-gn:loadshift-camunda-8-stream:0.7.2'
-    implementation 'io.github.it-atelier-gn:loadshift-web:0.7.2'
-    implementation 'io.github.it-atelier-gn:loadshift-sqlite:0.7.2'
-    implementation 'io.github.it-atelier-gn:loadshift-otel:0.7.2'
-    implementation 'io.github.it-atelier-gn:loadshift-micrometer:0.7.2'
+    implementation 'io.github.it-atelier-gn:loadshift-core:0.8.0'
+    implementation 'io.github.it-atelier-gn:loadshift-local:0.8.0'
+    implementation 'io.github.it-atelier-gn:loadshift-camunda-7:0.8.0'
+    implementation 'io.github.it-atelier-gn:loadshift-camunda-7-embedded:0.8.0'
+    implementation 'io.github.it-atelier-gn:loadshift-camunda-8:0.8.0'
+    implementation 'io.github.it-atelier-gn:loadshift-camunda-8-stream:0.8.0'
+    implementation 'io.github.it-atelier-gn:loadshift-web:0.8.0'
+    implementation 'io.github.it-atelier-gn:loadshift-sqlite:0.8.0'
+    implementation 'io.github.it-atelier-gn:loadshift-otel:0.8.0'
+    implementation 'io.github.it-atelier-gn:loadshift-micrometer:0.8.0'
 }</code></pre>
     <pre class="tab-panel" data-tab="maven"><code class="lang-xml">&lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-core&lt;/artifactId&gt;
-    &lt;version&gt;0.7.2&lt;/version&gt;
+    &lt;version&gt;0.8.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-local&lt;/artifactId&gt;
-    &lt;version&gt;0.7.2&lt;/version&gt;
+    &lt;version&gt;0.8.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-camunda-7&lt;/artifactId&gt;
-    &lt;version&gt;0.7.2&lt;/version&gt;
+    &lt;version&gt;0.8.0&lt;/version&gt;
+&lt;/dependency&gt;
+&lt;dependency&gt;
+    &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
+    &lt;artifactId&gt;loadshift-camunda-7-embedded&lt;/artifactId&gt;
+    &lt;version&gt;0.8.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-camunda-8&lt;/artifactId&gt;
-    &lt;version&gt;0.7.2&lt;/version&gt;
+    &lt;version&gt;0.8.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-camunda-8-stream&lt;/artifactId&gt;
-    &lt;version&gt;0.7.2&lt;/version&gt;
+    &lt;version&gt;0.8.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-web&lt;/artifactId&gt;
-    &lt;version&gt;0.7.2&lt;/version&gt;
+    &lt;version&gt;0.8.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-sqlite&lt;/artifactId&gt;
-    &lt;version&gt;0.7.2&lt;/version&gt;
+    &lt;version&gt;0.8.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-otel&lt;/artifactId&gt;
-    &lt;version&gt;0.7.2&lt;/version&gt;
+    &lt;version&gt;0.8.0&lt;/version&gt;
 &lt;/dependency&gt;
 &lt;dependency&gt;
     &lt;groupId&gt;io.github.it-atelier-gn&lt;/groupId&gt;
     &lt;artifactId&gt;loadshift-micrometer&lt;/artifactId&gt;
-    &lt;version&gt;0.7.2&lt;/version&gt;
+    &lt;version&gt;0.8.0&lt;/version&gt;
 &lt;/dependency&gt;</code></pre>
   </div>
   <p class="note">Pick the modules you need; see <a href="#modules">Modules</a> for what each one contains.</p>
@@ -727,6 +734,7 @@ backend.run(workflow, RunConfig(logSink = sink)).await()</code></pre>
       <tr><td><code>loadshift-core</code></td><td>Flow IR, the DSL, the <code>Backend</code> SPI, and the BPMN compiler with a deterministic diagram layout.</td></tr>
       <tr><td><code>loadshift-local</code></td><td><code>LocalBackend</code>, which runs workflows inside your application without an engine.</td></tr>
       <tr><td><code>loadshift-camunda-7</code></td><td><code>Camunda7Backend</code> for Camunda&nbsp;7 and CIB&nbsp;seven, working external tasks over the REST API.</td></tr>
+      <tr><td><code>loadshift-camunda-7-embedded</code></td><td><code>EmbeddedCamunda7</code>, a CIB&nbsp;seven engine inside your application, worked without a REST connection.</td></tr>
       <tr><td><code>loadshift-camunda-8</code></td><td><code>Camunda8Backend</code> for Camunda&nbsp;8, working jobs over the REST API.</td></tr>
       <tr><td><code>loadshift-camunda-8-stream</code></td><td><code>CamundaJobStream</code>: <code>Camunda8Backend(base, jobStream = stream)</code> receives the jobs Camunda&nbsp;8 pushes over gRPC and activates older jobs over REST.</td></tr>
       <tr><td><code>loadshift-web</code></td><td><code>ControlServer</code>. Web console and JSON API for the runs of a backend, with optional basic authentication.</td></tr>
