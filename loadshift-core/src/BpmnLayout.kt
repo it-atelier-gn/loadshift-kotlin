@@ -29,8 +29,8 @@ object BpmnLayout {
         val boundaries = children.filterIsInstance<BoundaryEvent>()
         val nodes = children.filterNot { it in eventScopes || it in boundaries }
         if (nodes.isEmpty()) return
-        val ids = nodes.map { it.id }
-        val idSet = ids.toSet()
+        val realIds = nodes.map { it.id }
+        val idSet = realIds.toSet()
         val boundaryIds = boundaries.map { it.id }.toSet()
 
         val shapes = model.getModelElementsByType(BpmnShape::class.java)
@@ -44,16 +44,16 @@ object BpmnLayout {
             val host = event.attachedTo?.id ?: return@flatMap emptyList()
             event.outgoing.mapNotNull { it.target?.id }.map { host to it }
         }
-        val out = ids.associateWith { id ->
-            model.node(id).outgoing.mapNotNull { it.target?.id }.filter { it in idSet } +
+        val out = HashMap<String, List<String>>()
+        val inc = HashMap<String, List<String>>()
+        for (id in realIds) {
+            out[id] = model.node(id).outgoing.mapNotNull { it.target?.id }.filter { it in idSet } +
                 detours.filter { it.first == id }.map { it.second }
-        }
-        val inc = ids.associateWith { id ->
-            model.node(id).incoming.mapNotNull { it.source?.id }.filter { it in idSet } +
+            inc[id] = model.node(id).incoming.mapNotNull { it.source?.id }.filter { it in idSet } +
                 detours.filter { it.second == id }.map { it.first }
         }
 
-        val start = nodes.firstOrNull { inc.getValue(it.id).isEmpty() }?.id ?: ids.first()
+        val start = nodes.firstOrNull { inc.getValue(it.id).isEmpty() }?.id ?: realIds.first()
 
         val backEdges = HashSet<Pair<String, String>>()
         val color = HashMap<String, Int>()
@@ -69,23 +69,43 @@ object BpmnLayout {
             color[u] = 2
         }
         visit(start)
-        for (id in ids) if (color[id] == null) visit(id)
+        for (id in realIds) if (color[id] == null) visit(id)
 
         fun forward(u: String, v: String) = (u to v) !in backEdges
 
-        val fOut = ids.associateWith { u -> out.getValue(u).filter { forward(u, it) } }
-        val indeg = HashMap<String, Int>().apply { ids.forEach { this[it] = 0 } }
-        for (u in ids) for (v in fOut.getValue(u)) indeg[v] = indeg.getValue(v) + 1
-        val rank = HashMap<String, Int>().apply { ids.forEach { this[it] = 0 } }
-        val queue = ArrayDeque(ids.filter { indeg.getValue(it) == 0 })
+        val rankOut = realIds.associateWith { u -> out.getValue(u).filter { forward(u, it) } }
+        val indeg = HashMap<String, Int>().apply { realIds.forEach { this[it] = 0 } }
+        for (u in realIds) for (v in rankOut.getValue(u)) indeg[v] = indeg.getValue(v) + 1
+        val rank = HashMap<String, Int>().apply { realIds.forEach { this[it] = 0 } }
+        val queue = ArrayDeque(realIds.filter { indeg.getValue(it) == 0 })
         while (queue.isNotEmpty()) {
             val u = queue.removeFirst()
-            for (v in fOut.getValue(u)) {
+            for (v in rankOut.getValue(u)) {
                 rank[v] = max(rank.getValue(v), rank.getValue(u) + 1)
                 indeg[v] = indeg.getValue(v) - 1
                 if (indeg.getValue(v) == 0) queue.addLast(v)
             }
         }
+
+        val chains = HashMap<Pair<String, String>, List<String>>()
+        val dummies = HashSet<String>()
+        for (u in realIds) for (v in rankOut.getValue(u).distinct()) {
+            val span = rank.getValue(v) - rank.getValue(u)
+            if (span < 2) continue
+            val chain = (1 until span).map { "$u>$v#$it" }
+            chain.forEachIndexed { i, d ->
+                rank[d] = rank.getValue(u) + i + 1
+                inc[d] = listOf(if (i == 0) u else chain[i - 1])
+                out[d] = listOf(if (i == chain.lastIndex) v else chain[i + 1])
+            }
+            out[u] = out.getValue(u).map { if (it == v) chain.first() else it }
+            inc[v] = inc.getValue(v).map { if (it == u) chain.last() else it }
+            chains[u to v] = chain
+            dummies += chain
+            discovery += chain
+        }
+        val ids = realIds + dummies.sortedBy { discovery.indexOf(it) }
+        val fOut = ids.associateWith { u -> out.getValue(u).filter { forward(u, it) } }
 
         val backSources = backEdges.map { it.first }.toSet()
         val sinks = ids.filter { fOut.getValue(it).isEmpty() && it !in backSources }.toHashSet()
@@ -120,8 +140,8 @@ object BpmnLayout {
             }
         }
 
-        fun w(id: String) = shapes[id]?.bounds?.width ?: 100.0
-        fun h(id: String) = shapes[id]?.bounds?.height ?: 80.0
+        fun w(id: String) = if (id in dummies) 0.0 else shapes[id]?.bounds?.width ?: 100.0
+        fun h(id: String) = if (id in dummies) 0.0 else shapes[id]?.bounds?.height ?: 80.0
 
         fun gap(above: String, below: String) = h(above) / 2 + h(below) / 2 + ROW_GAP
 
@@ -143,6 +163,7 @@ object BpmnLayout {
             fun desired(id: String): Double {
                 val neigh = (if (downward) inc.getValue(id).filter { forward(it, id) }
                 else out.getValue(id).filter { forward(id, it) }).filter { it !in satellites }
+                    .let { n -> if (id in dummies) n else n.filter { it !in dummies }.ifEmpty { n } }
                 val ys = neigh.mapNotNull { cy[it] }
                 return if (ys.isEmpty()) cy.getValue(id) else ys.average()
             }
@@ -155,7 +176,8 @@ object BpmnLayout {
                     for (i in mains.indices) {
                         ys[i] = if (i == 0) want[i] else max(want[i], ys[i - 1] + gap(mains[i - 1], mains[i]))
                     }
-                    val shift = want.average() - ys.average()
+                    val anchors = mains.indices.filter { mains[it] !in dummies }.ifEmpty { mains.indices.toList() }
+                    val shift = anchors.map { want[it] - ys[it] }.average()
                     for (i in mains.indices) cy[mains[i]] = ys[i] + shift
                 }
                 var previous = mains.maxByOrNull { cy.getValue(it) }
@@ -176,7 +198,7 @@ object BpmnLayout {
             cy[id] = cy.getValue(id) + dy
         }
 
-        for (id in ids) {
+        for (id in realIds) {
             val bounds = shapes[id]?.bounds ?: continue
             val x = cx.getValue(id) - w(id) / 2
             val y = cy.getValue(id) - h(id) / 2
@@ -216,14 +238,18 @@ object BpmnLayout {
                     listOf(ucx to sy, ucx to drop, mx to drop, mx to vcy, tx to vcy)
                 }
             } else {
-                val sx = ucx + w(u) / 2
-                val tx = vcx - w(v) / 2
-                if (abs(ucy - vcy) < 1.0) {
-                    listOf(sx to ucy, tx to vcy)
-                } else {
-                    val mx = (sx + tx) / 2
-                    listOf(sx to ucy, mx to ucy, mx to vcy, tx to vcy)
-                }
+                val hops = listOf(u) + chains[u to v].orEmpty() + v
+                simplify(hops.zipWithNext().flatMap { (a, b) ->
+                    val ay = cy.getValue(a)
+                    val by = cy.getValue(b)
+                    val sx = cx.getValue(a) + w(a) / 2
+                    val tx = cx.getValue(b) - w(b) / 2
+                    if (abs(ay - by) < 1.0) listOf(sx to ay, tx to ay)
+                    else {
+                        val mx = (sx + tx) / 2
+                        listOf(sx to ay, mx to ay, mx to by, tx to by)
+                    }
+                })
             }
             val wps = edge.waypoints
             ArrayList(wps).forEach { wps.remove(it) }
@@ -241,6 +267,24 @@ object BpmnLayout {
             top += bounds.height + ROW / 2
         }
     }
+
+    internal fun simplify(points: List<Pair<Double, Double>>): List<Pair<Double, Double>> {
+        val distinct = ArrayList<Pair<Double, Double>>()
+        for (p in points) if (distinct.isEmpty() || !near(distinct.last(), p)) distinct += p
+        val kept = ArrayList<Pair<Double, Double>>()
+        for (p in distinct) {
+            while (kept.size >= 2 && collinear(kept[kept.size - 2], kept.last(), p)) kept.removeAt(kept.lastIndex)
+            kept += p
+        }
+        return kept
+    }
+
+    private fun near(a: Pair<Double, Double>, b: Pair<Double, Double>) =
+        abs(a.first - b.first) < 1e-6 && abs(a.second - b.second) < 1e-6
+
+    private fun collinear(a: Pair<Double, Double>, b: Pair<Double, Double>, c: Pair<Double, Double>) =
+        (abs(a.first - b.first) < 1e-6 && abs(b.first - c.first) < 1e-6) ||
+            (abs(a.second - b.second) < 1e-6 && abs(b.second - c.second) < 1e-6)
 
     private fun translateContents(
         container: SubProcess,

@@ -202,4 +202,63 @@ class BpmnLayoutTest {
         val record = process.serviceTasks.single { it.topic.startsWith("timeout_") }
         assertTrue(all.getValue(record.id).bounds.x > scope.x + scope.width, "record task should follow the timeout scope")
     }
+
+    private fun crossings(process: CompiledProcess): List<String> {
+        val all = mainShapes(process)
+        val flows = process.model.getModelElementById<Process>(process.key)
+            .getChildElementsByType(SequenceFlow::class.java)
+        val edges = process.model.getModelElementsByType(BpmnEdge::class.java).associateBy { it.bpmnElement.id }
+        val hits = ArrayList<String>()
+        for (flow in flows) {
+            val points = edges[flow.id]?.waypoints?.toList() ?: continue
+            for ((id, shape) in all) {
+                if (id == flow.source.id || id == flow.target.id) continue
+                if (shape.bpmnElement is BoundaryEvent) continue
+                val b = shape.bounds
+                for (k in 0 until points.size - 1) {
+                    val p = points[k]
+                    val q = points[k + 1]
+                    val x0 = minOf(p.x, q.x); val x1 = maxOf(p.x, q.x)
+                    val y0 = minOf(p.y, q.y); val y1 = maxOf(p.y, q.y)
+                    if (x0 < b.x + b.width && x1 > b.x && y0 < b.y + b.height && y1 > b.y) {
+                        hits += "${flow.id} crosses $id"
+                        break
+                    }
+                }
+            }
+        }
+        return hits
+    }
+
+    @Test
+    fun skippedBranchRoutesAroundTheTakenBranch() {
+        val wf = workflow<LayoutItem>("skip") {
+            input(emptyList())
+            task("check") { }
+            condition({ it.n > 0 }) { task("update") { } }
+        }
+        val process = BpmnCompiler.compile(wf)[0]
+        assertEquals(emptyList(), crossings(process))
+        val shapes = mainShapes(process)
+        fun center(match: (String) -> Boolean) = shapes.entries.first { match(it.key) }.value.bounds.let { it.y + it.height / 2 }
+        assertTrue(kotlin.math.abs(center { it.contains("update") } - center { it == "start" }) < 1.0, "taken branch should stay on the spine")
+    }
+
+    @Test
+    fun noEdgeCrossesAShapeInAMixedWorkflow() {
+        val wf = workflow<LayoutItem>("mix-edges") {
+            input(emptyList())
+            condition({ it.n > 0 }) {
+                task("hi1") { }
+                task("hi2") { }
+                task("hi3") { }
+            } otherwise { task("lo") { } }
+            condition({ it.n > 1 }) { task("only") { } }
+            parallel {
+                branch { task("p1") { }; task("p2") { } }
+                branch { task("p3") { } }
+            }
+        }
+        assertEquals(emptyList(), crossings(BpmnCompiler.compile(wf)[0]))
+    }
 }
