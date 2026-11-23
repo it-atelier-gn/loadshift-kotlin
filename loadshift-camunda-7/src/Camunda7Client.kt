@@ -40,7 +40,7 @@ class Camunda7Client internal constructor(
     credentials: BasicCredentials?,
     private val engine: HttpClientEngine,
     private val tenantId: String? = null,
-) {
+) : Camunda7Api {
     constructor(
         base: String = "http://localhost:8080/engine-rest",
         credentials: BasicCredentials? = null,
@@ -61,7 +61,7 @@ class Camunda7Client internal constructor(
         }
     }
 
-    suspend fun deploy(name: String, resources: List<Pair<String, ByteArray>>): DeploymentDto {
+    override suspend fun deploy(name: String, resources: List<Pair<String, ByteArray>>): DeploymentDto {
         val response = http.post("$base/deployment/create") {
             setBody(
                 MultiPartFormDataContent(
@@ -88,7 +88,7 @@ class Camunda7Client internal constructor(
         return response.body()
     }
 
-    suspend fun startInstance(
+    override suspend fun startInstance(
         processDefinitionKey: String,
         variables: Map<String, CamundaValue>,
         businessKey: String?,
@@ -99,7 +99,7 @@ class Camunda7Client internal constructor(
         return response.body()
     }
 
-    suspend fun processInstances(processDefinitionKey: String, firstResult: Int, maxResults: Int): List<ProcessInstanceDto> {
+    override suspend fun processInstances(processDefinitionKey: String, firstResult: Int, maxResults: Int): List<ProcessInstanceDto> {
         val response = http.get("$base/process-instance") {
             parameter("processDefinitionKey", processDefinitionKey)
             tenantId?.let { parameter("tenantIdIn", it) }
@@ -112,7 +112,7 @@ class Camunda7Client internal constructor(
         return response.body()
     }
 
-    suspend fun variableInstances(variableName: String, processInstanceIds: List<String>): List<VariableInstanceDto> {
+    override suspend fun variableInstances(variableName: String, processInstanceIds: List<String>): List<VariableInstanceDto> {
         if (processInstanceIds.isEmpty()) return emptyList()
         val response = http.post("$base/variable-instance") {
             parameter("maxResults", processInstanceIds.size)
@@ -124,35 +124,35 @@ class Camunda7Client internal constructor(
         return response.body()
     }
 
-    suspend fun fetchAndLock(request: FetchAndLockRequest): List<ExternalTaskDto> {
+    override suspend fun fetchAndLock(request: FetchAndLockRequest): List<ExternalTaskDto> {
         val scoped = tenantId?.let { tenant -> request.copy(topics = request.topics.map { it.copy(tenantIdIn = listOf(tenant)) }) }
         val response = postJson("$base/external-task/fetchAndLock", scoped ?: request)
         response.ensureSuccess("fetchAndLock")
         return response.body()
     }
 
-    suspend fun complete(taskId: String, request: CompleteRequest) {
+    override suspend fun complete(taskId: String, request: CompleteRequest) {
         postJson("$base/external-task/$taskId/complete", request).ensureSuccess("complete")
     }
 
-    suspend fun failure(taskId: String, request: FailureRequest) {
+    override suspend fun failure(taskId: String, request: FailureRequest) {
         postJson("$base/external-task/$taskId/failure", request).ensureSuccess("failure")
     }
 
-    suspend fun bpmnError(taskId: String, request: BpmnErrorRequest) {
+    override suspend fun bpmnError(taskId: String, request: BpmnErrorRequest) {
         postJson("$base/external-task/$taskId/bpmnError", request).ensureSuccess("bpmnError")
     }
 
-    suspend fun unlock(taskId: String) {
+    override suspend fun unlock(taskId: String) {
         val response = http.post("$base/external-task/$taskId/unlock")
         if (response.status != HttpStatusCode.NotFound) response.ensureSuccess("unlock")
     }
 
-    suspend fun extendLock(taskId: String, request: ExtendLockRequest) {
+    override suspend fun extendLock(taskId: String, request: ExtendLockRequest) {
         postJson("$base/external-task/$taskId/extendLock", request).ensureSuccess("extendLock")
     }
 
-    suspend fun processInstanceCount(processDefinitionKey: String): Long {
+    override suspend fun processInstanceCount(processDefinitionKey: String): Long {
         val response = http.get("$base/process-instance/count") {
             parameter("processDefinitionKey", processDefinitionKey)
             tenantId?.let { parameter("tenantIdIn", it) }
@@ -161,7 +161,7 @@ class Camunda7Client internal constructor(
         return response.body<CountDto>().count
     }
 
-    suspend fun historicProcessInstances(processInstanceIds: List<String>): List<HistoricProcessInstanceDto> {
+    override suspend fun historicProcessInstances(processInstanceIds: List<String>): List<HistoricProcessInstanceDto> {
         if (processInstanceIds.isEmpty()) return emptyList()
         val response = http.post("$base/history/process-instance") {
             parameter("maxResults", processInstanceIds.size)
@@ -172,20 +172,20 @@ class Camunda7Client internal constructor(
         return response.body()
     }
 
-    suspend fun deleteProcessInstance(processInstanceId: String) {
+    override suspend fun deleteProcessInstance(processInstanceId: String) {
         val response = http.delete("$base/process-instance/$processInstanceId") {
             parameter("skipCustomListeners", true)
         }
         if (response.status != HttpStatusCode.NotFound) response.ensureSuccess("delete process instance")
     }
 
-    suspend fun correlateMessage(request: MessageRequest): Int {
+    override suspend fun correlateMessage(request: MessageRequest): Int {
         val response = postJson("$base/message", tenantId?.let { request.copy(tenantId = it) } ?: request)
         if (!response.status.isSuccess()) return 0
         return if (request.resultEnabled) response.body<JsonArray>().size else 1
     }
 
-    suspend fun tasks(processDefinitionKey: String, firstResult: Int, maxResults: Int): List<TaskDto> {
+    override suspend fun tasks(processDefinitionKey: String, firstResult: Int, maxResults: Int): List<TaskDto> {
         val response = http.get("$base/task") {
             parameter("processDefinitionKey", processDefinitionKey)
             tenantId?.let { parameter("tenantIdIn", it) }
@@ -198,21 +198,21 @@ class Camunda7Client internal constructor(
         return response.body()
     }
 
-    suspend fun task(taskId: String): TaskDto? {
+    override suspend fun task(taskId: String): TaskDto? {
         val response = http.get("$base/task/$taskId")
         if (response.status == HttpStatusCode.NotFound) return null
         response.ensureSuccess("task")
         return response.body()
     }
 
-    suspend fun completeTask(taskId: String, variables: Map<String, CamundaValue>): Boolean {
+    override suspend fun completeTask(taskId: String, variables: Map<String, CamundaValue>): Boolean {
         val response = postJson("$base/task/$taskId/complete", CompleteTaskRequest(variables))
         if (response.status == HttpStatusCode.NotFound) return false
         response.ensureSuccess("complete task")
         return true
     }
 
-    suspend fun latestProcessDefinition(processDefinitionKey: String): ProcessDefinitionDto? {
+    override suspend fun latestProcessDefinition(processDefinitionKey: String): ProcessDefinitionDto? {
         val response = http.get("$base/process-definition") {
             parameter("key", processDefinitionKey)
             parameter("latestVersion", true)
@@ -222,7 +222,7 @@ class Camunda7Client internal constructor(
         return response.body<List<ProcessDefinitionDto>>().firstOrNull()
     }
 
-    suspend fun generateMigration(sourceProcessDefinitionId: String, targetProcessDefinitionId: String): JsonObject {
+    override suspend fun generateMigration(sourceProcessDefinitionId: String, targetProcessDefinitionId: String): JsonObject {
         val response = postJson(
             "$base/migration/generate",
             MigrationGenerateRequest(sourceProcessDefinitionId, targetProcessDefinitionId),
@@ -231,15 +231,15 @@ class Camunda7Client internal constructor(
         return response.body()
     }
 
-    suspend fun executeMigration(plan: JsonObject, processInstanceIds: List<String>) {
+    override suspend fun executeMigration(plan: JsonObject, processInstanceIds: List<String>) {
         postJson("$base/migration/execute", MigrationExecuteRequest(plan, processInstanceIds)).ensureSuccess("execute migration")
     }
 
-    suspend fun signal(name: String) {
+    override suspend fun signal(name: String) {
         postJson("$base/signal", SignalRequest(name, tenantId)).ensureSuccess("signal")
     }
 
-    fun close() {
+    override fun close() {
         http.close()
         engine.close()
     }

@@ -32,7 +32,7 @@ class Camunda7Backend(
     credentials: BasicCredentials? = null,
     tenantId: String? = null,
     registry: RunRegistry? = null,
-    private val client: Camunda7Client = Camunda7Client(base, credentials, tenantId),
+    private val client: Camunda7Api = Camunda7Client(base, credentials, tenantId),
 ) : EngineBackend {
 
     override val control = RunTracker("camunda7", registry = registry)

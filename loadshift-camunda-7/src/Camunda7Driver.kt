@@ -12,7 +12,7 @@ import kotlin.time.Duration
 
 @OptIn(EngineApi::class)
 internal class Camunda7Driver(
-    private val client: Camunda7Client,
+    private val client: Camunda7Api,
     private val workerId: String,
 ) : EngineDriver {
 
