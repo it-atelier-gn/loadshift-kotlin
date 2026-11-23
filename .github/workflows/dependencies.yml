@@ -5,9 +5,16 @@ on:
     - cron: "0 6 * * 1"
   workflow_dispatch:
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TITLE: Dependency updates available
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
@@ -15,6 +22,34 @@ jobs:
           distribution: temurin
           java-version: '25'
       - name: Check library and toolchain versions
+        id: check
         run: |
           chmod +x ./kotlin
-          ./kotlin run -m deps -- check
+          set +e
+          ./kotlin run -m deps -- check > report.txt
+          code=$?
+          set -e
+          cat report.txt
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -ge 2 ]; then exit "$code"; fi
+      - name: Track updates in an issue
+        run: |
+          existing=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number,title --jq ".[] | select(.title == \"$TITLE\") | .number" | head -n 1)
+          if [ "${{ steps.check.outputs.code }}" = "1" ]; then
+            {
+              echo "The weekly check found newer stable versions."
+              echo
+              echo '```'
+              grep -E "^dependency|update available" report.txt
+              echo '```'
+              echo
+              echo "Run \`./kotlin run -m deps\` for the full list."
+            } > body.md
+            if [ -n "$existing" ]; then
+              gh issue edit "$existing" --body-file body.md
+            else
+              gh issue create --title "$TITLE" --body-file body.md
+            fi
+          elif [ -n "$existing" ]; then
+            gh issue close "$existing" --comment "All dependencies are up to date."
+          fi

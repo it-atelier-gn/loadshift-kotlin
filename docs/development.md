@@ -58,7 +58,7 @@ The command uses Podman when it is installed and Docker otherwise. Run it from t
 | `./kotlin run -m deps` | Lists the libraries of `libs.versions.toml` and the Kotlin Toolchain with their latest stable versions |
 | `./kotlin run -m deps -- check` | Same; exits with `1` when an update is available and `2` when a lookup failed |
 
-The [Dependencies](../.github/workflows/dependencies.yml) workflow runs the check every Monday.
+The [Dependencies](../.github/workflows/dependencies.yml) workflow runs the check every Monday. When updates are available it opens the issue "Dependency updates available", or refreshes its list if the issue is already open, and closes it once everything is up to date. The run fails only when a lookup fails.
 
 ## Publishing
 

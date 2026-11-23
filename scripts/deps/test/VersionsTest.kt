@@ -68,4 +68,11 @@ class VersionsTest {
         assertEquals("0.12.1", wrapperVersion("#!/bin/sh\nkotlin_cli_version=0.12.1\n"))
         assertEquals("0.12.1", releaseTag("""{"url":"x","tag_name":"v0.12.1","name":"0.12.1"}"""))
     }
+
+    @Test
+    fun treatsFinalReleasesAsStable() {
+        assertEquals("4.2.21.Final", latestStable(listOf("4.2.18.Final", "4.2.21.Final", "4.2.22.Final-SNAPSHOT", "5.0.0.Alpha2")))
+        assertTrue(isOutdated("4.2.18.Final", "4.2.21.Final"))
+        assertFalse(isOutdated("4.2.21.Final", "4.2.21.Final"))
+    }
 }

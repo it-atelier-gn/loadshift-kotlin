@@ -8,6 +8,7 @@ private val LIBRARY_ENTRY =
     Regex("""^\s*([A-Za-z0-9_.-]+)\s*=\s*\{\s*module\s*=\s*"([^":]+):([^"]+)"\s*,\s*version\.ref\s*=\s*"([^"]+)"\s*}\s*$""")
 private val STABLE = Regex("""^\d+(\.\d+)*$""")
 private val NUMERIC_PREFIX = Regex("""^\d+(\.\d+)*""")
+private val FINAL_SUFFIX = Regex("""[.-]final$""", RegexOption.IGNORE_CASE)
 private val METADATA_VERSION = Regex("""<version>\s*([^<\s]+)\s*</version>""")
 private val WRAPPER_VERSION = Regex("""(?m)^kotlin_cli_version=([A-Za-z0-9._+-]+)\s*$""")
 private val RELEASE_TAG = Regex(""""tag_name"\s*:\s*"v?([^"]+)"""")
@@ -33,9 +34,11 @@ fun parseCatalog(text: String): List<Library> {
     }
 }
 
+private fun release(version: String): String = version.replace(FINAL_SUFFIX, "")
+
 fun compareVersions(a: String, b: String): Int {
-    val left = a.split('.').map { it.toInt() }
-    val right = b.split('.').map { it.toInt() }
+    val left = release(a).split('.').map { it.toInt() }
+    val right = release(b).split('.').map { it.toInt() }
     for (index in 0 until maxOf(left.size, right.size)) {
         val difference = left.getOrElse(index) { 0 }.compareTo(right.getOrElse(index) { 0 })
         if (difference != 0) return difference
@@ -43,7 +46,7 @@ fun compareVersions(a: String, b: String): Int {
     return 0
 }
 
-fun isStable(version: String): Boolean = STABLE.matches(version)
+fun isStable(version: String): Boolean = STABLE.matches(release(version))
 
 fun latestStable(versions: Collection<String>): String? =
     versions.filter(::isStable).maxWithOrNull(::compareVersions)
