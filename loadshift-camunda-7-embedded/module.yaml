@@ -1,0 +1,24 @@
+description: Embedded CIB seven engine for loadshift workflows, without a REST connection
+product: jvm/lib
+
+apply:
+  - ../templates/library.module-template.yaml
+
+settings:
+  kotlin:
+    serialization: enabled
+
+dependencies:
+  - ../loadshift-camunda-7:
+      exported: true
+  - ../loadshift-core
+  - $libs.kotlinx.coroutines.core
+  - $libs.kotlinx.serialization.json
+  - $libs.cibseven.engine:
+      exported: true
+  - $libs.cibseven.engine.plugin.spin
+  - $libs.cibseven.spin.dataformat.json.jackson
+  - $libs.h2
+
+test-dependencies:
+  - $libs.kotlinx.coroutines.test

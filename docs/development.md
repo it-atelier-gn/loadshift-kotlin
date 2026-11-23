@@ -4,14 +4,14 @@
 
 | Suite | Container image | Variable for another image | Variable for an engine that is already running |
 | --- | --- | --- | --- |
-| `CibSevenE2eTest` | `cibseven/cibseven:run-2.2.0` | `LOADSHIFT_CIB7_IMAGE` | `LOADSHIFT_CIB7_BASE=http://localhost:8080/engine-rest` |
+| `CibSevenE2eTest` | `cibseven/cibseven:run-3.0.0` | `LOADSHIFT_CIB7_IMAGE` | `LOADSHIFT_CIB7_BASE=http://localhost:8080/engine-rest` |
 | `Camunda8E2eTest` | `camunda/camunda:8.9.19` with H2 secondary storage | `LOADSHIFT_C8_IMAGE` | `LOADSHIFT_C8_BASE=http://localhost:8080` |
 
 Without Docker and without the base variable, a suite is reported as skipped. The workflow `Engine versions` runs the suites against these engine releases:
 
 | Engine | Images |
 | --- | --- |
-| CIB seven | `cibseven/cibseven:run-2.1.0`, `run-2.2.0` |
+| CIB seven | `cibseven/cibseven:run-2.2.0`, `run-3.0.0` |
 | Camunda 8 | `camunda/camunda:8.9.19` |
 
 ## Load tests
@@ -67,7 +67,7 @@ To try local changes in another project, publish the library modules to the loca
 ```sh
 ./kotlin publish mavenLocal \
   -m loadshift-core -m loadshift-local \
-  -m loadshift-camunda-7 -m loadshift-camunda-8 -m loadshift-camunda-8-stream \
+  -m loadshift-camunda-7 -m loadshift-camunda-7-embedded -m loadshift-camunda-8 -m loadshift-camunda-8-stream \
   -m loadshift-web -m loadshift-sqlite -m loadshift-otel -m loadshift-micrometer
 ```
 

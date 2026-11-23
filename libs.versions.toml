@@ -11,6 +11,8 @@ sqlite-jdbc = "3.54.1.0"
 camunda-bpmn-model = "7.24.0"
 jackson = "2.23.0"
 netty = "4.2.21.Final"
+cibseven = "3.0.0"
+h2 = "2.5.252"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
@@ -44,3 +46,7 @@ netty-codec-http = { module = "io.netty:netty-codec-http", version.ref = "netty"
 netty-codec-http2 = { module = "io.netty:netty-codec-http2", version.ref = "netty" }
 netty-codec-socks = { module = "io.netty:netty-codec-socks", version.ref = "netty" }
 netty-handler-proxy = { module = "io.netty:netty-handler-proxy", version.ref = "netty" }
+cibseven-engine = { module = "org.cibseven.bpm:cibseven-engine", version.ref = "cibseven" }
+cibseven-engine-plugin-spin = { module = "org.cibseven.bpm:cibseven-engine-plugin-spin", version.ref = "cibseven" }
+cibseven-spin-dataformat-json-jackson = { module = "org.cibseven.spin:cibseven-spin-dataformat-json-jackson", version.ref = "cibseven" }
+h2 = { module = "com.h2database:h2", version.ref = "h2" }

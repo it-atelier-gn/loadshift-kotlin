@@ -55,7 +55,7 @@ fun main(args: Array<String>) {
     container("rm", "-f", name)
 
     val (runCode, runOutput) = if (engine == "cib7") {
-        container("run", "-d", "--name", name, "-p", "$port:8080", "cibseven/cibseven:run-2.2.0")
+        container("run", "-d", "--name", name, "-p", "$port:8080", "cibseven/cibseven:run-3.0.0")
     } else {
         val config = Paths.get("scripts/engine/c8-application.yaml").toAbsolutePath()
         if (!Files.exists(config)) {

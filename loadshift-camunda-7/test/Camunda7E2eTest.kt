@@ -84,7 +84,7 @@ internal class Camunda7Engine(private val image: String, private val baseVariabl
 }
 
 private val cibSeven = Camunda7Engine(
-    System.getenv("LOADSHIFT_CIB7_IMAGE") ?: "cibseven/cibseven:run-2.2.0",
+    System.getenv("LOADSHIFT_CIB7_IMAGE") ?: "cibseven/cibseven:run-3.0.0",
     "LOADSHIFT_CIB7_BASE",
 )
 

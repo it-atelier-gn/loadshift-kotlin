@@ -18,11 +18,11 @@ jobs:
           - module: loadshift-camunda-7
             suite: loadshift.camunda7.CibSevenE2eTest
             variable: LOADSHIFT_CIB7_IMAGE
-            image: cibseven/cibseven:run-2.1.0
+            image: cibseven/cibseven:run-2.2.0
           - module: loadshift-camunda-7
             suite: loadshift.camunda7.CibSevenE2eTest
             variable: LOADSHIFT_CIB7_IMAGE
-            image: cibseven/cibseven:run-2.2.0
+            image: cibseven/cibseven:run-3.0.0
           - module: loadshift-camunda-8
             suite: loadshift.camunda8.Camunda8E2eTest
             variable: LOADSHIFT_C8_IMAGE

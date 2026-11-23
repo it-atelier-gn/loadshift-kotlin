@@ -21,6 +21,7 @@ Full examples and reference: **[it-atelier-gn.github.io/loadshift-kotlin](https:
 | `loadshift-core` | The DSL, run configuration, the `Backend` API and the BPMN compiler |
 | `loadshift-local` | `LocalBackend`, which runs workflows in-process |
 | `loadshift-camunda-7` | `Camunda7Backend` for Camunda 7 and CIB seven, working external tasks over the REST API |
+| `loadshift-camunda-7-embedded` | `EmbeddedCamunda7`, a CIB seven engine inside your application that `Camunda7Backend` works without a REST connection, see [Embedded engine](docs/engines.md#embedded-engine) |
 | `loadshift-camunda-8` | `Camunda8Backend` for Camunda 8, working jobs over the REST API |
 | `loadshift-camunda-8-stream` | `CamundaJobStream`, which lets `Camunda8Backend` receive jobs the engine pushes over gRPC, see [Job streaming](docs/engines.md#job-streaming-on-camunda-8) |
 | `loadshift-web` | `ControlServer`, a web console and JSON API for the runs of a backend |
@@ -35,7 +36,8 @@ Full examples and reference: **[it-atelier-gn.github.io/loadshift-kotlin](https:
 | Engine | Backend | Image used by the end-to-end tests |
 | --- | --- | --- |
 | Camunda 7 | `Camunda7Backend` | not covered by the end-to-end tests |
-| CIB seven | `Camunda7Backend` | `cibseven/cibseven:run-2.2.0` |
+| CIB seven | `Camunda7Backend` | `cibseven/cibseven:run-3.0.0` |
+| CIB seven, embedded | `EmbeddedCamunda7(...).backend()` | none, the engine runs inside the tests |
 | Camunda 8 | `Camunda8Backend` | `camunda/camunda:8.9.19` |
 
 | Engine | Requirement |
@@ -59,6 +61,7 @@ dependencies {
     implementation("io.github.it-atelier-gn:loadshift-core:$loadshiftVersion")
     implementation("io.github.it-atelier-gn:loadshift-local:$loadshiftVersion")
     implementation("io.github.it-atelier-gn:loadshift-camunda-7:$loadshiftVersion")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-7-embedded:$loadshiftVersion")
     implementation("io.github.it-atelier-gn:loadshift-camunda-8:$loadshiftVersion")
     implementation("io.github.it-atelier-gn:loadshift-camunda-8-stream:$loadshiftVersion")
     implementation("io.github.it-atelier-gn:loadshift-web:$loadshiftVersion")
@@ -79,6 +82,7 @@ dependencies {
     implementation "io.github.it-atelier-gn:loadshift-core:$loadshiftVersion"
     implementation "io.github.it-atelier-gn:loadshift-local:$loadshiftVersion"
     implementation "io.github.it-atelier-gn:loadshift-camunda-7:$loadshiftVersion"
+    implementation "io.github.it-atelier-gn:loadshift-camunda-7-embedded:$loadshiftVersion"
     implementation "io.github.it-atelier-gn:loadshift-camunda-8:$loadshiftVersion"
     implementation "io.github.it-atelier-gn:loadshift-camunda-8-stream:$loadshiftVersion"
     implementation "io.github.it-atelier-gn:loadshift-web:$loadshiftVersion"
@@ -110,6 +114,11 @@ dependencies {
 <dependency>
     <groupId>io.github.it-atelier-gn</groupId>
     <artifactId>loadshift-camunda-7</artifactId>
+    <version>${loadshift.version}</version>
+</dependency>
+<dependency>
+    <groupId>io.github.it-atelier-gn</groupId>
+    <artifactId>loadshift-camunda-7-embedded</artifactId>
     <version>${loadshift.version}</version>
 </dependency>
 <dependency>

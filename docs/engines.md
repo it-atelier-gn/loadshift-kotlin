@@ -82,9 +82,36 @@ With client credentials, the client caches the access token until 30 seconds bef
 | Engine | Configuration |
 | --- | --- |
 | Camunda 7, CIB seven | `Camunda7Backend(base, tenantId = "acme")` |
+| CIB seven, embedded | `EmbeddedCamunda7(tenantId = "acme").backend()` |
 | Camunda 8 | `Camunda8Backend(base, auth, tenantId = "acme")` |
 
 With `tenantId`, the backend deploys the processes to the tenant, starts instances in it, works only jobs of the tenant, correlates messages within it and searches only its instances. Camunda 8 accepts a tenant other than `<default>` when multi-tenancy is enabled and the client is authorized for that tenant.
+
+## Embedded engine
+
+`loadshift-camunda-7-embedded` starts a CIB seven engine inside your application. `Camunda7Backend` works it through the engine's Java API, so no server and no REST connection are needed. Everything `Camunda7Backend` offers over REST works the same way: runs, schedules, messages, signals, user tasks, migration and tenants.
+
+```kotlin
+EmbeddedCamunda7().use { engine ->
+    val result = engine.backend().run(fulfilment).await()
+}
+```
+
+| Constructor | Engine |
+| --- | --- |
+| `EmbeddedCamunda7()` | A new engine on an in-memory H2 database that lives as long as the engine |
+| `EmbeddedCamunda7(EmbeddedDatabase(jdbcUrl, username, password, driver))` | A new engine on the given database; the schema is created or updated on start |
+| `EmbeddedCamunda7(processEngine)` | An engine your application already built; `close()` leaves it running |
+
+| Parameter | Effect |
+| --- | --- |
+| `tenantId` | Deploys, starts, works and correlates within the tenant |
+| `jobExecutor` | `false` starts the engine without its job executor, so timers and retries with a backoff wait for another engine on the same database |
+| `configure` | Receives the `ProcessEngineConfigurationImpl` before the engine is built |
+
+The engine is CIB seven 3.0 and creates the database schema of CIB seven 3.0. Engines on the same database share deployments, instances and jobs, so a worker on one engine can take over runs started on another. For a database other than H2, add its JDBC driver to your application and pass the driver class name to `EmbeddedDatabase`.
+
+`processEngine` gives access to the CIB seven services, such as `runtimeService` and `historyService`.
 
 ## Process variables
 
