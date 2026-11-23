@@ -12,12 +12,14 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import loadshift.core.EngineApi
 import java.util.Collections
+import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 @OptIn(EngineApi::class)
 class Camunda8JobStreamTest {
@@ -88,6 +90,32 @@ class Camunda8JobStreamTest {
         assertEquals(setOf("wf/a", "wf/b"), stream.closed.toSet())
         assertEquals(listOf("3"), released.toList())
         assertTrue(driver.fetch(listOf("wf/a"), 5, 30.seconds, 20.milliseconds).isEmpty())
+    }
+
+    @Test
+    fun noStreamedJobIsLostWhenItArrivesAsTheFetchWaitRunsOut() = runBlocking {
+        val released = Collections.synchronizedList(mutableListOf<String>())
+        val stream = FakeStream()
+        val driver = Camunda8Driver(Camunda8Client("http://engine", Camunda8Auth.None, engine(released) { "[]" }), "worker", stream)
+        driver.fetch(listOf("wf/a"), 5, 30.seconds, 10.milliseconds)
+
+        val total = 300
+        val pusher = thread {
+            repeat(total) { i ->
+                Thread.sleep(if (i % 2 == 0) 10 else 9)
+                stream.push("wf/a", "$i")
+            }
+        }
+        val fetched = mutableListOf<String>()
+        val deadline = TimeSource.Monotonic.markNow() + 20.seconds
+        while (fetched.size < total && deadline.hasNotPassedNow()) {
+            driver.fetch(listOf("wf/a"), 5, 30.seconds, 10.milliseconds).mapTo(fetched) { it.id }
+        }
+        pusher.join()
+        driver.close()
+
+        assertEquals((0 until total).map { "$it" }.toSet(), (fetched + released).toSet())
+        assertEquals(total, fetched.size + released.size)
     }
 
     @Test

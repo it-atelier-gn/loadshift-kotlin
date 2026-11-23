@@ -1,9 +1,10 @@
 package loadshift.camunda8
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.selects.onTimeout
 import kotlinx.coroutines.selects.select
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import java.util.concurrent.ConcurrentHashMap
@@ -20,7 +21,7 @@ import loadshift.core.EngineNames
 import loadshift.core.RootInstance
 import kotlin.time.Duration
 
-@OptIn(EngineApi::class)
+@OptIn(EngineApi::class, ExperimentalCoroutinesApi::class)
 internal class Camunda8Driver(
     private val client: Camunda8Client,
     private val workerId: String,
@@ -70,8 +71,9 @@ internal class Camunda8Driver(
         }
         drain(channels, maxJobs).takeIf { it.isNotEmpty() }?.let { return it }
         activate(jobTypes, maxJobs, lock, Duration.ZERO).takeIf { it.isNotEmpty() }?.let { return it }
-        val first = withTimeoutOrNull(wait.coerceAtLeast(MIN_STREAM_WAIT)) {
-            select<EngineJob> { channels.forEach { channel -> channel.onReceive { it } } }
+        val first = select<EngineJob?> {
+            channels.forEach { channel -> channel.onReceive { it } }
+            onTimeout(wait.coerceAtLeast(MIN_STREAM_WAIT)) { null }
         } ?: return emptyList()
         return listOf(first) + drain(channels, maxJobs - 1)
     }

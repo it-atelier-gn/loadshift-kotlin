@@ -1,12 +1,14 @@
 package loadshift.core
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.selects.onTimeout
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -33,7 +35,7 @@ private data class RunnerItem(var id: String) : WorkItem {
     override val key get() = id
 }
 
-@OptIn(EngineApi::class)
+@OptIn(EngineApi::class, ExperimentalCoroutinesApi::class)
 private class FakeDriver : EngineDriver {
     class Failure(val jobId: String, val retries: Int, val backoff: Duration)
 
@@ -83,7 +85,10 @@ private class FakeDriver : EngineDriver {
             return held.await()
         }
         val source = if (jobTypes.any { it.endsWith("/${EngineNames.SCHEDULE_NEXT}") }) scheduleJobs else jobs
-        val first = withTimeoutOrNull(wait.coerceAtLeast(10.milliseconds)) { source.receive() } ?: return emptyList()
+        val first = select<EngineJob?> {
+            source.onReceive { it }
+            onTimeout(wait.coerceAtLeast(10.milliseconds)) { null }
+        } ?: return emptyList()
         val batch = mutableListOf(first)
         while (batch.size < maxJobs) batch += source.tryReceive().getOrNull() ?: break
         return batch
