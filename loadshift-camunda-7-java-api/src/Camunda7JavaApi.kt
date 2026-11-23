@@ -1,4 +1,4 @@
-package loadshift.camunda7.embedded
+package loadshift.camunda7.javaapi
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -26,51 +26,22 @@ import loadshift.camunda7.StartInstanceResponse
 import loadshift.camunda7.TaskDto
 import loadshift.camunda7.VariableInstanceDto
 import loadshift.core.RunRegistry
-import org.cibseven.bpm.engine.ProcessEngine
-import org.cibseven.bpm.engine.ProcessEngineException
-import org.cibseven.bpm.engine.exception.NotFoundException
-import org.cibseven.bpm.engine.impl.cfg.ProcessEngineConfigurationImpl
-import org.cibseven.bpm.engine.impl.cfg.StandaloneProcessEngineConfiguration
-import org.cibseven.bpm.engine.impl.jobexecutor.DefaultJobExecutor
-import org.cibseven.bpm.engine.variable.VariableMap
-import org.cibseven.bpm.engine.variable.Variables
-import org.cibseven.bpm.engine.variable.value.SerializableValue
-import org.cibseven.bpm.engine.variable.value.TypedValue
-import org.cibseven.spin.plugin.impl.SpinProcessEnginePlugin
-import org.cibseven.spin.plugin.variable.SpinValues
+import org.camunda.bpm.engine.ProcessEngine
+import org.camunda.bpm.engine.ProcessEngineException
+import org.camunda.bpm.engine.exception.NotFoundException
+import org.camunda.bpm.engine.variable.VariableMap
+import org.camunda.bpm.engine.variable.Variables
+import org.camunda.bpm.engine.variable.value.SerializableValue
+import org.camunda.bpm.engine.variable.value.TypedValue
+import org.camunda.spin.plugin.variable.SpinValues
 import java.io.ByteArrayInputStream
-import java.util.UUID
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.TimeSource
 
-class EmbeddedDatabase(
-    val jdbcUrl: String,
-    val username: String = "sa",
-    val password: String = "",
-    val driver: String = "org.h2.Driver",
-) {
-    override fun toString(): String = "EmbeddedDatabase(jdbcUrl=$jdbcUrl, username=$username)"
-
-    companion object {
-        fun inMemory(name: String = "loadshift-${UUID.randomUUID()}"): EmbeddedDatabase =
-            EmbeddedDatabase("jdbc:h2:mem:$name;DB_CLOSE_DELAY=-1")
-    }
-}
-
-class EmbeddedCamunda7 private constructor(
+class Camunda7JavaApi(
     val processEngine: ProcessEngine,
-    private val tenantId: String?,
-    private val ownsEngine: Boolean,
-) : Camunda7Api, AutoCloseable {
-
-    constructor(processEngine: ProcessEngine, tenantId: String? = null) : this(processEngine, tenantId, false)
-
-    constructor(
-        database: EmbeddedDatabase = EmbeddedDatabase.inMemory(),
-        tenantId: String? = null,
-        jobExecutor: Boolean = true,
-        configure: (ProcessEngineConfigurationImpl) -> Unit = {},
-    ) : this(buildEngine(database, jobExecutor, configure), tenantId, true)
+    private val tenantId: String? = null,
+) : Camunda7Api {
 
     private val runtime = processEngine.runtimeService
     private val repository = processEngine.repositoryService
@@ -259,14 +230,12 @@ class EmbeddedCamunda7 private constructor(
         event.send()
     }
 
-    override fun close() {
-        if (ownsEngine) processEngine.close()
-    }
+    override fun close() {}
 
     private fun plan(source: String, target: String) =
         runtime.createMigrationPlan(source, target).mapEqualActivities().build()
 
-    private fun taskDto(task: org.cibseven.bpm.engine.task.Task) =
+    private fun taskDto(task: org.camunda.bpm.engine.task.Task) =
         TaskDto(task.id, task.name, task.assignee, task.taskDefinitionKey, task.processInstanceId, task.processDefinitionId)
 
     private suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { block() }
@@ -275,28 +244,6 @@ class EmbeddedCamunda7 private constructor(
         private const val SOURCE = "sourceProcessDefinitionId"
         private const val TARGET = "targetProcessDefinitionId"
         private val FETCH_POLL = 100.milliseconds
-
-        private fun buildEngine(
-            database: EmbeddedDatabase,
-            jobExecutor: Boolean,
-            configure: (ProcessEngineConfigurationImpl) -> Unit,
-        ): ProcessEngine {
-            val configuration = StandaloneProcessEngineConfiguration()
-            configuration.processEngineName = "loadshift-${UUID.randomUUID()}"
-            configuration.jdbcUrl = database.jdbcUrl
-            configuration.jdbcUsername = database.username
-            configuration.jdbcPassword = database.password
-            configuration.jdbcDriver = database.driver
-            configuration.databaseSchemaUpdate = ProcessEngineConfigurationImpl.DB_SCHEMA_UPDATE_TRUE
-            configuration.isJobExecutorActivate = jobExecutor
-            configuration.jobExecutor = DefaultJobExecutor().apply {
-                waitTimeInMillis = 200
-                maxWait = 1000
-            }
-            configuration.processEnginePlugins = mutableListOf(SpinProcessEnginePlugin())
-            configure(configuration)
-            return configuration.buildProcessEngine()
-        }
 
         internal fun toEngine(variables: Map<String, CamundaValue>): VariableMap {
             val map = Variables.createVariables()

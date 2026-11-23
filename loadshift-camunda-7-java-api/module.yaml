@@ -1,0 +1,27 @@
+description: Works a Camunda 7 engine in the same JVM through its Java API, without a REST connection
+product: jvm/lib
+
+apply:
+  - ../templates/library.module-template.yaml
+
+settings:
+  kotlin:
+    serialization: enabled
+
+dependencies:
+  - ../loadshift-camunda-7:
+      exported: true
+  - ../loadshift-core
+  - $libs.kotlinx.coroutines.core
+  - $libs.kotlinx.serialization.json
+  - $libs.camunda.engine:
+      scope: compile-only
+  - $libs.camunda.engine.plugin.spin:
+      scope: compile-only
+
+test-dependencies:
+  - $libs.kotlinx.coroutines.test
+  - $libs.camunda.engine
+  - $libs.camunda.engine.plugin.spin
+  - $libs.camunda.spin.dataformat.json.jackson
+  - $libs.h2

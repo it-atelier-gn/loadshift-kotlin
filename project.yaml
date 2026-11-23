@@ -1,9 +1,10 @@
 modules:
   - ./loadshift-bench
   - ./loadshift-camunda-7
-  - ./loadshift-camunda-7-embedded
+  - ./loadshift-camunda-7-java-api
   - ./loadshift-camunda-8
   - ./loadshift-camunda-8-stream
+  - ./loadshift-cibseven-java-api
   - ./loadshift-core
   - ./loadshift-demo
   - ./loadshift-local

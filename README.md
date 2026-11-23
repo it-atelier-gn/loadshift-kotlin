@@ -21,7 +21,8 @@ Full examples and reference: **[it-atelier-gn.github.io/loadshift-kotlin](https:
 | `loadshift-core` | The DSL, run configuration, the `Backend` API and the BPMN compiler |
 | `loadshift-local` | `LocalBackend`, which runs workflows in-process |
 | `loadshift-camunda-7` | `Camunda7Backend` for Camunda 7 and CIB seven, working external tasks over the REST API |
-| `loadshift-camunda-7-embedded` | `EmbeddedCamunda7`, a CIB seven engine inside your application that `Camunda7Backend` works without a REST connection, see [Embedded engine](docs/engines.md#embedded-engine) |
+| `loadshift-camunda-7-java-api` | `Camunda7JavaApi`, which lets `Camunda7Backend` work a Camunda 7 engine in the same JVM through its Java API, see [Engine in the same JVM](docs/engines.md#engine-in-the-same-jvm) |
+| `loadshift-cibseven-java-api` | `CibSevenJavaApi`, the same for a CIB seven engine in the same JVM |
 | `loadshift-camunda-8` | `Camunda8Backend` for Camunda 8, working jobs over the REST API |
 | `loadshift-camunda-8-stream` | `CamundaJobStream`, which lets `Camunda8Backend` receive jobs the engine pushes over gRPC, see [Job streaming](docs/engines.md#job-streaming-on-camunda-8) |
 | `loadshift-web` | `ControlServer`, a web console and JSON API for the runs of a backend |
@@ -37,7 +38,8 @@ Full examples and reference: **[it-atelier-gn.github.io/loadshift-kotlin](https:
 | --- | --- | --- |
 | Camunda 7 | `Camunda7Backend` | not covered by the end-to-end tests |
 | CIB seven | `Camunda7Backend` | `cibseven/cibseven:run-3.0.0` |
-| CIB seven, embedded | `EmbeddedCamunda7(...).backend()` | none, the engine runs inside the tests |
+| Camunda 7 in the same JVM | `Camunda7JavaApi(processEngine).backend()` | `camunda-engine` 7.24.0, started inside the tests |
+| CIB seven in the same JVM | `CibSevenJavaApi(processEngine).backend()` | `cibseven-engine` 3.0.0, started inside the tests |
 | Camunda 8 | `Camunda8Backend` | `camunda/camunda:8.9.19` |
 
 | Engine | Requirement |
@@ -61,7 +63,8 @@ dependencies {
     implementation("io.github.it-atelier-gn:loadshift-core:$loadshiftVersion")
     implementation("io.github.it-atelier-gn:loadshift-local:$loadshiftVersion")
     implementation("io.github.it-atelier-gn:loadshift-camunda-7:$loadshiftVersion")
-    implementation("io.github.it-atelier-gn:loadshift-camunda-7-embedded:$loadshiftVersion")
+    implementation("io.github.it-atelier-gn:loadshift-camunda-7-java-api:$loadshiftVersion")
+    implementation("io.github.it-atelier-gn:loadshift-cibseven-java-api:$loadshiftVersion")
     implementation("io.github.it-atelier-gn:loadshift-camunda-8:$loadshiftVersion")
     implementation("io.github.it-atelier-gn:loadshift-camunda-8-stream:$loadshiftVersion")
     implementation("io.github.it-atelier-gn:loadshift-web:$loadshiftVersion")
@@ -82,7 +85,8 @@ dependencies {
     implementation "io.github.it-atelier-gn:loadshift-core:$loadshiftVersion"
     implementation "io.github.it-atelier-gn:loadshift-local:$loadshiftVersion"
     implementation "io.github.it-atelier-gn:loadshift-camunda-7:$loadshiftVersion"
-    implementation "io.github.it-atelier-gn:loadshift-camunda-7-embedded:$loadshiftVersion"
+    implementation "io.github.it-atelier-gn:loadshift-camunda-7-java-api:$loadshiftVersion"
+    implementation "io.github.it-atelier-gn:loadshift-cibseven-java-api:$loadshiftVersion"
     implementation "io.github.it-atelier-gn:loadshift-camunda-8:$loadshiftVersion"
     implementation "io.github.it-atelier-gn:loadshift-camunda-8-stream:$loadshiftVersion"
     implementation "io.github.it-atelier-gn:loadshift-web:$loadshiftVersion"
@@ -118,7 +122,12 @@ dependencies {
 </dependency>
 <dependency>
     <groupId>io.github.it-atelier-gn</groupId>
-    <artifactId>loadshift-camunda-7-embedded</artifactId>
+    <artifactId>loadshift-camunda-7-java-api</artifactId>
+    <version>${loadshift.version}</version>
+</dependency>
+<dependency>
+    <groupId>io.github.it-atelier-gn</groupId>
+    <artifactId>loadshift-cibseven-java-api</artifactId>
     <version>${loadshift.version}</version>
 </dependency>
 <dependency>

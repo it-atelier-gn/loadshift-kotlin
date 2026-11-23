@@ -82,36 +82,37 @@ With client credentials, the client caches the access token until 30 seconds bef
 | Engine | Configuration |
 | --- | --- |
 | Camunda 7, CIB seven | `Camunda7Backend(base, tenantId = "acme")` |
-| CIB seven, embedded | `EmbeddedCamunda7(tenantId = "acme").backend()` |
+| Camunda 7, CIB seven in the same JVM | `CibSevenJavaApi(processEngine, tenantId = "acme").backend()`, `Camunda7JavaApi(...)` likewise |
 | Camunda 8 | `Camunda8Backend(base, auth, tenantId = "acme")` |
 
 With `tenantId`, the backend deploys the processes to the tenant, starts instances in it, works only jobs of the tenant, correlates messages within it and searches only its instances. Camunda 8 accepts a tenant other than `<default>` when multi-tenancy is enabled and the client is authorized for that tenant.
 
-## Embedded engine
+## Engine in the same JVM
 
-`loadshift-camunda-7-embedded` starts a CIB seven engine inside your application. `Camunda7Backend` works it through the engine's Java API, so no server and no REST connection are needed. Everything `Camunda7Backend` offers over REST works the same way: runs, schedules, messages, signals, user tasks, migration and tenants.
+When your application already runs a Camunda 7 or CIB seven engine, for example through the Spring Boot starter, loadshift can work that engine through its Java API instead of the REST API. Deployments, instances, jobs and messages then stay inside the JVM.
+
+| Engine in your application | Module | Client |
+| --- | --- | --- |
+| Camunda 7 (`org.camunda.bpm`) | `loadshift-camunda-7-java-api` | `Camunda7JavaApi(processEngine)` |
+| CIB seven (`org.cibseven.bpm`) | `loadshift-cibseven-java-api` | `CibSevenJavaApi(processEngine)` |
 
 ```kotlin
-EmbeddedCamunda7().use { engine ->
-    val result = engine.backend().run(fulfilment).await()
-}
+@Bean
+fun loadshift(processEngine: ProcessEngine): Camunda7Backend =
+    CibSevenJavaApi(processEngine).backend()
 ```
 
-| Constructor | Engine |
+`backend()` returns a `Camunda7Backend`, so runs, schedules, messages, signals, user tasks, call activities, migration and tenants behave as they do over REST. `CibSevenJavaApi(processEngine, tenantId = "acme")` works within a tenant.
+
+The modules use the engine on your classpath and bring none of their own. The engine needs:
+
+| Requirement | Why |
 | --- | --- |
-| `EmbeddedCamunda7()` | A new engine on an in-memory H2 database that lives as long as the engine |
-| `EmbeddedCamunda7(EmbeddedDatabase(jdbcUrl, username, password, driver))` | A new engine on the given database; the schema is created or updated on start |
-| `EmbeddedCamunda7(processEngine)` | An engine your application already built; `close()` leaves it running |
+| Spin plugin with the JSON data format (`camunda-engine-plugin-spin` and `camunda-spin-dataformat-json-jackson`, or the `cibseven` equivalents) | Fan-out and work items travel as JSON variables |
+| History level `activity` or higher | A run detects finished process instances through the history service |
+| Job executor running | Timers, timeouts and retries with a backoff |
 
-| Parameter | Effect |
-| --- | --- |
-| `tenantId` | Deploys, starts, works and correlates within the tenant |
-| `jobExecutor` | `false` starts the engine without its job executor, so timers and retries with a backoff wait for another engine on the same database |
-| `configure` | Receives the `ProcessEngineConfigurationImpl` before the engine is built |
-
-The engine is CIB seven 3.0 and creates the database schema of CIB seven 3.0. Engines on the same database share deployments, instances and jobs, so a worker on one engine can take over runs started on another. For a database other than H2, add its JDBC driver to your application and pass the driver class name to `EmbeddedDatabase`.
-
-`processEngine` gives access to the CIB seven services, such as `runtimeService` and `historyService`.
+The tests of both modules run against Camunda 7.24 and CIB seven 3.0 engines started in the test JVM.
 
 ## Process variables
 

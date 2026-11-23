@@ -67,7 +67,7 @@ To try local changes in another project, publish the library modules to the loca
 ```sh
 ./kotlin publish mavenLocal \
   -m loadshift-core -m loadshift-local \
-  -m loadshift-camunda-7 -m loadshift-camunda-7-embedded -m loadshift-camunda-8 -m loadshift-camunda-8-stream \
+  -m loadshift-camunda-7 -m loadshift-camunda-7-java-api -m loadshift-cibseven-java-api -m loadshift-camunda-8 -m loadshift-camunda-8-stream \
   -m loadshift-web -m loadshift-sqlite -m loadshift-otel -m loadshift-micrometer
 ```
 

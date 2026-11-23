@@ -12,6 +12,7 @@ camunda-bpmn-model = "7.24.0"
 jackson = "2.23.0"
 netty = "4.2.21.Final"
 cibseven = "3.0.0"
+camunda-engine = "7.24.0"
 h2 = "2.5.252"
 
 [libraries]
@@ -50,3 +51,6 @@ cibseven-engine = { module = "org.cibseven.bpm:cibseven-engine", version.ref = "
 cibseven-engine-plugin-spin = { module = "org.cibseven.bpm:cibseven-engine-plugin-spin", version.ref = "cibseven" }
 cibseven-spin-dataformat-json-jackson = { module = "org.cibseven.spin:cibseven-spin-dataformat-json-jackson", version.ref = "cibseven" }
 h2 = { module = "com.h2database:h2", version.ref = "h2" }
+camunda-engine = { module = "org.camunda.bpm:camunda-engine", version.ref = "camunda-engine" }
+camunda-engine-plugin-spin = { module = "org.camunda.bpm:camunda-engine-plugin-spin", version.ref = "camunda-engine" }
+camunda-spin-dataformat-json-jackson = { module = "org.camunda.spin:camunda-spin-dataformat-json-jackson", version.ref = "camunda-engine" }

@@ -1,4 +1,4 @@
-package loadshift.camunda7.embedded
+package loadshift.camunda7.javaapi
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -23,7 +23,12 @@ import loadshift.core.WorkItem
 import loadshift.core.fanOut
 import loadshift.core.task
 import loadshift.core.workflow
+import org.camunda.bpm.engine.ProcessEngine
+import org.camunda.bpm.engine.impl.cfg.StandaloneInMemProcessEngineConfiguration
+import org.camunda.bpm.engine.impl.jobexecutor.DefaultJobExecutor
+import org.camunda.spin.plugin.impl.SpinProcessEnginePlugin
 import java.util.Collections
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -45,10 +50,10 @@ private data class Contact(var id: String, var label: String = "") : WorkItem {
 
 private class OutOfStock(id: String) : RuntimeException("$id is out of stock")
 
-class EmbeddedCamunda7Test {
+class Camunda7JavaApiTest {
 
     @Test
-    fun runsTimersMessagesAndFanOutWithoutAServer() = embedded { engine ->
+    fun runsTimersMessagesAndFanOutOnTheEngineInTheSameJvm() = embedded { engine ->
         val seen = Collections.synchronizedSet(mutableSetOf<String>())
         val totals = Collections.synchronizedSet(mutableSetOf<String>())
         val wf = workflow<Customer>("loop") {
@@ -225,42 +230,25 @@ class EmbeddedCamunda7Test {
 
     @Test
     fun tenantScopesDeploymentsAndInstances() = runBlocking {
-        EmbeddedCamunda7(tenantId = "acme").use { engine ->
+        val processEngine = TestEngine.start()
+        try {
+            val api = Camunda7JavaApi(processEngine, tenantId = "acme")
             val wf = workflow<Customer>("tenant") {
                 input(listOf(Customer("a")))
                 awaitMessage("go")
                 task("finish") { }
             }
-            val handle = engine.backend().run(wf)
+            val handle = api.backend().run(wf)
             eventually { handle.item("a")?.state == ItemState.Running }
             handle.send("go", "a")
 
             assertEquals(1, handle.await().done)
-            val definition = engine.processEngine.repositoryService.createProcessDefinitionQuery()
+            val definition = processEngine.repositoryService.createProcessDefinitionQuery()
                 .processDefinitionKey(wf.key)
                 .singleResult()
             assertEquals("acme", definition.tenantId)
-        }
-    }
-
-    @Test
-    fun twoEnginesOnOneDatabaseShareDeploymentsAndInstances() = runBlocking {
-        val database = EmbeddedDatabase.inMemory()
-        EmbeddedCamunda7(database).use { worker ->
-            EmbeddedCamunda7(database, jobExecutor = false).use { observer ->
-                val wf = workflow<Customer>("shared") {
-                    input(listOf(Customer("a")))
-                    awaitMessage("go")
-                    task("finish") { }
-                }
-                val handle = worker.backend().run(wf)
-                eventually { handle.item("a")?.state == ItemState.Running }
-
-                assertEquals(1L, observer.processInstanceCount(wf.key))
-                handle.send("go", "a")
-                assertEquals(1, handle.await().done)
-                assertEquals(0L, observer.processInstanceCount(wf.key))
-            }
+        } finally {
+            processEngine.close()
         }
     }
 
@@ -276,19 +264,39 @@ class EmbeddedCamunda7Test {
             "doc" to CamundaVariables.encode(mapOf("a" to listOf(1, 2))),
         )
 
-        val roundTrip = EmbeddedCamunda7.fromEngine(EmbeddedCamunda7.toEngine(values))
+        val roundTrip = Camunda7JavaApi.fromEngine(Camunda7JavaApi.toEngine(values))
 
         assertEquals(values.mapValues { CamundaVariables.decode(it.value) }, roundTrip.mapValues { CamundaVariables.decode(it.value) })
         assertEquals("Json", roundTrip.getValue("doc").type)
-        assertEquals(CamundaValue(JsonNull, "Null"), EmbeddedCamunda7.fromEngine(null as org.cibseven.bpm.engine.variable.value.TypedValue?))
+        assertEquals(CamundaValue(JsonNull, "Null"), Camunda7JavaApi.fromEngine(null as org.camunda.bpm.engine.variable.value.TypedValue?))
     }
 
-    private fun embedded(block: suspend (EmbeddedCamunda7) -> Unit) = runBlocking {
-        EmbeddedCamunda7().use { engine -> withTimeout(TEST_TIMEOUT) { block(engine) } }
+    private fun embedded(block: suspend (Camunda7JavaApi) -> Unit) = runBlocking {
+        val processEngine = TestEngine.start()
+        try {
+            withTimeout(TEST_TIMEOUT) { block(Camunda7JavaApi(processEngine)) }
+        } finally {
+            processEngine.close()
+        }
     }
 
     private companion object {
         val TEST_TIMEOUT = 120.seconds
+    }
+}
+
+private object TestEngine {
+    fun start(): ProcessEngine {
+        val configuration = StandaloneInMemProcessEngineConfiguration()
+        configuration.processEngineName = "loadshift-test-${UUID.randomUUID()}"
+        configuration.jdbcUrl = "jdbc:h2:mem:${UUID.randomUUID()};DB_CLOSE_DELAY=-1"
+        configuration.isJobExecutorActivate = true
+        configuration.jobExecutor = DefaultJobExecutor().apply {
+            waitTimeInMillis = 200
+            maxWait = 1000
+        }
+        configuration.processEnginePlugins = mutableListOf(SpinProcessEnginePlugin())
+        return configuration.buildProcessEngine()
     }
 }
 

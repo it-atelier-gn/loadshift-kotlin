@@ -1,4 +1,4 @@
-description: Embedded CIB seven engine for loadshift workflows, without a REST connection
+description: Works a CIB seven engine in the same JVM through its Java API, without a REST connection
 product: jvm/lib
 
 apply:
@@ -15,10 +15,13 @@ dependencies:
   - $libs.kotlinx.coroutines.core
   - $libs.kotlinx.serialization.json
   - $libs.cibseven.engine:
-      exported: true
-  - $libs.cibseven.engine.plugin.spin
-  - $libs.cibseven.spin.dataformat.json.jackson
-  - $libs.h2
+      scope: compile-only
+  - $libs.cibseven.engine.plugin.spin:
+      scope: compile-only
 
 test-dependencies:
   - $libs.kotlinx.coroutines.test
+  - $libs.cibseven.engine
+  - $libs.cibseven.engine.plugin.spin
+  - $libs.cibseven.spin.dataformat.json.jackson
+  - $libs.h2
