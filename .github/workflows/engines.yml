@@ -9,7 +9,7 @@ on:
 
 jobs:
   e2e:
-    name: ${{ matrix.image }}
+    name: ${{ matrix.name || matrix.image }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -25,8 +25,9 @@ jobs:
             image: cibseven/cibseven:run-3.0.0
           - module: loadshift-camunda-7
             suite: loadshift.camunda7.Camunda7RunE2eTest
-            variable: LOADSHIFT_C7_IMAGE
-            image: camunda/camunda-bpm-platform:run-7.24.0
+            variable: LOADSHIFT_C7_RUN_VERSION
+            image: 7.24.0
+            name: camunda-bpm-run 7.24.0
           - module: loadshift-camunda-8
             suite: loadshift.camunda8.Camunda8E2eTest
             variable: LOADSHIFT_C8_IMAGE

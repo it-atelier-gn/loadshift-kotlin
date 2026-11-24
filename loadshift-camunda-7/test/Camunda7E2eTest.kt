@@ -36,6 +36,7 @@ import org.junit.jupiter.api.Assumptions
 import org.testcontainers.DockerClientFactory
 import org.testcontainers.containers.GenericContainer
 import org.testcontainers.containers.wait.strategy.Wait
+import org.testcontainers.images.builder.ImageFromDockerfile
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -63,11 +64,15 @@ private data class Contact(var id: String, var label: String = "") : WorkItem {
     override val key get() = id
 }
 
-internal class Camunda7Engine(private val image: String, private val baseVariable: String) {
+internal class Camunda7Engine(
+    private val image: String,
+    private val baseVariable: String,
+    private val create: () -> GenericContainer<*> = { GenericContainer(image) },
+) {
     private val base: String? by lazy {
         System.getenv(baseVariable)?.let { return@lazy it }
         if (!DockerClientFactory.instance().isDockerAvailable) return@lazy null
-        val container = GenericContainer(image)
+        val container = create()
             .withExposedPorts(8080)
             .waitingFor(
                 Wait.forHttp("/engine-rest/version")
@@ -90,10 +95,24 @@ private val cibSeven = Camunda7Engine(
 
 class CibSevenE2eTest : Camunda7Scenarios(cibSeven)
 
-private val camundaSeven = Camunda7Engine(
-    System.getenv("LOADSHIFT_C7_IMAGE") ?: "camunda/camunda-bpm-platform:run-7.24.0",
-    "LOADSHIFT_C7_BASE",
-)
+private val camundaRunVersion = System.getenv("LOADSHIFT_C7_RUN_VERSION") ?: "7.24.0"
+
+private val camundaSeven = System.getenv("LOADSHIFT_C7_IMAGE")?.let { Camunda7Engine(it, "LOADSHIFT_C7_BASE") }
+    ?: Camunda7Engine("Camunda 7 Run $camundaRunVersion", "LOADSHIFT_C7_BASE") { GenericContainer(camundaRunImage(camundaRunVersion)) }
+
+private fun camundaRunImage(version: String) = ImageFromDockerfile("loadshift/camunda-bpm-run:$version", false)
+    .withDockerfileFromBuilder { builder ->
+        builder.from("eclipse-temurin:21-jre")
+            .add(
+                "https://downloads.camunda.cloud/release/camunda-bpm/run/${version.substringBeforeLast('.')}/camunda-bpm-run-$version.tar.gz",
+                "/tmp/camunda-bpm-run.tar.gz",
+            )
+            .run("mkdir -p /camunda && tar -xzf /tmp/camunda-bpm-run.tar.gz -C /camunda && rm /tmp/camunda-bpm-run.tar.gz")
+            .workDir("/camunda")
+            .expose(8080)
+            .cmd("./internal/run.sh", "start", "--rest", "--webapps")
+            .build()
+    }
 
 class Camunda7RunE2eTest : Camunda7Scenarios(camundaSeven)
 

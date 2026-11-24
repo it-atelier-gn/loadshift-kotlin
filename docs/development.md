@@ -5,14 +5,14 @@
 | Suite | Container image | Variable for another image | Variable for an engine that is already running |
 | --- | --- | --- | --- |
 | `CibSevenE2eTest` | `cibseven/cibseven:run-3.0.0` | `LOADSHIFT_CIB7_IMAGE` | `LOADSHIFT_CIB7_BASE=http://localhost:8080/engine-rest` |
-| `Camunda7RunE2eTest` | `camunda/camunda-bpm-platform:run-7.24.0` | `LOADSHIFT_C7_IMAGE` | `LOADSHIFT_C7_BASE=http://localhost:8080/engine-rest` |
+| `Camunda7RunE2eTest` | Built from the Camunda 7 Run 7.24.0 archive; `LOADSHIFT_C7_RUN_VERSION` picks another Run release | `LOADSHIFT_C7_IMAGE` | `LOADSHIFT_C7_BASE=http://localhost:8080/engine-rest` |
 | `Camunda8E2eTest` | `camunda/camunda:8.9.19` with H2 secondary storage | `LOADSHIFT_C8_IMAGE` | `LOADSHIFT_C8_BASE=http://localhost:8080` |
 
 Without Docker and without the base variable, a suite is reported as skipped. The workflow `Engine versions` runs the suites against these engine releases:
 
 | Engine | Images |
 | --- | --- |
-| Camunda 7 | `camunda/camunda-bpm-platform:run-7.24.0` |
+| Camunda 7 | Camunda 7 Run 7.24.0 |
 | CIB seven | `cibseven/cibseven:run-2.2.0`, `run-3.0.0` |
 | Camunda 8 | `camunda/camunda:8.9.19` |
 
@@ -28,7 +28,7 @@ Without Docker and without the base variable, a suite is reported as skipped. Th
 | `gradle -p scripts/consumer run --args="c7 <engine-rest url> <children>"` | Camunda 7 or CIB seven |
 | `gradle -p scripts/consumer run --args="c8 <rest url> <children> [<grpc url>]"` | Camunda 8, with job streaming when the gRPC address is given |
 
-`-PjavaVersion=21` picks the JDK the check compiles and runs with; the default is `17`. [camunda8.yaml](../scripts/consumer/camunda8.yaml) configures a `camunda/camunda` container with H2 secondary storage for the check.
+`-PjavaVersion=21` picks the JDK the check compiles and runs with; the default is `17`. [camunda8.yaml](../scripts/consumer/camunda8.yaml) configures a `camunda/camunda` container with H2 secondary storage, and [camunda7.Dockerfile](../scripts/consumer/camunda7.Dockerfile) builds a Camunda 7 Run image, for the check.
 
 ## Load tests
 

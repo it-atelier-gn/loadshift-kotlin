@@ -29,7 +29,8 @@ jobs:
           gradle-version: '9.9.2'
       - name: Start engines
         run: |
-          docker run -d --name camunda7 -p 18070:8080 camunda/camunda-bpm-platform:run-7.24.0
+          docker build -t camunda7-run -f scripts/consumer/camunda7.Dockerfile scripts/consumer
+          docker run -d --name camunda7 -p 18070:8080 camunda7-run
           docker run -d --name cibseven -p 18080:8080 cibseven/cibseven:run-3.0.0
           docker run -d --name camunda8 -p 18088:8080 -p 18265:26500 \
             -v "$PWD/scripts/consumer/camunda8.yaml:/usr/local/camunda/config/application.yaml" camunda/camunda:8.9.19
