@@ -75,11 +75,20 @@ class Camunda8DialectTest {
         assertTrue("inputElement=\"f1_item\"" in xml, xml)
 
         val call = root.model.getModelElementsByType(CallActivity::class.java).single()
-        val input = call.extensionElements.domElement.childElements
-            .single { it.localName == "ioMapping" }
-            .childElements.single { it.localName == "input" }
-        assertEquals("=f1_item.${EngineNames.ITEM_KEY}", input.getAttribute("source"))
-        assertEquals(EngineNames.ITEM_KEY, input.getAttribute("target"))
+        val extensions = call.extensionElements.domElement.childElements
+        val called = extensions.single { it.localName == "calledElement" }
+        assertEquals("false", called.getAttribute("propagateAllParentVariables"))
+        val inputs = extensions.single { it.localName == "ioMapping" }
+            .childElements.filter { it.localName == "input" }
+            .map { it.getAttribute("source") to it.getAttribute("target") }
+        assertEquals(
+            listOf(
+                "=f1_item" to "f1_item",
+                "=${EngineNames.WORKFLOW}" to EngineNames.WORKFLOW,
+                "=f1_item.${EngineNames.ITEM_KEY}" to EngineNames.ITEM_KEY,
+            ),
+            inputs,
+        )
     }
 
     @Test
@@ -126,5 +135,26 @@ class Camunda8DialectTest {
         assertTrue(">=c1_result<" in xml, xml)
         assertTrue(">=not(c1_result)<" in xml, xml)
         assertTrue("\${" !in xml, xml)
+    }
+
+    private fun decoratedXml(): List<String> {
+        val wf = workflow<Job>("stable-ids") {
+            input(emptyList())
+            task("cleanup") { }
+            userTask("Approve")
+            awaitMessage("paid")
+            fanOut(expand = { emptyList<Line>() }) {
+                task("price") { }
+            }
+        }
+        return BpmnCompiler.compile(wf).map { process ->
+            Camunda8Dialect.decorate(process.model, process.serviceTasks, "v1") { 3 }
+            Bpmn.convertToString(process.model)
+        }
+    }
+
+    @Test
+    fun decoratingTheSameWorkflowTwiceGivesIdenticalXml() {
+        assertEquals(decoratedXml(), decoratedXml())
     }
 }

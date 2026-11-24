@@ -1,6 +1,8 @@
 package loadshift.core
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.sync.Semaphore
@@ -23,8 +25,10 @@ import kotlinx.serialization.json.putJsonObject
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
 @EngineApi
@@ -39,6 +43,8 @@ class EngineRun(
     private val globalLimiter = config.rateLimit?.let { RateLimiter(it) }
     private val levelKeys = mutableMapOf<Pair<String, String?>, String>()
     private val compensable = mutableListOf<TaskHandler>()
+    private val parentCache = ParentCache()
+    private val parentWaits = ConcurrentHashMap<String, Int>()
     private val called = workflow.calledWorkflows()
     private val handlers: Map<String, JobHandler> = buildMap {
         for (owner in listOf(workflow) + called) register(owner, owner.root, null, emptyList(), null)
@@ -58,6 +64,8 @@ class EngineRun(
     val jobTypes: List<String> = handlers.keys.toList()
 
     val correlationKeys: List<String> = listOf(workflow.key) + called.map { it.key }
+
+    fun variables(jobType: String): List<String>? = handlers[jobType]?.variables
 
     fun maxAttempts(jobType: String): Int =
         requireNotNull(handlers[jobType]) { "unknown job type '$jobType'" }.retry.maxAttempts
@@ -121,20 +129,30 @@ class EngineRun(
         terminated.clear()
     }
 
-    suspend fun execute(job: EngineJob): JobOutcome {
+    suspend fun execute(job: EngineJob, lookup: VariableLookup = VariableLookup.None): JobOutcome {
         val handler = handlers[job.type]
             ?: return JobOutcome.Abort(IllegalStateException("no handler for job type '${job.type}'"))
-        return try {
-            handler.run(job, job.variables)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            failure(handler, job, e)
+        return withContext(Lookup(lookup)) {
+            try {
+                handler.run(job, job.variables).also { parentWaits.remove(job.id) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                failure(handler, job, e)
+            }
         }
     }
 
     private suspend fun failure(handler: JobHandler, job: EngineJob, error: Throwable): JobOutcome {
         val policy = handler.retry
+        if (error is ParentUnavailable) {
+            val waits = parentWaits.merge(job.id, 1, Int::plus) ?: 1
+            if (waits < PARENT_ATTEMPTS) {
+                val retries = (job.retries ?: policy.maxAttempts).coerceAtLeast(1)
+                return JobOutcome.Retry(retries, PARENT_BACKOFF, error.message.orEmpty(), error.stackTraceToString())
+            }
+            parentWaits.remove(job.id)
+        }
         val remaining = (job.retries ?: policy.maxAttempts).coerceAtLeast(1)
         val message = error.message ?: error.toString()
         if (remaining > 1 && policy.retryOn(error)) {
@@ -219,7 +237,7 @@ class EngineRun(
                 )
                 deadLetters += letter
                 counters.deadLetter(letter.topic)
-                store(compensation.handler, letter, compensation.snapshot)
+                store(compensation.handler, letter, inlined(compensation.snapshot))
             }
         }
     }
@@ -233,6 +251,86 @@ class EngineRun(
     }
 
     private class PendingCompensation(val handler: TaskHandler, val at: Long, val index: Int, val snapshot: JsonObject)
+
+    private class Lookup(val lookup: VariableLookup) : AbstractCoroutineContextElement(Key) {
+        companion object Key : CoroutineContext.Key<Lookup>
+    }
+
+    private class ParentUnavailable(message: String) : IllegalStateException(message)
+
+    private class ParentCache {
+        private val entries = object : LinkedHashMap<String, CompletableDeferred<JsonObject?>>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CompletableDeferred<JsonObject?>>?) =
+                size > PARENT_CACHE_SIZE
+        }
+
+        fun put(key: String, value: JsonObject) {
+            synchronized(entries) { entries[key] = CompletableDeferred(value) }
+        }
+
+        suspend fun get(key: String, load: suspend () -> JsonObject?): JsonObject? {
+            val (entry, owner) = synchronized(entries) {
+                entries[key]?.let { it to false } ?: CompletableDeferred<JsonObject?>().also { entries[key] = it }.let { it to true }
+            }
+            if (!owner) return entry.await()
+            val value = try {
+                load()
+            } catch (e: Throwable) {
+                forget(key, entry)
+                entry.completeExceptionally(e)
+                throw e
+            }
+            if (value == null) forget(key, entry)
+            entry.complete(value)
+            return value
+        }
+
+        private fun forget(key: String, entry: CompletableDeferred<JsonObject?>) {
+            synchronized(entries) { if (entries[key] === entry) entries.remove(key) }
+        }
+    }
+
+    private fun parentRef(instance: String, variable: String, jobId: String): JsonObject = buildJsonObject {
+        putJsonObject(EngineNames.PARENT_REF) {
+            put(REF_INSTANCE, instance)
+            put(REF_VARIABLE, variable)
+            put(REF_JOB, jobId)
+        }
+    }
+
+    private fun refKey(ref: JsonObject): String =
+        listOf(REF_INSTANCE, REF_VARIABLE, REF_JOB).joinToString("\u0000") { (ref[it] as? JsonPrimitive)?.contentOrNull.orEmpty() }
+
+    private suspend fun parentItem(element: JsonElement): JsonObject {
+        val item = element as? JsonObject ?: error("lineage entry is not an object")
+        val ref = item[EngineNames.PARENT_REF] as? JsonObject ?: return item
+        val instance = (ref[REF_INSTANCE] as? JsonPrimitive)?.contentOrNull.orEmpty()
+        val variable = (ref[REF_VARIABLE] as? JsonPrimitive)?.contentOrNull.orEmpty()
+        val lookup = currentCoroutineContext()[Lookup]?.lookup ?: VariableLookup.None
+        return parentCache.get(refKey(ref)) { asObject(lookup.variable(instance, variable)) }
+            ?: throw ParentUnavailable("parent item '$variable' of instance $instance is not readable yet")
+    }
+
+    private fun asObject(value: JsonElement?): JsonObject? = when (value) {
+        is JsonObject -> value
+        is JsonPrimitive -> value.contentOrNull?.let { runCatching { Json.parseToJsonElement(it) }.getOrNull() } as? JsonObject
+        else -> null
+    }
+
+    private suspend fun inlined(snapshot: JsonObject): JsonObject {
+        val raw = (snapshot[EngineNames.PARENTS] as? JsonPrimitive)?.contentOrNull ?: return snapshot
+        val lineage = runCatching { Json.parseToJsonElement(raw).jsonArray }.getOrNull() ?: return snapshot
+        val resolved = lineage.map { element ->
+            try {
+                parentItem(element)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                element
+            }
+        }
+        return JsonObject(snapshot + (EngineNames.PARENTS to JsonPrimitive(JsonArray(resolved).toString())))
+    }
 
     private fun snapshots(value: JsonElement?): List<JsonElement> = when (value) {
         is JsonArray -> value
@@ -295,12 +393,12 @@ class EngineRun(
             }
             is FanOut<*, *> -> {
                 val fan = step as FanOut<WorkItem, WorkItem>
-                add(ExpandHandler(owner, fan.id, fan.expand, fan.childCodec, codec, itemVariable, parents))
+                fanHandlers(owner, fan.id, fan.expand, fan.childCodec, fan.concurrency, false, codec, itemVariable, parents).forEach(::add)
                 register(owner, fan.body, EngineNames.item(fan.id), listOf(codec) + parents, fan.concurrency?.let { Semaphore(it) })
             }
             is FanIn<*, *, *> -> {
                 val fan = step as FanIn<WorkItem, WorkItem, Any?>
-                add(ExpandHandler(owner, fan.id, fan.expand, fan.childCodec, codec, itemVariable, parents))
+                fanHandlers(owner, fan.id, fan.expand, fan.childCodec, fan.concurrency, true, codec, itemVariable, parents).forEach(::add)
                 add(ReduceHandler(owner, fan, codec, itemVariable, parents))
                 register(owner, fan.body, EngineNames.item(fan.id), listOf(codec) + parents, fan.concurrency?.let { Semaphore(it) })
             }
@@ -318,6 +416,25 @@ class EngineRun(
         }
     }
 
+    private fun fanHandlers(
+        owner: Workflow<*>,
+        stepId: String,
+        expand: suspend (WorkItem) -> Flow<WorkItem>,
+        childCodec: WorkItemCodec<WorkItem>,
+        concurrency: Int?,
+        keepAll: Boolean,
+        codec: WorkItemCodec<WorkItem>,
+        itemVariable: String?,
+        parents: List<WorkItemCodec<WorkItem>>,
+    ): List<JobHandler> {
+        val wave = concurrency ?: config.waveSize
+        return listOf(
+            ExpandHandler(owner, EngineNames.fanOut(stepId), stepId, expand, childCodec, codec, itemVariable, parents, wave, keepAll),
+            WaveHandler(owner, stepId, wave, codec, itemVariable),
+            ExpandHandler(owner, EngineNames.expand(stepId), stepId, expand, childCodec, codec, itemVariable, parents, null, false),
+        )
+    }
+
     private abstract inner class JobHandler(
         val owner: Workflow<*>,
         val topic: String,
@@ -328,10 +445,23 @@ class EngineRun(
     ) {
         abstract suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome
 
-        fun snapshot(variables: JsonObject): JsonObject? = runCatching {
-            val source = source(variables)
-            JsonObject(lineage(source) + codec.encode(codec.decode(source)))
-        }.getOrNull()
+        open val reads: List<String> get() = emptyList()
+
+        val variables: List<String>? by lazy {
+            val item = itemVariable?.let(::listOf)
+                ?: codec.fields?.plus(listOf(EngineNames.CALL_ITEM, EngineNames.PARENTS))
+                ?: return@lazy null
+            val compensations = compensable.filter { it.owner.key == owner.key }.map { EngineNames.compensation(it.topic) }
+            (item + EngineNames.ITEM_KEY + EngineNames.WORKFLOW + compensations + reads).distinct()
+        }
+
+        suspend fun snapshot(variables: JsonObject): JsonObject? {
+            val raw = runCatching {
+                val source = source(variables)
+                JsonObject(lineage(source) + codec.encode(codec.decode(source)))
+            }.getOrNull() ?: return null
+            return inlined(raw)
+        }
 
         fun source(variables: JsonObject): JsonObject {
             val name = itemVariable ?: return variables[EngineNames.CALL_ITEM] as? JsonObject ?: variables
@@ -346,10 +476,10 @@ class EngineRun(
                 ?.let { Json.parseToJsonElement(it).jsonArray }
                 ?: JsonArray(emptyList())
 
-        fun parents(source: JsonObject): List<WorkItem> {
+        suspend fun parents(source: JsonObject): List<WorkItem> {
             val array = ancestors(source)
             return parentCodecs.mapIndexedNotNull { index, parentCodec ->
-                array.getOrNull(index)?.jsonObject?.let(parentCodec.decode)
+                array.getOrNull(index)?.let { parentItem(it) }?.let(parentCodec.decode)
             }
         }
 
@@ -451,6 +581,8 @@ class EngineRun(
         codec: WorkItemCodec<WorkItem>,
         itemVariable: String?,
     ) : JobHandler(owner, EngineNames.decision(step.id), codec, itemVariable, emptyList(), RetryPolicy.None) {
+        override val reads get() = listOf(EngineNames.iterations(step.id))
+
         override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
             val source = source(variables)
             val iterations = (variables[EngineNames.iterations(step.id)] as? JsonPrimitive)?.intOrNull ?: 0
@@ -489,19 +621,26 @@ class EngineRun(
 
     private inner class ExpandHandler(
         owner: Workflow<*>,
+        topic: String,
         private val stepId: String,
         private val expand: suspend (WorkItem) -> Flow<WorkItem>,
         private val childCodec: WorkItemCodec<WorkItem>,
         codec: WorkItemCodec<WorkItem>,
         itemVariable: String?,
         parentCodecs: List<WorkItemCodec<WorkItem>>,
-    ) : JobHandler(owner, EngineNames.expand(stepId), codec, itemVariable, parentCodecs, RetryPolicy.None) {
+        private val wave: Int?,
+        private val keepAll: Boolean,
+    ) : JobHandler(owner, topic, codec, itemVariable, parentCodecs, RetryPolicy.None) {
         override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
             val source = source(variables)
             val item = codec.decode(source)
             val children = withContext(context(item, parents(source), null)) { expand(item).toList() }
             counters.expanded(children.size.toLong())
-            val lineage = JsonPrimitive(JsonArray(listOf(codec.encode(item)) + ancestors(source)).toString())
+            val parentVariable = EngineNames.parent(stepId)
+            val parent = codec.encode(item)
+            val ref = parentRef(job.instanceId, parentVariable, job.id)
+            parentCache.put(refKey(ref.getValue(EngineNames.PARENT_REF).jsonObject), parent)
+            val lineage = JsonPrimitive(JsonArray(listOf(ref) + ancestors(source)).toString())
             val items = JsonArray(
                 children.map { child ->
                     JsonObject(
@@ -512,9 +651,50 @@ class EngineRun(
                     )
                 },
             )
-            return JobOutcome.Complete(JsonObject(write(variables, source, item) + (EngineNames.items(stepId) to items)))
+            val waves = buildMap {
+                if (wave == null) {
+                    put(EngineNames.items(stepId), items)
+                } else {
+                    put(EngineNames.items(stepId), JsonArray(items.take(wave)))
+                    put(EngineNames.pending(stepId), JsonArray(items.drop(wave)))
+                    if (keepAll) put(EngineNames.all(stepId), items)
+                }
+            }
+            val written = write(variables, source, item) + waves + (parentVariable to parent)
+            return JobOutcome.Complete(JsonObject(written))
         }
     }
+
+    private inner class WaveHandler(
+        owner: Workflow<*>,
+        private val stepId: String,
+        private val wave: Int,
+        codec: WorkItemCodec<WorkItem>,
+        itemVariable: String?,
+    ) : JobHandler(owner, EngineNames.wave(stepId), codec, itemVariable, emptyList(), RetryPolicy.None) {
+        override val reads get() = listOf(EngineNames.pending(stepId))
+
+        override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
+            val pending = array(variables[EngineNames.pending(stepId)])
+            val next = pending.take(wave)
+            val rest = pending.drop(wave)
+            return JobOutcome.Complete(
+                JsonObject(
+                    mapOf(
+                        EngineNames.items(stepId) to JsonArray(next),
+                        EngineNames.pending(stepId) to if (rest.isEmpty()) JsonNull else JsonArray(rest),
+                        EngineNames.more(stepId) to JsonPrimitive(next.isNotEmpty()),
+                    ),
+                ),
+            )
+        }
+    }
+
+    private fun array(raw: JsonElement?): JsonArray = when (raw) {
+        is JsonArray -> raw
+        is JsonPrimitive -> raw.contentOrNull?.let { runCatching { Json.parseToJsonElement(it) }.getOrNull() } as? JsonArray
+        else -> null
+    } ?: JsonArray(emptyList())
 
     private inner class ReduceHandler(
         owner: Workflow<*>,
@@ -523,14 +703,12 @@ class EngineRun(
         itemVariable: String?,
         parentCodecs: List<WorkItemCodec<WorkItem>>,
     ) : JobHandler(owner, EngineNames.reduce(step.id), codec, itemVariable, parentCodecs, RetryPolicy.None) {
+        override val reads get() = listOf(EngineNames.items(step.id), EngineNames.all(step.id))
+
         override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
             val source = source(variables)
             val item = codec.decode(source)
-            val children = when (val raw = variables[EngineNames.items(step.id)]) {
-                is JsonArray -> raw
-                is JsonPrimitive -> Json.parseToJsonElement(raw.content).jsonArray
-                else -> JsonArray(emptyList())
-            }
+            val children = array(variables[EngineNames.all(step.id)] ?: variables[EngineNames.items(step.id)])
             var accumulator = step.initial
             for (child in children) accumulator = step.combine(accumulator, step.childCodec.decode(child.jsonObject))
             withContext(context(item, parents(source), null)) { step.onComplete(item, accumulator) }
@@ -545,6 +723,8 @@ class EngineRun(
         itemVariable: String?,
         parentCodecs: List<WorkItemCodec<WorkItem>>,
     ) : JobHandler(owner, EngineNames.form(step.id), codec, itemVariable, parentCodecs, config.retry) {
+        override val reads get() = listOf(EngineNames.formVariable(step.id))
+
         override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
             val name = EngineNames.formVariable(step.id)
             val form = when (val raw = variables[name]) {
@@ -566,6 +746,8 @@ class EngineRun(
         itemVariable: String?,
         parentCodecs: List<WorkItemCodec<WorkItem>>,
     ) : JobHandler(owner, EngineNames.message(step.id), codec, itemVariable, parentCodecs, config.retry) {
+        override val reads get() = listOf(EngineNames.messageVariable(step.message))
+
         override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
             val name = EngineNames.messageVariable(step.message)
             val data = when (val raw = variables[name]) {
@@ -602,6 +784,8 @@ class EngineRun(
         itemVariable: String?,
         parentCodecs: List<WorkItemCodec<WorkItem>>,
     ) : JobHandler(owner, EngineNames.returnCall(stepId), codec, itemVariable, parentCodecs, RetryPolicy.None) {
+        override val reads get() = listOf(EngineNames.callItem(stepId))
+
         override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
             val name = EngineNames.callItem(stepId)
             val returned = when (val raw = variables[name]) {
@@ -618,5 +802,11 @@ class EngineRun(
     private companion object {
         const val SNAPSHOT_AT = "at"
         const val SNAPSHOT_ITEM = "item"
+        const val REF_INSTANCE = "instance"
+        const val REF_VARIABLE = "variable"
+        const val REF_JOB = "job"
+        const val PARENT_CACHE_SIZE = 1024
+        const val PARENT_ATTEMPTS = 10
+        val PARENT_BACKOFF = 1.seconds
     }
 }

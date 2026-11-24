@@ -63,6 +63,8 @@ val fulfilment = workflow<Order>("fulfilment") {
 val result = Camunda8Backend(base).migrate(fulfilment)
 ```
 
+Every `run`, `attach` and `migrate` deploys the workflow. A process that has not changed since its last deployment keeps its definition version, so restarting a worker creates no new versions.
+
 `version(tag)` sets the version tag of every process the workflow deploys (`camunda:versionTag` on Camunda 7 and CIB seven, `zeebe:versionTag` on Camunda 8). `migrate(workflow)` deploys the workflow and moves the active instances of each of its processes from older definitions to the definition just deployed. Elements are matched by id; the ids of steps stay the same while the steps before them and their topics stay the same. `MigrationResult` holds the number of migrated instances and, per process, the instances that could not be migrated with the engine's error, for example when an instance waits in an element the new version no longer has. Migrate while no worker runs the workflow, for example after `detach()`, and continue with `attach(workflow)`.
 
 ## Authentication
@@ -110,7 +112,7 @@ The modules use the engine on your classpath and bring none of their own. The en
 | --- | --- |
 | Spin plugin with the JSON data format (`camunda-engine-plugin-spin` and `camunda-spin-dataformat-json-jackson`, or the `cibseven` equivalents) | Fan-out and work items travel as JSON variables |
 | History level `activity` or higher | A run detects finished process instances through the history service |
-| Job executor running | Timers, timeouts and retries with a backoff |
+| Job executor running | Timers, timeouts, retries with a backoff, and the completion of fan-out children |
 
 The tests of both modules run against Camunda 7.24 and CIB seven 3.0 engines started in the test JVM.
 
@@ -121,8 +123,12 @@ The tests of both modules run against Camunda 7.24 and CIB seven 3.0 engines sta
 | Fields of the root item | Root | The seeded item |
 | `loadshiftKey` | Root and child | The item key |
 | `loadshiftWorkflow` | Root and child | The workflow key |
-| `<fan-out id>_items` | Parent | The expanded children |
-| `<fan-out id>_item` | Child | The child item, with `loadshiftKey` and `loadshiftParents` |
+| `<fan-out id>_items` | Parent | The children of the current wave |
+| `<fan-out id>_pending` | Parent | The children of the waves still to come |
+| `<fan-out id>_more` | Parent | Whether another wave has started |
+| `<fan-out id>_all` | Parent | Every expanded child, read by `reduce` and `collect` |
+| `<fan-out id>_parent` | Parent | The parent item as it was when the children were expanded |
+| `<fan-out id>_item` | Child | The child item, with `loadshiftKey` and `loadshiftParents`, which points to the `_parent` variables of its ancestors |
 | `<step id>_result` | Any | The result of a condition or loop predicate |
 | `<loop id>_iterations` | Any | Iterations of the current loop |
 | `loadshiftCompensation_<topic>` | Any | Item snapshots for compensation, one per run of the task |
@@ -130,5 +136,7 @@ The tests of both modules run against Camunda 7.24 and CIB seven 3.0 engines sta
 | `<call id>_call` | Caller | The item handed to a called workflow and returned from it |
 | `loadshiftCallItem` | Called root | The item of a called workflow, with `loadshiftKey` |
 | `loadshiftMessage_<message>` | Any | The data sent with the message until the step's block has applied it; characters other than letters, digits and `_` in the message name become `_` |
+
+A job receives only the variables its step reads. A child process receives its item, `loadshiftKey` and `loadshiftWorkflow`, and reads its parents from the parent instances when a step needs them.
 
 Camunda 8 correlates messages on the key `<workflow-key>:<item-key>`. Camunda 7 and CIB seven correlate on the variables `loadshiftWorkflow` and `loadshiftKey`. Camunda 7 and CIB seven receive the item key as business key when it is at most 255 characters long.

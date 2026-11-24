@@ -75,6 +75,7 @@ data class RunConfig(
     val deadLetters: DeadLetterStore? = null,
     val lockDuration: Duration = 5.minutes,
     val maxLoopIterations: Int = 10_000,
+    val waveSize: Int = 100,
     val logSink: LogSink = NoopLogSink,
     val tracer: Tracer = NoopTracer,
     val metrics: Metrics = NoopMetrics,
@@ -84,6 +85,7 @@ data class RunConfig(
         require(maxInFlight == null || maxInFlight >= 1) { "maxInFlight must be at least 1, was $maxInFlight" }
         require(lockDuration.isPositive()) { "lockDuration must be positive, was $lockDuration" }
         require(maxLoopIterations >= 1) { "maxLoopIterations must be at least 1, was $maxLoopIterations" }
+        require(waveSize >= 1) { "waveSize must be at least 1, was $waveSize" }
     }
 }
 

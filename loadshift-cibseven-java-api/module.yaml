@@ -7,6 +7,10 @@ apply:
 settings:
   kotlin:
     serialization: enabled
+  jvm:
+    test:
+      freeJvmArgs:
+        - -Xmx512m
 
 dependencies:
   - ../loadshift-camunda-7:

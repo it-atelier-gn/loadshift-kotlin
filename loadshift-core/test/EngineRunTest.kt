@@ -76,7 +76,9 @@ class EngineRunTest {
         val run = EngineRun(wf, RunConfig())
         val compiled = BpmnCompiler.compile(wf).flatMap { it.serviceTasks }.map { it.jobType }
         assertEquals(compiled.size, compiled.toSet().size)
-        assertEquals(compiled.toSet(), run.jobTypes.toSet())
+        val legacy = run.jobTypes.filter { it.substringAfter('/').startsWith("expand_") }
+        assertEquals(1, legacy.size)
+        assertEquals(compiled.toSet(), run.jobTypes.toSet() - legacy.toSet())
     }
 
     @Test
@@ -350,7 +352,8 @@ class EngineRunTest {
         val childRecord = records.getValue("pick")
         assertEquals("${wf.key}_$fanId", childRecord.level)
         assertEquals(itemVariable, childRecord.itemVariable)
-        assertEquals(child[EngineNames.PARENTS], childRecord.item[EngineNames.PARENTS])
+        val storedLineage = Json.parseToJsonElement(childRecord.item.getValue(EngineNames.PARENTS).jsonPrimitive.content).jsonArray
+        assertEquals(JsonPrimitive("o-2"), storedLineage.single().jsonObject["id"])
         assertEquals(JsonPrimitive("o-2-1"), childRecord.item["id"])
     }
 
@@ -515,9 +518,13 @@ class EngineRunTest {
         val children = outcome.variables.getValue(items).jsonArray
         assertEquals(listOf("o-1-1", "o-1-2"), children.map { it.jsonObject.getValue(EngineNames.ITEM_KEY).jsonPrimitive.content })
         assertEquals(JsonPrimitive(3), children[1].jsonObject["qty"])
+        val parent = outcome.variables.getValue(EngineNames.parent(stepId(type, "expand_"))).jsonObject
+        assertEquals(JsonPrimitive("o-1"), parent["id"])
+        assertEquals(JsonPrimitive("rush"), parent["note"])
         val lineage = Json.parseToJsonElement(children[0].jsonObject.getValue(EngineNames.PARENTS).jsonPrimitive.content).jsonArray
-        assertEquals(JsonPrimitive("o-1"), lineage.single().jsonObject["id"])
-        assertEquals(JsonPrimitive("rush"), lineage.single().jsonObject["note"])
+        val ref = lineage.single().jsonObject.getValue(EngineNames.PARENT_REF).jsonObject
+        assertEquals(JsonPrimitive("pi-1"), ref["instance"])
+        assertEquals(JsonPrimitive(EngineNames.parent(stepId(type, "expand_"))), ref["variable"])
         assertEquals(2, run.progress().expanded)
     }
 
@@ -700,5 +707,184 @@ class EngineRunTest {
         val empty = assertIs<JobOutcome.Complete>(run.execute(job(run.type(EngineNames.message("msg3")), run.rootVariables(EngineOrder("o-2")))))
         assertEquals(JsonPrimitive(-1), empty.variables["total"])
         assertEquals(JsonNull, empty.variables[name])
+    }
+
+    private fun lineageWorkflow(seen: MutableList<String>) = workflow<EngineOrder>("lineage") {
+        input(emptyList())
+        fanOut(expand = { o -> List(3) { EngineLine("${o.id}-$it") } }, context = { it }) {
+            task("pick") { seen += context().id }
+        }
+    }
+
+    @Test
+    fun childrenCarryAFixedSizeReferenceToTheirParent() = runTest {
+        val wf = workflow<EngineOrder>("big-batch") {
+            input(emptyList())
+            fanOut(expand = { o -> List(2_384) { EngineLine("${o.id}-$it") } }) { task("pick") { } }
+        }
+        val run = EngineRun(wf, RunConfig())
+        val type = run.generated("fanout_")
+        val fanId = stepId(type, "fanout_")
+        val batch = EngineOrder("batch", note = "x".repeat(50_000))
+        val outcome = assertIs<JobOutcome.Complete>(run.execute(job(type, run.rootVariables(batch))))
+        val wave = outcome.variables.getValue(EngineNames.items(fanId)).jsonArray
+        val pending = outcome.variables.getValue(EngineNames.pending(fanId)).jsonArray
+        assertEquals(100, wave.size)
+        assertEquals(2_284, pending.size)
+        assertTrue((wave + pending).all { it.toString().length < 400 }, wave.first().toString())
+        assertEquals(JsonPrimitive("x".repeat(50_000)), outcome.variables.getValue(EngineNames.parent(fanId)).jsonObject["note"])
+    }
+
+    @Test
+    fun wavesHandOutTheChildrenInSlicesOfTheConcurrency() = runTest {
+        val wf = workflow<EngineOrder>("waves") {
+            input(emptyList())
+            fanOut(expand = { o -> List(5) { EngineLine("${o.id}-$it") } }, concurrency = 2) { task("pick") { } }
+        }
+        val run = EngineRun(wf, RunConfig())
+        val start = run.generated("fanout_")
+        val fanId = stepId(start, "fanout_")
+        var vars = run.rootVariables(EngineOrder("o"))
+        vars = vars.after(run.execute(job(start, vars)))
+        val keys = { v: JsonObject -> v.getValue(EngineNames.items(fanId)).jsonArray.map { it.jsonObject.getValue("id").jsonPrimitive.content } }
+        val waves = mutableListOf(keys(vars))
+        while (true) {
+            vars = vars.after(run.execute(job(run.generated("wave_"), vars)))
+            if (vars.getValue(EngineNames.more(fanId)).jsonPrimitive.content != "true") break
+            waves += keys(vars)
+        }
+        assertEquals(listOf(listOf("o-0", "o-1"), listOf("o-2", "o-3"), listOf("o-4")), waves)
+        assertEquals(JsonNull, vars[EngineNames.pending(fanId)])
+        assertEquals(emptyList(), keys(vars))
+    }
+
+    @Test
+    fun waveSizeFallsBackToTheRunConfiguration() = runTest {
+        val wf = workflow<EngineOrder>("config-waves") {
+            input(emptyList())
+            fanOut(expand = { o -> List(5) { EngineLine("${o.id}-$it") } }) { task("pick") { } }
+        }
+        val run = EngineRun(wf, RunConfig(waveSize = 3))
+        val start = run.generated("fanout_")
+        val outcome = assertIs<JobOutcome.Complete>(run.execute(job(start, run.rootVariables(EngineOrder("o")))))
+        assertEquals(3, outcome.variables.getValue(EngineNames.items(stepId(start, "fanout_"))).jsonArray.size)
+        assertFailsWith<IllegalArgumentException> { RunConfig(waveSize = 0) }
+    }
+
+    @Test
+    fun reduceSeesEveryChildAcrossAllWaves() = runTest {
+        val wf = workflow<EngineOrder>("wave-reduce") {
+            input(emptyList())
+            fanOut(expand = { o -> List(5) { EngineLine("${o.id}-$it", qty = it) } }, concurrency = 2) {
+                task("pick") { }
+            }.reduce(0, { acc, line -> acc + line.qty }) { order, total -> order.total = total }
+        }
+        val run = EngineRun(wf, RunConfig())
+        var vars = run.rootVariables(EngineOrder("o"))
+        vars = vars.after(run.execute(job(run.generated("fanout_"), vars)))
+        repeat(3) { vars = vars.after(run.execute(job(run.generated("wave_"), vars))) }
+        val outcome = assertIs<JobOutcome.Complete>(run.execute(job(run.generated("reduce_"), vars)))
+        assertEquals(JsonPrimitive(10), outcome.variables["total"])
+    }
+
+    @Test
+    fun childResolvesItsParentThroughTheLookupOnAnotherWorker() = runTest {
+        val seen = mutableListOf<String>()
+        val expanding = EngineRun(lineageWorkflow(seen), RunConfig())
+        val type = expanding.generated("expand_")
+        val fanId = stepId(type, "expand_")
+        val expanded = assertIs<JobOutcome.Complete>(expanding.execute(job(type, expanding.rootVariables(EngineOrder("o-1")))))
+        val children = expanded.variables.getValue(EngineNames.items(fanId)).jsonArray
+        val parentVariable = EngineNames.parent(fanId)
+        val stored = expanded.variables.getValue(parentVariable)
+        val lookups = AtomicInteger()
+        val lookup = VariableLookup { instance, name ->
+            lookups.incrementAndGet()
+            if (instance == "pi-1" && name == parentVariable) JsonPrimitive(stored.toString()) else null
+        }
+
+        val worker = EngineRun(lineageWorkflow(seen), RunConfig())
+        for ((index, child) in children.withIndex()) {
+            val vars = JsonObject(mapOf(EngineNames.item(fanId) to child))
+            assertIs<JobOutcome.Complete>(worker.execute(job(worker.type("pick"), vars, instance = "child-$index"), lookup))
+        }
+        assertEquals(listOf("o-1", "o-1", "o-1"), seen)
+        assertEquals(1, lookups.get())
+    }
+
+    @Test
+    fun unreadableParentRetriesWithoutSpendingRetriesThenDeadLetters() = runTest {
+        val seen = mutableListOf<String>()
+        val expanding = EngineRun(lineageWorkflow(seen), RunConfig())
+        val type = expanding.generated("expand_")
+        val fanId = stepId(type, "expand_")
+        val expanded = assertIs<JobOutcome.Complete>(expanding.execute(job(type, expanding.rootVariables(EngineOrder("o-1")))))
+        val child = expanded.variables.getValue(EngineNames.items(fanId)).jsonArray.first()
+        val worker = EngineRun(lineageWorkflow(seen), RunConfig())
+        val pick = job(worker.type("pick"), JsonObject(mapOf(EngineNames.item(fanId) to child)), retries = 3, instance = "child-1")
+
+        repeat(9) {
+            val retry = assertIs<JobOutcome.Retry>(worker.execute(pick))
+            assertEquals(3, retry.retries)
+            assertEquals(1.seconds, retry.backoff)
+        }
+        assertIs<JobOutcome.Retry>(worker.execute(pick)).let { assertEquals(2, it.retries) }
+        assertTrue(seen.isEmpty())
+    }
+
+    @Test
+    fun inlineLineageFromEarlierRunsStillResolves() = runTest {
+        val seen = mutableListOf<String>()
+        val run = EngineRun(lineageWorkflow(seen), RunConfig())
+        val fanId = stepId(run.generated("expand_"), "expand_")
+        val inline = JsonArray(listOf(buildJsonObject { put("id", "legacy"); put("total", 1) }))
+        val child = buildJsonObject {
+            put("id", "legacy-1")
+            put(EngineNames.ITEM_KEY, "legacy-1")
+            put(EngineNames.PARENTS, inline.toString())
+        }
+        assertIs<JobOutcome.Complete>(run.execute(job(run.type("pick"), JsonObject(mapOf(EngineNames.item(fanId) to child)))))
+        assertEquals(listOf("legacy"), seen)
+    }
+
+    @Test
+    fun eachJobTypeFetchesOnlyTheVariablesItsHandlerReads() {
+        val wf = workflow<EngineOrder>("filtered") {
+            input(emptyList())
+            task("charge") { } compensate { }
+            loop({ false }) { task("spin") { } }
+            userTask("Approve")
+            awaitMessage("paid") { _, _ -> }
+            fanOut(expand = { emptyList<EngineLine>() }) {
+                task("pick") { }
+            }.reduce(0, { acc, _ -> acc }) { _, _ -> }
+        }
+        val run = EngineRun(wf, RunConfig())
+        val root = listOf("id", "total", "note", EngineNames.CALL_ITEM, EngineNames.PARENTS, EngineNames.ITEM_KEY, EngineNames.WORKFLOW, EngineNames.compensation("charge"))
+        assertEquals(root, run.variables(run.type("charge")))
+        val reduce = run.generated("reduce_")
+        val fanId = stepId(reduce, "reduce_")
+        assertEquals(root + EngineNames.items(fanId) + EngineNames.all(fanId), run.variables(reduce))
+        assertEquals(root, run.variables(run.generated("fanout_")))
+        assertEquals(root + EngineNames.pending(fanId), run.variables(run.generated("wave_")))
+        val loop = run.generated("decision_")
+        assertEquals(root + EngineNames.iterations(stepId(loop, "decision_")), run.variables(loop))
+        assertEquals(root + EngineNames.formVariable(stepId(run.generated("form_"), "form_")), run.variables(run.generated("form_")))
+        assertEquals(root + EngineNames.messageVariable("paid"), run.variables(run.generated("message_")))
+        assertEquals(
+            listOf(EngineNames.item(fanId), EngineNames.ITEM_KEY, EngineNames.WORKFLOW, EngineNames.compensation("charge")),
+            run.variables(run.type("pick")),
+        )
+    }
+
+    @Test
+    fun itemsWithoutKnownFieldsFetchEveryVariable() {
+        val codec = WorkItemCodec<EngineOrder>(decode = { EngineOrder("x") }, encode = { JsonObject(emptyMap()) })
+        val task = object : Task<EngineOrder>("t") {
+            override suspend fun execute(item: EngineOrder) {}
+        }
+        val root = SubFlow("opaque", Sequence(listOf(Execute(task, TaskOptions()))), codec, emptyMap(), emptyMap())
+        val wf = Workflow("opaque", "opaque", { kotlinx.coroutines.flow.emptyFlow() }, root)
+        assertEquals(null, EngineRun(wf, RunConfig()).variables(EngineNames.jobType("opaque", "t")))
     }
 }

@@ -126,6 +126,7 @@ open class FlowSpec<W : WorkItem> internal constructor(
         concurrency: Int?,
         buildSpec: (WorkItemCodec<C>, String, IdGen) -> FlowSpec<C>,
     ): Fan<W, C> {
+        require(concurrency == null || concurrency >= 1) { "concurrency must be at least 1, was $concurrency" }
         val id = idgen.next("f")
         val childKey = "${baseKey}_$id"
         val childSpec = buildSpec(childCodec, childKey, idgen)
@@ -368,7 +369,7 @@ inline fun <reified W : WorkItem> workflow(
 
 private val WORKFLOW_KEY = Regex("^[a-z_][a-z0-9_\\-]*$")
 
-private val RESERVED_TOPIC = Regex("^(decision_[cl]|expand_f|reduce_f|timeout_to|loop_l|call_cw|return_cw|form_ut|message_msg)\\d+$")
+private val RESERVED_TOPIC = Regex("^(decision_[cl]|expand_f|fanout_f|wave_f|reduce_f|timeout_to|loop_l|call_cw|return_cw|form_ut|message_msg)\\d+$")
 
 private fun validateTopics(workflowName: String, root: SubFlow<*>) {
     val seen = HashSet<String>()

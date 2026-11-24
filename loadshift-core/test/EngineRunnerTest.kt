@@ -79,7 +79,13 @@ private class FakeDriver : EngineDriver {
         return id
     }
 
-    override suspend fun fetch(jobTypes: List<String>, maxJobs: Int, lock: Duration, wait: Duration): List<EngineJob> {
+    override suspend fun fetch(
+        jobTypes: List<String>,
+        maxJobs: Int,
+        lock: Duration,
+        wait: Duration,
+        variables: (String) -> List<String>?,
+    ): List<EngineJob> {
         heldFetch?.let { held ->
             heldFetch = null
             return held.await()

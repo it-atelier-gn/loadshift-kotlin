@@ -59,11 +59,18 @@ object Camunda8Dialect {
                 continue
             }
             val element = mi.camundaElementVariable ?: continue
+            called.domElement.setAttribute("propagateAllParentVariables", "false")
             val mapping = extensions.addExtensionElement(ZEEBE_NS, "ioMapping")
-            val input = model.document.createElement(ZEEBE_NS, "input")
-            input.setAttribute("source", "=$element.${EngineNames.ITEM_KEY}")
-            input.setAttribute("target", EngineNames.ITEM_KEY)
-            mapping.domElement.appendChild(input)
+            for ((source, target) in listOf(
+                "=$element" to element,
+                "=${EngineNames.WORKFLOW}" to EngineNames.WORKFLOW,
+                "=$element.${EngineNames.ITEM_KEY}" to EngineNames.ITEM_KEY,
+            )) {
+                val input = model.document.createElement(ZEEBE_NS, "input")
+                input.setAttribute("source", source)
+                input.setAttribute("target", target)
+                mapping.domElement.appendChild(input)
+            }
         }
         for (mi in model.getModelElementsByType(MultiInstanceLoopCharacteristics::class.java)) {
             val collection = mi.camundaCollection?.removeSurrounding("\${", "}") ?: continue

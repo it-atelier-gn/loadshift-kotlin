@@ -1,6 +1,9 @@
 package loadshift.cibseven
 
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
@@ -45,6 +48,11 @@ private data class Customer(var id: String, var note: String? = null) : WorkItem
 
 @Serializable
 private data class Contact(var id: String, var label: String = "") : WorkItem {
+    override val key get() = id
+}
+
+@Serializable
+private data class Batch(var id: String, var items: List<Contact> = emptyList()) : WorkItem {
     override val key get() = id
 }
 
@@ -253,6 +261,60 @@ class CibSevenJavaApiTest {
     }
 
     @Test
+    fun runningAnUnchangedWorkflowAgainDeploysNoNewVersion() = runBlocking {
+        val processEngine = TestEngine.start()
+        try {
+            fun build() = workflow<Customer>("redeploy") {
+                input(listOf(Customer("a")))
+                task("stamp") { }
+                fanOut(expand = { c -> listOf(Contact("${c.id}-1")) }) { task("process") { } }
+            }
+            val backend = CibSevenJavaApi(processEngine).backend()
+            assertEquals(1, backend.run(build()).await().done)
+            assertEquals(1, backend.run(build()).await().done)
+            val versions = processEngine.repositoryService.createProcessDefinitionQuery().list()
+                .filter { it.key.startsWith("redeploy") }
+                .groupBy({ it.key }, { it.version })
+            assertEquals(2, versions.size, versions.toString())
+            assertTrue(versions.values.all { it == listOf(1) }, versions.toString())
+        } finally {
+            processEngine.close()
+        }
+    }
+
+    @Test
+    fun largeBatchFansOutInWavesOfItsConcurrency() = runBlocking {
+        val processEngine = TestEngine.start()
+        try {
+            val batch = Batch("batch", List(2_384) { Contact("item-$it", "x".repeat(200)) })
+            val processed = Collections.synchronizedSet(mutableSetOf<String>())
+            val wf = workflow<Batch>("batch-workflow") {
+                input(listOf(batch))
+                fanOut(expand = { b -> b.items }, concurrency = 10) {
+                    task("process") { processed += it.id }
+                }
+            }
+            val childKey = "batch-workflow_f1"
+            val peak = AtomicInteger()
+            val sampler = launch(Dispatchers.IO) {
+                while (isActive) {
+                    val running = processEngine.runtimeService.createProcessInstanceQuery().processDefinitionKey(childKey).count().toInt()
+                    peak.accumulateAndGet(running) { a, b -> maxOf(a, b) }
+                    delay(20.milliseconds)
+                }
+            }
+            val result = withTimeout(LARGE_TIMEOUT) { CibSevenJavaApi(processEngine).backend().run(wf, RunConfig(maxConcurrency = 16)).await() }
+            sampler.cancel()
+
+            assertEquals(1, result.done)
+            assertEquals(2_384, processed.size)
+            assertTrue(peak.get() in 1..10, "peak ${peak.get()}")
+        } finally {
+            processEngine.close()
+        }
+    }
+
+    @Test
     fun variablesKeepTheirTypesThroughTheEngine() {
         val values = mapOf(
             "flag" to CamundaVariables.encode(true),
@@ -282,6 +344,7 @@ class CibSevenJavaApiTest {
 
     private companion object {
         val TEST_TIMEOUT = 120.seconds
+        val LARGE_TIMEOUT = 600.seconds
     }
 }
 
@@ -290,6 +353,7 @@ private object TestEngine {
         val configuration = StandaloneInMemProcessEngineConfiguration()
         configuration.processEngineName = "loadshift-test-${UUID.randomUUID()}"
         configuration.jdbcUrl = "jdbc:h2:mem:${UUID.randomUUID()};DB_CLOSE_DELAY=-1"
+        configuration.jdbcMaxActiveConnections = 64
         configuration.isJobExecutorActivate = true
         configuration.jobExecutor = DefaultJobExecutor().apply {
             waitTimeInMillis = 200

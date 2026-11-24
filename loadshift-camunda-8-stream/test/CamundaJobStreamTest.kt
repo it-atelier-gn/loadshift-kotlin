@@ -93,7 +93,7 @@ class CamundaJobStreamTest {
         val endings = mutableListOf<Throwable?>()
         val stream = CamundaJobStream(client(recorded))
 
-        val handle = stream.open("wf/pack", "worker-1", 30.seconds, "acme", { received += it }) { endings += it }
+        val handle = stream.open("wf/pack", "worker-1", 30.seconds, "acme", listOf("id", "packed"), { received += it }) { endings += it }
         recorded.consumer!!.accept(job("""{"id":"p1","packed":false}"""))
         recorded.consumer!!.accept(job(null))
         val failure = IllegalStateException("UNAVAILABLE")
@@ -106,6 +106,7 @@ class CamundaJobStreamTest {
         assertEquals("worker-1", recorded.calls["workerName"])
         assertEquals(java.time.Duration.ofSeconds(30), recorded.calls["timeout"])
         assertEquals("acme", recorded.calls["tenantId"])
+        assertEquals(listOf("id", "packed"), recorded.calls["fetchVariables"])
         assertEquals(listOf("42", "42"), received.map { it.jobKey })
         assertEquals("7", received.first().processInstanceKey)
         assertEquals(3, received.first().retries)

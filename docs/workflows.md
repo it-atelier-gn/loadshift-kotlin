@@ -8,7 +8,7 @@
 | `condition(predicate) { } otherwise { }` | Runs the matching branch | Service task and exclusive gateways |
 | `loop(predicate) { }` | Repeats the body while the predicate holds | Service task and a gateway loop |
 | `parallel { branch { } }` | Runs the branches concurrently | Parallel gateways |
-| `fanOut(expand) { }` | Runs the body per child, `concurrency` at a time | Child process called by a parallel multi-instance call activity |
+| `fanOut(expand) { }` | Runs the body per child, `concurrency` at a time | Child process called by a parallel multi-instance call activity, in waves of `concurrency` children (`waveSize` without `concurrency`); the next wave starts once every child of the current one has finished |
 | `.reduce(initial, combine) { }`, `.collect { }` | Folds the expanded children into the parent | Service task after the call activity |
 | `wait(duration)` | Suspends the item | Timer catch event |
 | `timeout(duration) { }` | Cancels the block and dead-letters the item | Embedded subprocess with an interrupting boundary timer and a service task that records the dead letter |

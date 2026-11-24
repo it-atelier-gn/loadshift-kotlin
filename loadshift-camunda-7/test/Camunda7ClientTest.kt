@@ -192,4 +192,20 @@ class Camunda7ClientTest {
         assertFalse("processVariables" in requests[1])
         assertTrue(requests.all { it.getValue("all").jsonPrimitive.content == "true" })
     }
+
+    @Test
+    fun fetchAsksEachTopicOnlyForTheVariablesItsHandlerReads() = runTest {
+        val requests = mutableListOf<HttpRequestData>()
+        val engine = MockEngine { request ->
+            requests += request
+            respond("[]", HttpStatusCode.OK, jsonHeaders)
+        }
+        val driver = Camunda7Driver(Camunda7Client(base, null, engine), "worker")
+
+        driver.fetch(listOf("wf/a", "wf/b"), 5, 1.seconds, Duration.ZERO) { if (it == "wf/a") listOf("x", "y") else null }
+
+        val topics = body(requests.single().body).getValue("topics").jsonArray.map { it.jsonObject }
+        assertEquals(listOf("x", "y"), topics[0].getValue("variables").jsonArray.map { it.jsonPrimitive.content })
+        assertFalse("variables" in topics[1])
+    }
 }

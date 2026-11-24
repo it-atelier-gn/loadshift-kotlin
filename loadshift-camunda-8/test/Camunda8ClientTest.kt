@@ -231,4 +231,20 @@ class Camunda8ClientTest {
         assertEquals(setOf("wf:a", "wf:b"), correlated.toSet())
         assertEquals<List<JsonObject?>>(listOf(variables, variables), payloads)
     }
+
+    @Test
+    fun activationAsksOnlyForTheVariablesTheHandlerReads() = runTest {
+        val bodies = mutableListOf<JsonObject>()
+        val engine = MockEngine { request ->
+            bodies += body(request.body)
+            respond("""{"jobs":[]}""", HttpStatusCode.OK, jsonHeaders)
+        }
+        val driver = Camunda8Driver(Camunda8Client("http://engine", Camunda8Auth.None, engine), "worker")
+
+        driver.fetch(listOf("wf/a"), 1, 1.seconds, Duration.ZERO) { listOf("x", "y") }
+        driver.fetch(listOf("wf/b"), 1, 1.seconds, Duration.ZERO)
+
+        assertEquals(listOf("x", "y"), bodies[0].getValue("fetchVariable").jsonArray.map { it.jsonPrimitive.content })
+        assertFalse("fetchVariable" in bodies[1])
+    }
 }

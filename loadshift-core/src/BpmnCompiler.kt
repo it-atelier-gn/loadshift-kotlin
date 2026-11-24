@@ -43,6 +43,7 @@ object BpmnCompiler {
             .connectTo(next.id)
             .done()
         BpmnLayout.apply(model, key)
+        StableIds.apply(model)
         return CompiledProcess(key, key, model, listOf(next, seed, await), workflow.version)
     }
 
@@ -83,6 +84,7 @@ object BpmnCompiler {
             val model = process.done()
             for (gateway in model.getModelElementsByType(Gateway::class.java)) gateway.name = null
             BpmnLayout.apply(model, sub.key)
+            StableIds.apply(model)
             return CompiledProcess(sub.key, sub.key, model, refs.toList(), versionTag)
         }
 
@@ -215,9 +217,12 @@ object BpmnCompiler {
         private fun applyMessage(step: AwaitMessage<*>, b: AbstractFlowNodeBuilder<*, *>): AbstractFlowNodeBuilder<*, *> =
             if (step.onMessage == null) b else service(b, EngineNames.message(step.id), EngineNames.message(step.id), "apply ${step.message}")
 
-        private fun forEachChild(b: AbstractFlowNodeBuilder<*, *>, stepId: String, childKey: String) =
-            service(b, EngineNames.expand(stepId), EngineNames.expand(stepId), "expand children")
-                .callActivity("call_$stepId")
+        private fun forEachChild(b: AbstractFlowNodeBuilder<*, *>, stepId: String, childKey: String): AbstractFlowNodeBuilder<*, *> {
+            val call = "call_$stepId"
+            val split = ids.next("gw")
+            val more = EngineNames.more(stepId)
+            val children = service(b, EngineNames.expand(stepId), EngineNames.fanOut(stepId), "expand children")
+                .callActivity(call)
                 .name("for each child")
                 .calledElement(childKey)
                 .multiInstance()
@@ -225,5 +230,11 @@ object BpmnCompiler {
                 .camundaCollection("\${${EngineNames.items(stepId)}}")
                 .camundaElementVariable(EngineNames.item(stepId))
                 .multiInstanceDone()
+            service(children, EngineNames.wave(stepId), EngineNames.wave(stepId), "next wave")
+                .exclusiveGateway(split)
+                .condition("more", "\${$more}")
+                .connectTo(call)
+            return b.moveToNode(split).condition("done", "\${!($more)}")
+        }
     }
 }

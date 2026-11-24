@@ -75,6 +75,7 @@ class EngineRunner(
     private val pollers = mutableListOf<Job>()
     private val stateLock = Any()
     private val adopted = CompletableDeferred<Unit>()
+    private val lookup = VariableLookup { instanceId, name -> driver.variable(instanceId, name) }
 
     @Volatile private var runState = if (config.start is Start.Now) RunState.Running else RunState.Scheduled
     @Volatile private var ending: RunState? = null
@@ -417,7 +418,7 @@ class EngineRunner(
             while (slots < MAX_BATCH && workSlots.tryAcquire()) slots++
             val fetchedAt = TimeSource.Monotonic.markNow()
             val jobs = try {
-                driver.fetch(jobTypes, slots, config.lockDuration, wait)
+                driver.fetch(jobTypes, slots, config.lockDuration, wait, run::variables)
             } catch (e: CancellationException) {
                 repeat(slots) { workSlots.release() }
                 throw e
@@ -468,7 +469,7 @@ class EngineRunner(
     private suspend fun process(job: EngineJob, lockedAt: TimeSource.Monotonic.ValueTimeMark) {
         val heartbeat = heartbeat(job, lockedAt)
         try {
-            when (val outcome = run.execute(job)) {
+            when (val outcome = run.execute(job, lookup)) {
                 is JobOutcome.Complete -> deliver { driver.complete(job, outcome.variables) }
                 is JobOutcome.Retry -> deliver {
                     driver.fail(job, outcome.retries, outcome.backoff, outcome.message, outcome.details)

@@ -11,7 +11,22 @@ private data class Job(var id: String, var attempts: Int = 0) : WorkItem {
     override val key get() = id
 }
 
+private class Plain(val id: String) : WorkItem
+
+@Serializable
+private data class Renamed(@kotlinx.serialization.SerialName("order_id") var id: String, var note: String? = null) : WorkItem
+
 class WorkItemTest {
+
+    @Test
+    fun codecListsTheSerialNamesOfTheItemFields() {
+        assertEquals(listOf("order_id", "note"), workItemCodec<Renamed>().fields)
+    }
+
+    @Test
+    fun codecOfAnItemWithoutSerializerHasNoFieldList() {
+        assertEquals(null, workItemCodec<Plain>().fields)
+    }
 
     @Test
     fun codecRoundTripPreservesValues() {

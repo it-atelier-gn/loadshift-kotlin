@@ -75,6 +75,7 @@ class CamundaJobStreamE2eTest {
                     worker: String,
                     timeout: Duration,
                     tenantId: String?,
+                    fetchVariables: List<String>?,
                     receive: (StreamedJob) -> Unit,
                     ended: (Throwable?) -> Unit,
                 ) = stream.open(
@@ -82,6 +83,7 @@ class CamundaJobStreamE2eTest {
                     worker,
                     timeout,
                     tenantId,
+                    fetchVariables,
                     { job ->
                         pushed.incrementAndGet()
                         receive(job)

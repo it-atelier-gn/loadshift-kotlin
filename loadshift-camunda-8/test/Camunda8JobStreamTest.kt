@@ -36,6 +36,7 @@ class Camunda8JobStreamTest {
             worker: String,
             timeout: Duration,
             tenantId: String?,
+            fetchVariables: List<String>?,
             receive: (StreamedJob) -> Unit,
             ended: (Throwable?) -> Unit,
         ): AutoCloseable {

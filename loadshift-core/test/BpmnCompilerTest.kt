@@ -60,7 +60,26 @@ class BpmnCompilerTest {
         val topics = root.serviceTasks.map { it.topic }.toSet()
         assertTrue(topics.containsAll(setOf("receipt", "dunning", "index", "notify")))
         assertTrue(topics.any { it.startsWith("decision_") })
-        assertTrue(topics.any { it.startsWith("expand_") })
+        assertTrue(topics.any { it.startsWith("fanout_") })
+        assertTrue(topics.any { it.startsWith("wave_") })
+    }
+
+    @Test
+    fun fanOutLoopsThroughWavesUntilNoChildIsLeft() {
+        val root = BpmnCompiler.compile(workflowWithEverything())[0]
+        val call = root.model.getModelElementsByType(CallActivity::class.java).single()
+        val fanId = call.id.removePrefix("call_")
+        val expand = root.serviceTasks.single { it.id == EngineNames.expand(fanId) }
+        assertEquals(EngineNames.fanOut(fanId), expand.topic)
+        val flows = root.model.getModelElementsByType(SequenceFlow::class.java)
+        val wave = flows.single { it.source.id == call.id }.target
+        assertEquals(EngineNames.wave(fanId), wave.id)
+        val split = flows.single { it.source.id == wave.id }.target
+        val exits = flows.filter { it.source.id == split.id }.associate { it.name to it.target.id }
+        assertEquals(call.id, exits["more"])
+        assertTrue(exits.getValue("done") != call.id)
+        val conditions = flows.filter { it.source.id == split.id }.associate { it.name to it.conditionExpression.textContent }
+        assertEquals("\${${EngineNames.more(fanId)}}", conditions["more"])
     }
 
     @Test
@@ -327,5 +346,57 @@ class BpmnCompilerTest {
         assertEquals(setOf("nested-branches", "nested-branches_f2", "nested-branches_f4"), processes.keys)
         assertEquals(listOf("split"), processes.getValue("nested-branches_f2").serviceTasks.map { it.topic })
         assertEquals(setOf("nested-branches_f2", "nested-branches_f4"), wf.levels().keys - "nested-branches")
+    }
+
+    private fun workflowWithEveryStep(): Workflow<Order> {
+        val billing = workflow<Order>("ids-billing") {
+            input(emptyList())
+            task("bill") { }
+        }
+        return workflow("ids-everything") {
+            input(emptyList())
+            condition({ it.paid }) { task("receipt") { } } otherwise { task("dunning") { } }
+            loop({ false }) { task("spin") { } }
+            parallel {
+                branch { task("index") { } }
+                branch { task("notify") { } }
+            }
+            timeout(5.seconds) { task("slow") { } }
+            task("reserve") { }.catching<OutOfStock> { task("backorder") { } }
+            awaitMessage("paid", timeout = 5.seconds) { _, _ -> } onTimeout { task("remind") { } }
+            awaitSignal("go")
+            wait(1.seconds)
+            userTask("Approve")
+            call(billing)
+            fanOut(expand = { emptyList<Line>() }) {
+                task("price-line") { }
+            }.reduce(0, { acc, _ -> acc }) { _, _ -> }
+        }
+    }
+
+    private fun compiledXml(): List<String> {
+        val workflow = workflowWithEveryStep()
+        return (BpmnCompiler.compile(workflow) + BpmnCompiler.compileSchedule(workflow)).map { Bpmn.convertToString(it.model) }
+    }
+
+    @Test
+    fun compilingTheSameWorkflowTwiceGivesIdenticalXml() {
+        assertEquals(compiledXml(), compiledXml())
+    }
+
+    @Test
+    fun stableIdsKeepEveryReferenceIntact() {
+        val uuid = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+        for (xml in compiledXml()) {
+            assertTrue(uuid !in xml, xml)
+            val model = Bpmn.readModelFromStream(xml.byteInputStream())
+            Bpmn.validateModel(model)
+            for (flow in model.getModelElementsByType(SequenceFlow::class.java)) {
+                assertTrue(flow in flow.source.outgoing, flow.id)
+                assertTrue(flow in flow.target.incoming, flow.id)
+            }
+            for (edge in model.getModelElementsByType(BpmnEdge::class.java)) assertTrue(edge.bpmnElement != null, edge.id)
+            for (shape in model.getModelElementsByType(BpmnShape::class.java)) assertTrue(shape.bpmnElement != null, shape.id)
+        }
     }
 }

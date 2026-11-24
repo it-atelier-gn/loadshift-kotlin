@@ -6,6 +6,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.selects.onTimeout
 import kotlinx.coroutines.selects.select
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -62,15 +63,21 @@ internal class Camunda8Driver(
         return keys.map { RootInstance(it, itemKeys[it]?.takeIf { key -> key.isNotEmpty() }) }
     }
 
-    override suspend fun fetch(jobTypes: List<String>, maxJobs: Int, lock: Duration, wait: Duration): List<EngineJob> {
-        val stream = jobStream ?: return activate(jobTypes, maxJobs, lock, wait)
+    override suspend fun fetch(
+        jobTypes: List<String>,
+        maxJobs: Int,
+        lock: Duration,
+        wait: Duration,
+        variables: (String) -> List<String>?,
+    ): List<EngineJob> {
+        val stream = jobStream ?: return activate(jobTypes, maxJobs, lock, wait, variables)
         if (closed.get()) return emptyList()
         val channels = jobTypes.map { type ->
-            openStream(stream, type, lock)
+            openStream(stream, type, lock, variables(type))
             channel(type)
         }
         drain(channels, maxJobs).takeIf { it.isNotEmpty() }?.let { return it }
-        activate(jobTypes, maxJobs, lock, Duration.ZERO).takeIf { it.isNotEmpty() }?.let { return it }
+        activate(jobTypes, maxJobs, lock, Duration.ZERO, variables).takeIf { it.isNotEmpty() }?.let { return it }
         val first = select<EngineJob?> {
             channels.forEach { channel -> channel.onReceive { it } }
             onTimeout(wait.coerceAtLeast(MIN_STREAM_WAIT)) { null }
@@ -93,7 +100,7 @@ internal class Camunda8Driver(
 
     private fun channel(type: String): Channel<EngineJob> = streamed.computeIfAbsent(type) { Channel(STREAM_BUFFER) }
 
-    private fun openStream(stream: Camunda8JobStream, type: String, lock: Duration) {
+    private fun openStream(stream: Camunda8JobStream, type: String, lock: Duration, fetchVariables: List<String>?) {
         if (closed.get() || streams.containsKey(type)) return
         if (reopenAt[type]?.hasNotPassedNow() == true) return
         val opened = OpenStream()
@@ -105,6 +112,7 @@ internal class Camunda8Driver(
                 workerId,
                 lock,
                 tenantId,
+                fetchVariables,
                 { job ->
                     val engineJob = EngineJob(job.jobKey, job.type, job.processInstanceKey, job.variables, job.retries)
                     runCatching { runBlocking { channel.send(engineJob) } }
@@ -128,7 +136,13 @@ internal class Camunda8Driver(
         }
     }
 
-    private suspend fun activate(jobTypes: List<String>, maxJobs: Int, lock: Duration, wait: Duration): List<EngineJob> =
+    private suspend fun activate(
+        jobTypes: List<String>,
+        maxJobs: Int,
+        lock: Duration,
+        wait: Duration,
+        variables: (String) -> List<String>?,
+    ): List<EngineJob> =
         jobTypes.flatMap { type ->
             client.activateJobs(
                 ActivateJobsRequest(
@@ -137,6 +151,7 @@ internal class Camunda8Driver(
                     timeout = lock.inWholeMilliseconds,
                     maxJobsToActivate = maxJobs,
                     requestTimeout = if (wait.isPositive()) wait.inWholeMilliseconds else NO_LONG_POLLING,
+                    fetchVariable = variables(type),
                 ),
             ).map { job ->
                 EngineJob(
@@ -194,6 +209,11 @@ internal class Camunda8Driver(
 
     override suspend fun activeInstances(processIds: List<String>): Long =
         processIds.sumOf { client.instanceCount(it) }
+
+    override suspend fun variable(instanceId: String, name: String): JsonElement? {
+        val raw = client.variables(name, listOf(instanceId)).firstNotNullOfOrNull { it.value } ?: return null
+        return Json.parseToJsonElement(raw)
+    }
 
     private companion object {
         const val NO_LONG_POLLING = -1L

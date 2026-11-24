@@ -9,6 +9,7 @@ import loadshift.core.task
 import loadshift.core.workflow
 import org.camunda.bpm.model.bpmn.Bpmn
 import org.camunda.bpm.model.bpmn.instance.CallActivity
+import org.camunda.bpm.model.bpmn.instance.MultiInstanceLoopCharacteristics
 import org.camunda.bpm.model.bpmn.instance.camunda.CamundaIn
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -48,6 +49,7 @@ class Camunda7DialectTest {
         assertTrue("camunda:collection=\"\${f1_items.elements()}\"" in xml, xml)
 
         val call = root.model.getModelElementsByType(CallActivity::class.java).single()
+        assertTrue((call.loopCharacteristics as MultiInstanceLoopCharacteristics).isCamundaAsyncAfter)
         val inputs = call.extensionElements.elementsQuery.filterByType(CamundaIn::class.java).list()
         assertEquals(setOf("f1_item", EngineNames.WORKFLOW, EngineNames.ITEM_KEY), inputs.map { it.camundaTarget }.toSet())
         assertEquals("f1_item", inputs.single { it.camundaTarget == "f1_item" }.camundaSource)
@@ -56,5 +58,26 @@ class Camunda7DialectTest {
             "\${f1_item.prop('${EngineNames.ITEM_KEY}').stringValue()}",
             inputs.single { it.camundaTarget == EngineNames.ITEM_KEY }.camundaSourceExpression,
         )
+    }
+
+    private fun decoratedXml(): List<String> {
+        val wf = workflow<Job>("stable-ids") {
+            input(emptyList())
+            task("cleanup") { }
+            userTask("Approve")
+            awaitMessage("paid")
+            fanOut(expand = { emptyList<Line>() }) {
+                task("price") { }
+            }
+        }
+        return BpmnCompiler.compile(wf).map { process ->
+            Camunda7Dialect.decorate(process.model, process.serviceTasks, "v1")
+            Bpmn.convertToString(process.model)
+        }
+    }
+
+    @Test
+    fun decoratingTheSameWorkflowTwiceGivesIdenticalXml() {
+        assertEquals(decoratedXml(), decoratedXml())
     }
 }

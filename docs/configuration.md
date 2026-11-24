@@ -15,6 +15,7 @@
 | `deadLetters` | none | Store that receives every dead letter with the item and its workflow level (`InMemoryDeadLetterStore`, `SqliteDeadLetterStore`), see [Dead-letter store](#dead-letter-store) |
 | `lockDuration` | 5 minutes | Engine lock per job |
 | `maxLoopIterations` | `10000` | Iterations after which a loop dead-letters the item |
+| `waveSize` | `100` | On an engine: child process instances a fan-out without `concurrency` starts at once |
 | `logSink` | discards entries | Receives `log()` entries |
 | `tracer` | none | Receives one span per task |
 | `metrics` | discards measurements | Receives counters and task durations, see [Metrics](observability.md#metrics) |

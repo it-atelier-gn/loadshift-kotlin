@@ -1,5 +1,6 @@
 package loadshift.camunda7
 
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -46,13 +47,21 @@ internal class Camunda7Driver(
         return instances.map { RootInstance(it.id, keys[it.id]?.takeIf { key -> key.isNotEmpty() }) }
     }
 
-    override suspend fun fetch(jobTypes: List<String>, maxJobs: Int, lock: Duration, wait: Duration): List<EngineJob> =
+    override suspend fun fetch(
+        jobTypes: List<String>,
+        maxJobs: Int,
+        lock: Duration,
+        wait: Duration,
+        variables: (String) -> List<String>?,
+    ): List<EngineJob> =
         client.fetchAndLock(
             FetchAndLockRequest(
                 workerId = workerId,
                 maxTasks = maxJobs,
                 asyncResponseTimeout = wait.inWholeMilliseconds.takeIf { it > 0 },
-                topics = jobTypes.map { FetchTopicDto(topicName = it, lockDuration = lock.inWholeMilliseconds) },
+                topics = jobTypes.map {
+                    FetchTopicDto(topicName = it, lockDuration = lock.inWholeMilliseconds, variables = variables(it))
+                },
             ),
         ).map { task ->
             EngineJob(
@@ -127,6 +136,11 @@ internal class Camunda7Driver(
 
     override suspend fun activeInstances(processIds: List<String>): Long =
         processIds.sumOf { client.processInstanceCount(it) }
+
+    override suspend fun variable(instanceId: String, name: String): JsonElement? {
+        val found = client.variableInstances(name, listOf(instanceId)).firstOrNull() ?: return null
+        return CamundaVariables.toJsonElement(CamundaVariables.decode(CamundaValue(found.value, found.type)))
+    }
 
     internal companion object {
         const val MAX_BUSINESS_KEY = 255

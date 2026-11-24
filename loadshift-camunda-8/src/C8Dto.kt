@@ -21,6 +21,7 @@ data class ActivateJobsRequest(
     val maxJobsToActivate: Int,
     val requestTimeout: Long = 0,
     val tenantIds: List<String>? = null,
+    val fetchVariable: List<String>? = null,
 )
 
 @Serializable

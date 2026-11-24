@@ -28,6 +28,7 @@ class CamundaJobStream private constructor(
         worker: String,
         timeout: Duration,
         tenantId: String?,
+        fetchVariables: List<String>?,
         receive: (StreamedJob) -> Unit,
         ended: (Throwable?) -> Unit,
     ): AutoCloseable {
@@ -39,6 +40,7 @@ class CamundaJobStream private constructor(
             }
             .workerName(worker)
             .timeout(timeout.toJavaDuration())
+            .let { if (fetchVariables == null) it else it.fetchVariables(fetchVariables) }
         val future = (if (tenantId == null) command else command.tenantId(tenantId)).send()
         val cancelled = AtomicBoolean(false)
         future.whenComplete { _, error -> if (!cancelled.get()) ended(error) }

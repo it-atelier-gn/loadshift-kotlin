@@ -28,6 +28,7 @@ object Camunda7Dialect {
                 mapCall(model, call)
                 continue
             }
+            mi.isCamundaAsyncAfter = true
             mi.camundaCollection?.let { collection ->
                 mi.camundaCollection = collection.removeSuffix("}") + ".elements()}"
             }

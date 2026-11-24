@@ -137,7 +137,7 @@ val examples = listOf(
     Example(
         id = "fanout",
         title = "Fan-out to child items",
-        blurb = "fanOut expands every item into children. It compiles to an expand service task plus a parallel multi-instance call activity invoking a child process.",
+        blurb = "fanOut expands every item into children. It compiles to an expand service task, a parallel multi-instance call activity that runs one wave of children in child processes, and a service task with a gateway that starts the next wave.",
         dsl = """
             workflow<Order>("order-lines") {
                 input(orders)
@@ -166,7 +166,7 @@ val examples = listOf(
     Example(
         id = "fanin",
         title = "Fan-in to an aggregate",
-        blurb = "reduce folds the expanded children into one value and runs onComplete on the parent. It compiles to the fan-out plus a reduce service task after the multi-instance join.",
+        blurb = "reduce folds the expanded children into one value and runs onComplete on the parent. It compiles to the fan-out plus a reduce service task after the last wave.",
         dsl = """
             workflow<Order>("order-totals") {
                 input(orders)
