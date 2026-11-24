@@ -740,12 +740,14 @@ class EngineRunTest {
         val fanId = stepId(type, "fanout_")
         val batch = EngineOrder("batch", note = "x".repeat(50_000))
         val outcome = assertIs<JobOutcome.Complete>(run.execute(job(type, run.rootVariables(batch))))
-        val wave = outcome.variables.getValue(EngineNames.items(fanId)).jsonArray
-        val all = outcome.variables.getValue(EngineNames.all(fanId)).jsonArray
-        assertEquals(100, wave.size)
-        assertEquals(2_384, all.size)
-        assertEquals(JsonPrimitive(100), outcome.variables[EngineNames.cursor(fanId)])
-        assertTrue(all.all { it.toString().length < 400 }, all.first().toString())
+        val first = outcome.variables.getValue(EngineNames.items(fanId)).jsonArray
+        val pages = (1 until 24).map { outcome.variables.getValue(EngineNames.page(fanId, it)).jsonArray }
+        assertEquals(100, first.size)
+        assertEquals(List(22) { 100 } + 84, pages.map { it.size })
+        assertEquals(JsonPrimitive(24), outcome.variables[EngineNames.waves(fanId)])
+        assertEquals(JsonPrimitive(1), outcome.variables[EngineNames.cursor(fanId)])
+        assertEquals(null, outcome.variables[EngineNames.all(fanId)])
+        assertTrue((first + pages.flatten()).all { it.toString().length < 400 }, first.first().toString())
         assertEquals(JsonPrimitive("x".repeat(50_000)), outcome.variables.getValue(EngineNames.parent(fanId)).jsonObject["note"])
     }
 
@@ -762,15 +764,18 @@ class EngineRunTest {
         vars = vars.after(run.execute(job(start, vars)))
         val keys = { v: JsonObject -> v.getValue(EngineNames.items(fanId)).jsonArray.map { it.jsonObject.getValue("id").jsonPrimitive.content } }
         val waves = mutableListOf(keys(vars))
+        val lookup = VariableLookup { _, name -> vars[name] }
         while (true) {
-            val written = assertIs<JobOutcome.Complete>(run.execute(job(run.generated("wave_"), vars))).variables
-            assertEquals(setOf(EngineNames.items(fanId), EngineNames.cursor(fanId), EngineNames.more(fanId)), written.keys)
+            val written = assertIs<JobOutcome.Complete>(run.execute(job(run.generated("wave_"), vars), lookup)).variables
+            val allowed = setOf(EngineNames.items(fanId), EngineNames.cursor(fanId), EngineNames.more(fanId)) + (1..2).map { EngineNames.page(fanId, it) }
+            assertTrue(allowed.containsAll(written.keys), written.keys.toString())
+            assertTrue(written.getValue(EngineNames.items(fanId)).jsonArray.size <= 2)
             vars = JsonObject(vars + written)
             if (vars.getValue(EngineNames.more(fanId)).jsonPrimitive.content != "true") break
             waves += keys(vars)
         }
         assertEquals(listOf(listOf("o-0", "o-1"), listOf("o-2", "o-3"), listOf("o-4")), waves)
-        assertEquals(JsonPrimitive(5), vars[EngineNames.cursor(fanId)])
+        assertEquals(listOf(JsonNull, JsonNull), listOf(vars[EngineNames.page(fanId, 1)], vars[EngineNames.page(fanId, 2)]))
         assertEquals(emptyList(), keys(vars))
     }
 
@@ -798,9 +803,23 @@ class EngineRunTest {
         val run = EngineRun(wf, RunConfig())
         var vars = run.rootVariables(EngineOrder("o"))
         vars = vars.after(run.execute(job(run.generated("fanout_"), vars)))
-        repeat(3) { vars = vars.after(run.execute(job(run.generated("wave_"), vars))) }
+        val lookup = VariableLookup { _, name -> vars[name] }
+        repeat(3) { vars = vars.after(run.execute(job(run.generated("wave_"), vars), lookup)) }
         val outcome = assertIs<JobOutcome.Complete>(run.execute(job(run.generated("reduce_"), vars)))
         assertEquals(JsonPrimitive(10), outcome.variables["total"])
+    }
+
+    @Test
+    fun waveWhosePageIsNotReadableYetIsRetriedWithoutSpendingRetries() = runTest {
+        val wf = workflow<EngineOrder>("late-page") {
+            input(emptyList())
+            fanOut(expand = { o -> List(4) { EngineLine("${o.id}-$it") } }, concurrency = 2) { task("pick") { } }
+        }
+        val run = EngineRun(wf, RunConfig())
+        val vars = run.rootVariables(EngineOrder("o")).after(run.execute(job(run.generated("fanout_"), run.rootVariables(EngineOrder("o")))))
+        val retry = assertIs<JobOutcome.Retry>(run.execute(job(run.generated("wave_"), vars, retries = 1)))
+        assertEquals(1, retry.retries)
+        assertEquals(1.seconds, retry.backoff)
     }
 
     @Test
@@ -882,7 +901,7 @@ class EngineRunTest {
         val fanId = stepId(reduce, "reduce_")
         assertEquals(root + EngineNames.items(fanId) + EngineNames.all(fanId), run.variables(reduce))
         assertEquals(root, run.variables(run.generated("fanout_")))
-        assertEquals(root + EngineNames.all(fanId) + EngineNames.cursor(fanId), run.variables(run.generated("wave_")))
+        assertEquals(root + EngineNames.cursor(fanId) + EngineNames.waves(fanId), run.variables(run.generated("wave_")))
         val loop = run.generated("decision_")
         assertEquals(root + EngineNames.iterations(stepId(loop, "decision_")), run.variables(loop))
         assertEquals(root + EngineNames.formVariable(stepId(run.generated("form_"), "form_")), run.variables(run.generated("form_")))

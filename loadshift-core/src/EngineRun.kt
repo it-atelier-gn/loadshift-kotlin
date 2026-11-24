@@ -145,7 +145,7 @@ class EngineRun(
 
     private suspend fun failure(handler: JobHandler, job: EngineJob, error: Throwable): JobOutcome {
         val policy = handler.retry
-        if (error is ParentUnavailable) {
+        if (error is NotYetReadable) {
             val waits = parentWaits.merge(job.id, 1, Int::plus) ?: 1
             if (waits < PARENT_ATTEMPTS) {
                 val retries = (job.retries ?: policy.maxAttempts).coerceAtLeast(1)
@@ -258,7 +258,7 @@ class EngineRun(
         companion object Key : CoroutineContext.Key<Lookup>
     }
 
-    private class ParentUnavailable(message: String) : IllegalStateException(message)
+    private class NotYetReadable(message: String) : IllegalStateException(message)
 
     private class ParentCache {
         private val entries = object : LinkedHashMap<String, CompletableDeferred<JsonObject?>>(16, 0.75f, true) {
@@ -310,7 +310,7 @@ class EngineRun(
         val variable = (ref[REF_VARIABLE] as? JsonPrimitive)?.contentOrNull.orEmpty()
         val lookup = currentCoroutineContext()[Lookup]?.lookup ?: VariableLookup.None
         return parentCache.get(refKey(ref)) { asObject(lookup.variable(instance, variable)) }
-            ?: throw ParentUnavailable("parent item '$variable' of instance $instance is not readable yet")
+            ?: throw NotYetReadable("parent item '$variable' of instance $instance is not readable yet")
     }
 
     private fun asObject(value: JsonElement?): JsonObject? = when (value) {
@@ -395,12 +395,12 @@ class EngineRun(
             }
             is FanOut<*, *> -> {
                 val fan = step as FanOut<WorkItem, WorkItem>
-                fanHandlers(owner, fan.id, fan.expand, fan.childCodec, fan.concurrency, codec, itemVariable, parents).forEach(::add)
+                fanHandlers(owner, fan.id, fan.expand, fan.childCodec, fan.concurrency, false, codec, itemVariable, parents).forEach(::add)
                 register(owner, fan.body, EngineNames.item(fan.id), listOf(codec) + parents, fan.concurrency?.let { Semaphore(it) })
             }
             is FanIn<*, *, *> -> {
                 val fan = step as FanIn<WorkItem, WorkItem, Any?>
-                fanHandlers(owner, fan.id, fan.expand, fan.childCodec, fan.concurrency, codec, itemVariable, parents).forEach(::add)
+                fanHandlers(owner, fan.id, fan.expand, fan.childCodec, fan.concurrency, true, codec, itemVariable, parents).forEach(::add)
                 add(ReduceHandler(owner, fan, codec, itemVariable, parents))
                 register(owner, fan.body, EngineNames.item(fan.id), listOf(codec) + parents, fan.concurrency?.let { Semaphore(it) })
             }
@@ -424,15 +424,16 @@ class EngineRun(
         expand: suspend (WorkItem) -> Flow<WorkItem>,
         childCodec: WorkItemCodec<WorkItem>,
         concurrency: Int?,
+        keepAll: Boolean,
         codec: WorkItemCodec<WorkItem>,
         itemVariable: String?,
         parents: List<WorkItemCodec<WorkItem>>,
     ): List<JobHandler> {
         val wave = concurrency ?: config.waveSize
         return listOf(
-            ExpandHandler(owner, EngineNames.fanOut(stepId), stepId, expand, childCodec, codec, itemVariable, parents, wave),
-            WaveHandler(owner, stepId, wave, codec, itemVariable),
-            ExpandHandler(owner, EngineNames.expand(stepId), stepId, expand, childCodec, codec, itemVariable, parents, null),
+            ExpandHandler(owner, EngineNames.fanOut(stepId), stepId, expand, childCodec, codec, itemVariable, parents, wave, keepAll),
+            WaveHandler(owner, stepId, codec, itemVariable),
+            ExpandHandler(owner, EngineNames.expand(stepId), stepId, expand, childCodec, codec, itemVariable, parents, null, false),
         )
     }
 
@@ -635,6 +636,7 @@ class EngineRun(
         itemVariable: String?,
         parentCodecs: List<WorkItemCodec<WorkItem>>,
         private val wave: Int?,
+        private val keepAll: Boolean,
     ) : JobHandler(owner, topic, codec, itemVariable, parentCodecs, RetryPolicy.None) {
         override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
             val source = source(variables)
@@ -660,9 +662,12 @@ class EngineRun(
                 if (wave == null) {
                     put(EngineNames.items(stepId), items)
                 } else {
-                    put(EngineNames.items(stepId), JsonArray(items.take(wave)))
-                    put(EngineNames.all(stepId), items)
-                    put(EngineNames.cursor(stepId), JsonPrimitive(wave))
+                    val pages = items.chunked(wave)
+                    put(EngineNames.items(stepId), JsonArray(pages.firstOrNull().orEmpty()))
+                    for (index in 1 until pages.size) put(EngineNames.page(stepId, index), JsonArray(pages[index]))
+                    put(EngineNames.waves(stepId), JsonPrimitive(pages.size))
+                    put(EngineNames.cursor(stepId), JsonPrimitive(1))
+                    if (keepAll) put(EngineNames.all(stepId), items)
                 }
             }
             val written = write(variables, source, item) + waves + (parentVariable to parent)
@@ -673,22 +678,30 @@ class EngineRun(
     private inner class WaveHandler(
         owner: Workflow<*>,
         private val stepId: String,
-        private val wave: Int,
         codec: WorkItemCodec<WorkItem>,
         itemVariable: String?,
     ) : JobHandler(owner, EngineNames.wave(stepId), codec, itemVariable, emptyList(), RetryPolicy.None) {
-        override val reads get() = listOf(EngineNames.all(stepId), EngineNames.cursor(stepId))
+        override val reads get() = listOf(EngineNames.cursor(stepId), EngineNames.waves(stepId))
 
         override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
-            val all = array(variables[EngineNames.all(stepId)])
-            val from = ((variables[EngineNames.cursor(stepId)] as? JsonPrimitive)?.intOrNull ?: all.size).coerceIn(0, all.size)
-            val next = all.subList(from, minOf(all.size, from + wave))
+            val count = (variables[EngineNames.waves(stepId)] as? JsonPrimitive)?.intOrNull ?: 0
+            val next = (variables[EngineNames.cursor(stepId)] as? JsonPrimitive)?.intOrNull ?: count
+            if (next >= count) {
+                return JobOutcome.Complete(
+                    JsonObject(mapOf(EngineNames.items(stepId) to JsonArray(emptyList()), EngineNames.more(stepId) to JsonPrimitive(false))),
+                )
+            }
+            val name = EngineNames.page(stepId, next)
+            val lookup = currentCoroutineContext()[Lookup]?.lookup ?: VariableLookup.None
+            val page = lookup.variable(job.instanceId, name)?.let(::array)?.takeIf { it.isNotEmpty() }
+                ?: throw NotYetReadable("wave '$name' of instance ${job.instanceId} is not readable yet")
             return JobOutcome.Complete(
                 JsonObject(
                     mapOf(
-                        EngineNames.items(stepId) to JsonArray(next),
-                        EngineNames.cursor(stepId) to JsonPrimitive(from + next.size),
-                        EngineNames.more(stepId) to JsonPrimitive(next.isNotEmpty()),
+                        EngineNames.items(stepId) to page,
+                        name to JsonNull,
+                        EngineNames.cursor(stepId) to JsonPrimitive(next + 1),
+                        EngineNames.more(stepId) to JsonPrimitive(true),
                     ),
                 ),
             )

@@ -52,6 +52,8 @@ object EngineNames {
     fun compensation(topic: String): String = COMPENSATION_PREFIX + topic.replace(NON_IDENTIFIER, "_")
     fun items(stepId: String): String = "${stepId}_items"
     fun cursor(stepId: String): String = "${stepId}_next"
+    fun waves(stepId: String): String = "${stepId}_waves"
+    fun page(stepId: String, index: Int): String = "${stepId}_wave_$index"
     fun more(stepId: String): String = "${stepId}_more"
     fun all(stepId: String): String = "${stepId}_all"
     fun item(stepId: String): String = "${stepId}_item"
