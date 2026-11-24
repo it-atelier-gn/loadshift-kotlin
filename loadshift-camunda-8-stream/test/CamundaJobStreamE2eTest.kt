@@ -1,11 +1,13 @@
 package loadshift.camunda8.stream
 
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import loadshift.camunda8.Camunda8Backend
 import loadshift.camunda8.Camunda8JobStream
 import loadshift.camunda8.StreamedJob
+import loadshift.core.ItemState
 import loadshift.core.WorkItem
 import loadshift.core.task
 import loadshift.core.workflow
@@ -21,7 +23,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 @Serializable
 private data class Parcel(var id: String, var packed: Boolean = false) : WorkItem {
@@ -95,16 +99,27 @@ class CamundaJobStreamE2eTest {
             }
             val wf = workflow<Parcel>("stream-${System.nanoTime()}") {
                 input((1..20).map { Parcel("p$it") })
+                awaitMessage("go")
                 task("pack") { it.packed = true }
                 task("ship") { check(it.packed) }
             }
 
-            val result = withTimeout(3.minutes) { Camunda8Backend(rest.toString(), jobStream = counting).run(wf).await() }
+            val result = withTimeout(3.minutes) {
+                val handle = Camunda8Backend(rest.toString(), jobStream = counting).run(wf)
+                while ((1..20).any { handle.item("p$it")?.state != ItemState.Running }) delay(100.milliseconds)
+                delay(STREAM_SETTLE)
+                handle.broadcast("go")
+                handle.await()
+            }
 
             assertEquals(20, result.done)
             assertTrue(result.deadLetters.isEmpty(), result.deadLetters.toString())
             assertTrue(endings.isEmpty(), endings.joinToString { it?.stackTraceToString() ?: "ended without error" })
             assertTrue(pushed.get() > 0, "no job arrived through the stream")
         }
+    }
+
+    private companion object {
+        val STREAM_SETTLE = 5.seconds
     }
 }

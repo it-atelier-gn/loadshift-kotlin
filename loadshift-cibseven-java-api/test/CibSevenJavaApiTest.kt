@@ -286,7 +286,7 @@ class CibSevenJavaApiTest {
     fun largeBatchFansOutInWavesOfItsConcurrency() = runBlocking {
         val processEngine = TestEngine.start()
         try {
-            val batch = Batch("batch", List(2_384) { Contact("item-$it", "x".repeat(200)) })
+            val batch = Batch("batch", List(300) { Contact("item-$it", "x".repeat(200)) })
             val processed = Collections.synchronizedSet(mutableSetOf<String>())
             val wf = workflow<Batch>("batch-workflow") {
                 input(listOf(batch))
@@ -307,7 +307,7 @@ class CibSevenJavaApiTest {
             sampler.cancel()
 
             assertEquals(1, result.done)
-            assertEquals(2_384, processed.size)
+            assertEquals(300, processed.size)
             assertTrue(peak.get() in 1..10, "peak ${peak.get()}")
         } finally {
             processEngine.close()

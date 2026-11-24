@@ -36,6 +36,19 @@ private data class EngineLine(var id: String, var qty: Int = 1) : WorkItem {
     override val key get() = id
 }
 
+@Serializable
+private data class CountedBatch(var id: String) : WorkItem {
+    override val key get() = id
+
+    init {
+        built.incrementAndGet()
+    }
+
+    companion object {
+        val built = AtomicInteger()
+    }
+}
+
 private class Unavailable(message: String) : RuntimeException(message)
 
 @OptIn(EngineApi::class)
@@ -728,10 +741,11 @@ class EngineRunTest {
         val batch = EngineOrder("batch", note = "x".repeat(50_000))
         val outcome = assertIs<JobOutcome.Complete>(run.execute(job(type, run.rootVariables(batch))))
         val wave = outcome.variables.getValue(EngineNames.items(fanId)).jsonArray
-        val pending = outcome.variables.getValue(EngineNames.pending(fanId)).jsonArray
+        val all = outcome.variables.getValue(EngineNames.all(fanId)).jsonArray
         assertEquals(100, wave.size)
-        assertEquals(2_284, pending.size)
-        assertTrue((wave + pending).all { it.toString().length < 400 }, wave.first().toString())
+        assertEquals(2_384, all.size)
+        assertEquals(JsonPrimitive(100), outcome.variables[EngineNames.cursor(fanId)])
+        assertTrue(all.all { it.toString().length < 400 }, all.first().toString())
         assertEquals(JsonPrimitive("x".repeat(50_000)), outcome.variables.getValue(EngineNames.parent(fanId)).jsonObject["note"])
     }
 
@@ -749,12 +763,14 @@ class EngineRunTest {
         val keys = { v: JsonObject -> v.getValue(EngineNames.items(fanId)).jsonArray.map { it.jsonObject.getValue("id").jsonPrimitive.content } }
         val waves = mutableListOf(keys(vars))
         while (true) {
-            vars = vars.after(run.execute(job(run.generated("wave_"), vars)))
+            val written = assertIs<JobOutcome.Complete>(run.execute(job(run.generated("wave_"), vars))).variables
+            assertEquals(setOf(EngineNames.items(fanId), EngineNames.cursor(fanId), EngineNames.more(fanId)), written.keys)
+            vars = JsonObject(vars + written)
             if (vars.getValue(EngineNames.more(fanId)).jsonPrimitive.content != "true") break
             waves += keys(vars)
         }
         assertEquals(listOf(listOf("o-0", "o-1"), listOf("o-2", "o-3"), listOf("o-4")), waves)
-        assertEquals(JsonNull, vars[EngineNames.pending(fanId)])
+        assertEquals(JsonPrimitive(5), vars[EngineNames.cursor(fanId)])
         assertEquals(emptyList(), keys(vars))
     }
 
@@ -866,7 +882,7 @@ class EngineRunTest {
         val fanId = stepId(reduce, "reduce_")
         assertEquals(root + EngineNames.items(fanId) + EngineNames.all(fanId), run.variables(reduce))
         assertEquals(root, run.variables(run.generated("fanout_")))
-        assertEquals(root + EngineNames.pending(fanId), run.variables(run.generated("wave_")))
+        assertEquals(root + EngineNames.all(fanId) + EngineNames.cursor(fanId), run.variables(run.generated("wave_")))
         val loop = run.generated("decision_")
         assertEquals(root + EngineNames.iterations(stepId(loop, "decision_")), run.variables(loop))
         assertEquals(root + EngineNames.formVariable(stepId(run.generated("form_"), "form_")), run.variables(run.generated("form_")))
@@ -886,5 +902,30 @@ class EngineRunTest {
         val root = SubFlow("opaque", Sequence(listOf(Execute(task, TaskOptions()))), codec, emptyMap(), emptyMap())
         val wf = Workflow("opaque", "opaque", { kotlinx.coroutines.flow.emptyFlow() }, root)
         assertEquals(null, EngineRun(wf, RunConfig()).variables(EngineNames.jobType("opaque", "t")))
+    }
+
+    @Test
+    fun childStepsDecodeTheirParentOnlyWhenTheyReadIt() = runTest {
+        val seen = mutableListOf<String>()
+        val wf = workflow<CountedBatch>("lazy-parents") {
+            input(emptyList())
+            fanOut(expand = { b -> List(3) { EngineLine("${b.id}-$it") } }, context = { it }) {
+                task("count") { }
+                task("read") { seen += context().id }
+            }
+        }
+        val run = EngineRun(wf, RunConfig())
+        val start = run.generated("fanout_")
+        val fanId = stepId(start, "fanout_")
+        val root = JsonObject(mapOf("id" to JsonPrimitive("b-1"), EngineNames.ITEM_KEY to JsonPrimitive("b-1")))
+        val children = assertIs<JobOutcome.Complete>(run.execute(job(start, root))).variables.getValue(EngineNames.items(fanId)).jsonArray
+        val child = JsonObject(mapOf(EngineNames.item(fanId) to children.first()))
+
+        val before = CountedBatch.built.get()
+        assertIs<JobOutcome.Complete>(run.execute(job(run.type("count"), child, instance = "c-1")))
+        assertEquals(before, CountedBatch.built.get())
+        assertIs<JobOutcome.Complete>(run.execute(job(run.type("read"), child, instance = "c-1")))
+        assertEquals(listOf("b-1"), seen)
+        assertTrue(CountedBatch.built.get() > before)
     }
 }

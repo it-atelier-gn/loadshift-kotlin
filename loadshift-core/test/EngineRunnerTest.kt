@@ -100,7 +100,11 @@ private class FakeDriver : EngineDriver {
         return batch
     }
 
+    @Volatile
+    var rejectCompletions = false
+
     override suspend fun complete(job: EngineJob, variables: JsonObject) {
+        if (rejectCompletions) error("conflict")
         completedVariables[job.id] = variables
         completed += job.id
     }
@@ -211,6 +215,19 @@ class EngineRunnerTest {
         assertEquals(RunState.Completed, handle.state())
         assertTrue(store.isComplete("finish", "a"))
         assertTrue(store.isComplete("finish", "b"))
+    }
+
+    @Test
+    fun jobWhoseCompletionKeepsFailingIsHandedBackToTheEngine() = runBlocking {
+        val wf = flow("rejected", "a")
+        val (handle, driver) = launch(wf)
+        eventually { driver.started.size == 1 }
+        driver.rejectCompletions = true
+        driver.enqueueWork(wf)
+        eventually { driver.released.isNotEmpty() }
+        assertEquals(listOf("job-pi-1"), driver.released.toList())
+        assertTrue(driver.completed.isEmpty())
+        handle.cancel()
     }
 
     @Test

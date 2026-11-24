@@ -51,7 +51,7 @@ object EngineNames {
     fun compensate(topic: String): String = "compensate_$topic"
     fun compensation(topic: String): String = COMPENSATION_PREFIX + topic.replace(NON_IDENTIFIER, "_")
     fun items(stepId: String): String = "${stepId}_items"
-    fun pending(stepId: String): String = "${stepId}_pending"
+    fun cursor(stepId: String): String = "${stepId}_next"
     fun more(stepId: String): String = "${stepId}_more"
     fun all(stepId: String): String = "${stepId}_all"
     fun item(stepId: String): String = "${stepId}_item"

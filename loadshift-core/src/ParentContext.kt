@@ -3,9 +3,12 @@ package loadshift.core
 import kotlinx.coroutines.currentCoroutineContext
 import kotlin.coroutines.CoroutineContext
 
-class ParentItemStack(val items: List<WorkItem>) : CoroutineContext.Element {
+class ParentItemStack internal constructor(private val source: Lazy<List<WorkItem>>) : CoroutineContext.Element {
+    constructor(items: List<WorkItem>) : this(lazyOf(items))
+
     companion object Key : CoroutineContext.Key<ParentItemStack>
     override val key get() = Key
+    val items: List<WorkItem> get() = source.value
     fun push(item: WorkItem) = ParentItemStack(listOf(item) + items)
 }
 

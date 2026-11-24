@@ -469,7 +469,7 @@ class EngineRunner(
     private suspend fun process(job: EngineJob, lockedAt: TimeSource.Monotonic.ValueTimeMark) {
         val heartbeat = heartbeat(job, lockedAt)
         try {
-            when (val outcome = run.execute(job, lookup)) {
+            val delivered = when (val outcome = run.execute(job, lookup)) {
                 is JobOutcome.Complete -> deliver { driver.complete(job, outcome.variables) }
                 is JobOutcome.Retry -> deliver {
                     driver.fail(job, outcome.retries, outcome.backoff, outcome.message, outcome.details)
@@ -482,8 +482,10 @@ class EngineRunner(
                     val cause = outcome.cause
                     attempt { driver.fail(job, 0, Duration.ZERO, cause.message ?: cause.toString(), cause.stackTraceToString()) }
                     abort(cause)
+                    true
                 }
             }
+            if (!delivered) attempt { driver.release(job) }
         } finally {
             heartbeat.cancel()
         }
@@ -537,11 +539,12 @@ class EngineRunner(
         paused.first { !it }
     }
 
-    private suspend fun deliver(action: suspend () -> Unit) {
+    private suspend fun deliver(action: suspend () -> Unit): Boolean {
         repeat(DELIVERY_ATTEMPTS) { index ->
-            if (attempt { action() } != null) return
+            if (attempt { action() } != null) return true
             delay(DELIVERY_BACKOFF * (index + 1))
         }
+        return false
     }
 
     private fun finish(state: RunState): Boolean = synchronized(stateLock) {

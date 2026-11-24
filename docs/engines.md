@@ -2,7 +2,7 @@
 
 ## Delivery and durability
 
-- Task bodies run at least once. The engine delivers a job again when the worker stops before completing it, when the job's lock expires, or when the completion call fails five times. Write task bodies so that running them twice has the same effect as running them once.
+- Task bodies run at least once. The engine delivers a job again when the worker stops before completing it, when the job's lock expires, or when the completion call fails five times, in which case the worker hands the job back at once. Write task bodies so that running them twice has the same effect as running them once.
 - While a task body runs, the worker extends the job's lock every third of `lockDuration`.
 - A worker runs a job at most once at a time. When the engine hands the same job to that worker again while its task body is still running, the worker skips the second copy.
 - A worker that stops hands back the jobs it fetched while stopping.
@@ -124,9 +124,9 @@ The tests of both modules run against Camunda 7.24 and CIB seven 3.0 engines sta
 | `loadshiftKey` | Root and child | The item key |
 | `loadshiftWorkflow` | Root and child | The workflow key |
 | `<fan-out id>_items` | Parent | The children of the current wave |
-| `<fan-out id>_pending` | Parent | The children of the waves still to come |
+| `<fan-out id>_all` | Parent | Every expanded child, written once when the fan-out starts |
+| `<fan-out id>_next` | Parent | Position in `_all` where the next wave begins |
 | `<fan-out id>_more` | Parent | Whether another wave has started |
-| `<fan-out id>_all` | Parent | Every expanded child, read by `reduce` and `collect` |
 | `<fan-out id>_parent` | Parent | The parent item as it was when the children were expanded |
 | `<fan-out id>_item` | Child | The child item, with `loadshiftKey` and `loadshiftParents`, which points to the `_parent` variables of its ancestors |
 | `<step id>_result` | Any | The result of a condition or loop predicate |

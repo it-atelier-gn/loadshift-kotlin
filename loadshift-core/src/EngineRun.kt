@@ -252,6 +252,8 @@ class EngineRun(
 
     private class PendingCompensation(val handler: TaskHandler, val at: Long, val index: Int, val snapshot: JsonObject)
 
+    private class Parents(val keys: List<String?>, val items: Lazy<List<WorkItem>>)
+
     private class Lookup(val lookup: VariableLookup) : AbstractCoroutineContextElement(Key) {
         companion object Key : CoroutineContext.Key<Lookup>
     }
@@ -393,12 +395,12 @@ class EngineRun(
             }
             is FanOut<*, *> -> {
                 val fan = step as FanOut<WorkItem, WorkItem>
-                fanHandlers(owner, fan.id, fan.expand, fan.childCodec, fan.concurrency, false, codec, itemVariable, parents).forEach(::add)
+                fanHandlers(owner, fan.id, fan.expand, fan.childCodec, fan.concurrency, codec, itemVariable, parents).forEach(::add)
                 register(owner, fan.body, EngineNames.item(fan.id), listOf(codec) + parents, fan.concurrency?.let { Semaphore(it) })
             }
             is FanIn<*, *, *> -> {
                 val fan = step as FanIn<WorkItem, WorkItem, Any?>
-                fanHandlers(owner, fan.id, fan.expand, fan.childCodec, fan.concurrency, true, codec, itemVariable, parents).forEach(::add)
+                fanHandlers(owner, fan.id, fan.expand, fan.childCodec, fan.concurrency, codec, itemVariable, parents).forEach(::add)
                 add(ReduceHandler(owner, fan, codec, itemVariable, parents))
                 register(owner, fan.body, EngineNames.item(fan.id), listOf(codec) + parents, fan.concurrency?.let { Semaphore(it) })
             }
@@ -422,16 +424,15 @@ class EngineRun(
         expand: suspend (WorkItem) -> Flow<WorkItem>,
         childCodec: WorkItemCodec<WorkItem>,
         concurrency: Int?,
-        keepAll: Boolean,
         codec: WorkItemCodec<WorkItem>,
         itemVariable: String?,
         parents: List<WorkItemCodec<WorkItem>>,
     ): List<JobHandler> {
         val wave = concurrency ?: config.waveSize
         return listOf(
-            ExpandHandler(owner, EngineNames.fanOut(stepId), stepId, expand, childCodec, codec, itemVariable, parents, wave, keepAll),
+            ExpandHandler(owner, EngineNames.fanOut(stepId), stepId, expand, childCodec, codec, itemVariable, parents, wave),
             WaveHandler(owner, stepId, wave, codec, itemVariable),
-            ExpandHandler(owner, EngineNames.expand(stepId), stepId, expand, childCodec, codec, itemVariable, parents, null, false),
+            ExpandHandler(owner, EngineNames.expand(stepId), stepId, expand, childCodec, codec, itemVariable, parents, null),
         )
     }
 
@@ -476,20 +477,25 @@ class EngineRun(
                 ?.let { Json.parseToJsonElement(it).jsonArray }
                 ?: JsonArray(emptyList())
 
-        suspend fun parents(source: JsonObject): List<WorkItem> {
+        suspend fun parents(source: JsonObject): Parents {
             val array = ancestors(source)
-            return parentCodecs.mapIndexedNotNull { index, parentCodec ->
-                array.getOrNull(index)?.let { parentItem(it) }?.let(parentCodec.decode)
+            val resolved = parentCodecs.mapIndexedNotNull { index, parentCodec ->
+                array.getOrNull(index)?.let { parentItem(it) }?.let { it to parentCodec }
             }
+            val keys = resolved.map { (json, parentCodec) ->
+                val stored = json[EngineNames.ITEM_KEY] as? JsonPrimitive
+                if (stored == null) parentCodec.decode(json).key else stored.contentOrNull?.ifEmpty { null }
+            }
+            return Parents(keys, lazy { resolved.map { (json, parentCodec) -> parentCodec.decode(json) } })
         }
 
         fun lineage(source: JsonObject): Map<String, JsonElement> =
             source.filterKeys { it == EngineNames.ITEM_KEY || it == EngineNames.PARENTS }
 
-        fun context(item: WorkItem, parents: List<WorkItem>, topic: String?): CoroutineContext {
-            val path = parents.asReversed().map { it.key ?: "?" }
+        fun context(item: WorkItem, parents: Parents, topic: String?): CoroutineContext {
+            val path = parents.keys.asReversed().map { it ?: "?" }
             val execution = ExecutionContext(runId, owner.name, config.logSink, path, item.key, topic)
-            return if (parents.isEmpty()) execution else execution + ParentItemStack(parents)
+            return if (parents.keys.isEmpty()) execution else execution + ParentItemStack(parents.items)
         }
 
         fun write(variables: JsonObject, source: JsonObject, item: WorkItem): JsonObject {
@@ -543,7 +549,7 @@ class EngineRun(
             withContext(context(item, parents(snapshot), null)) { action(item) }
         }
 
-        private suspend fun invoke(item: WorkItem, parents: List<WorkItem>) {
+        private suspend fun invoke(item: WorkItem, parents: Parents) {
             globalLimiter?.acquire()
             limiter?.acquire()
             withContext(context(item, parents, topic)) {
@@ -629,7 +635,6 @@ class EngineRun(
         itemVariable: String?,
         parentCodecs: List<WorkItemCodec<WorkItem>>,
         private val wave: Int?,
-        private val keepAll: Boolean,
     ) : JobHandler(owner, topic, codec, itemVariable, parentCodecs, RetryPolicy.None) {
         override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
             val source = source(variables)
@@ -637,7 +642,7 @@ class EngineRun(
             val children = withContext(context(item, parents(source), null)) { expand(item).toList() }
             counters.expanded(children.size.toLong())
             val parentVariable = EngineNames.parent(stepId)
-            val parent = codec.encode(item)
+            val parent = JsonObject(codec.encode(item) + (EngineNames.ITEM_KEY to JsonPrimitive(item.key.orEmpty())))
             val ref = parentRef(job.instanceId, parentVariable, job.id)
             parentCache.put(refKey(ref.getValue(EngineNames.PARENT_REF).jsonObject), parent)
             val lineage = JsonPrimitive(JsonArray(listOf(ref) + ancestors(source)).toString())
@@ -656,8 +661,8 @@ class EngineRun(
                     put(EngineNames.items(stepId), items)
                 } else {
                     put(EngineNames.items(stepId), JsonArray(items.take(wave)))
-                    put(EngineNames.pending(stepId), JsonArray(items.drop(wave)))
-                    if (keepAll) put(EngineNames.all(stepId), items)
+                    put(EngineNames.all(stepId), items)
+                    put(EngineNames.cursor(stepId), JsonPrimitive(wave))
                 }
             }
             val written = write(variables, source, item) + waves + (parentVariable to parent)
@@ -672,17 +677,17 @@ class EngineRun(
         codec: WorkItemCodec<WorkItem>,
         itemVariable: String?,
     ) : JobHandler(owner, EngineNames.wave(stepId), codec, itemVariable, emptyList(), RetryPolicy.None) {
-        override val reads get() = listOf(EngineNames.pending(stepId))
+        override val reads get() = listOf(EngineNames.all(stepId), EngineNames.cursor(stepId))
 
         override suspend fun run(job: EngineJob, variables: JsonObject): JobOutcome {
-            val pending = array(variables[EngineNames.pending(stepId)])
-            val next = pending.take(wave)
-            val rest = pending.drop(wave)
+            val all = array(variables[EngineNames.all(stepId)])
+            val from = ((variables[EngineNames.cursor(stepId)] as? JsonPrimitive)?.intOrNull ?: all.size).coerceIn(0, all.size)
+            val next = all.subList(from, minOf(all.size, from + wave))
             return JobOutcome.Complete(
                 JsonObject(
                     mapOf(
                         EngineNames.items(stepId) to JsonArray(next),
-                        EngineNames.pending(stepId) to if (rest.isEmpty()) JsonNull else JsonArray(rest),
+                        EngineNames.cursor(stepId) to JsonPrimitive(from + next.size),
                         EngineNames.more(stepId) to JsonPrimitive(next.isNotEmpty()),
                     ),
                 ),
@@ -805,7 +810,7 @@ class EngineRun(
         const val REF_INSTANCE = "instance"
         const val REF_VARIABLE = "variable"
         const val REF_JOB = "job"
-        const val PARENT_CACHE_SIZE = 1024
+        const val PARENT_CACHE_SIZE = 64
         const val PARENT_ATTEMPTS = 10
         val PARENT_BACKOFF = 1.seconds
     }
