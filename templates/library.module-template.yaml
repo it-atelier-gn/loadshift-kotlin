@@ -5,6 +5,8 @@ repositories:
     publish: true
 
 settings:
+  jvm:
+    release: 17
   publishing:
     enabled: true
     group: io.github.it-atelier-gn

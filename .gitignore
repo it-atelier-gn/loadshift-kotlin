@@ -1,3 +1,5 @@
 build/
 scripts/.lib/
 FEATURES.md
+.gradle/
+.kotlin/

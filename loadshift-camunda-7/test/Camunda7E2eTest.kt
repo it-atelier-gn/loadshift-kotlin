@@ -90,6 +90,13 @@ private val cibSeven = Camunda7Engine(
 
 class CibSevenE2eTest : Camunda7Scenarios(cibSeven)
 
+private val camundaSeven = Camunda7Engine(
+    System.getenv("LOADSHIFT_C7_IMAGE") ?: "camunda/camunda-bpm-platform:run-7.24.0",
+    "LOADSHIFT_C7_BASE",
+)
+
+class Camunda7RunE2eTest : Camunda7Scenarios(camundaSeven)
+
 abstract class Camunda7Scenarios internal constructor(private val engine: Camunda7Engine) {
 
     @Test

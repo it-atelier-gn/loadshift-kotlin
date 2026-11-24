@@ -1,0 +1,60 @@
+name: Consumer check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  consumer:
+    name: Java ${{ matrix.java }}
+    runs-on: ubuntu-latest
+    env:
+      CONSUMER: gradle -p scripts/consumer run -PjavaVersion=${{ matrix.java }} -Porg.gradle.java.installations.fromEnv=JAVA_HOME_${{ matrix.java }}_X64
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ['17', '21', '25']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: |
+            ${{ matrix.java }}
+            25
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '9.9.2'
+      - name: Start engines
+        run: |
+          docker run -d --name camunda7 -p 18070:8080 camunda/camunda-bpm-platform:run-7.24.0
+          docker run -d --name cibseven -p 18080:8080 cibseven/cibseven:run-3.0.0
+          docker run -d --name camunda8 -p 18088:8080 -p 18265:26500 \
+            -v "$PWD/scripts/consumer/camunda8.yaml:/usr/local/camunda/config/application.yaml" camunda/camunda:8.9.19
+      - name: Publish the libraries to Maven local
+        run: |
+          chmod +x ./kotlin
+          ./kotlin publish mavenLocal
+      - name: Wait for the engines
+        run: |
+          for i in $(seq 1 90); do
+            a=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:18070/engine-rest/engine || true)
+            b=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:18080/engine-rest/engine || true)
+            c=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:18088/v2/topology || true)
+            [ "$a$b$c" = "200200200" ] && exit 0
+            sleep 5
+          done
+          docker logs camunda8 | tail -50
+          exit 1
+      - name: In-process with SQLite, web console, Micrometer and OpenTelemetry
+        run: $CONSUMER --args="local"
+      - name: Camunda 7 in the same JVM
+        run: $CONSUMER --args="embedded"
+      - name: Camunda 7
+        run: $CONSUMER --args="c7 http://localhost:18070/engine-rest 1000"
+      - name: CIB seven
+        run: $CONSUMER --args="c7 http://localhost:18080/engine-rest 1000"
+      - name: Camunda 8 with job streaming
+        run: $CONSUMER --args="c8 http://localhost:18088 1000 http://localhost:18265"

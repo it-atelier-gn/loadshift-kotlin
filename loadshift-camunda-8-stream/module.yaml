@@ -9,11 +9,14 @@ settings:
     serialization: enabled
 
 dependencies:
-  - ../loadshift-core
-  - ../loadshift-camunda-8
+  - ../loadshift-core:
+      exported: true
+  - ../loadshift-camunda-8:
+      exported: true
   - $libs.kotlinx.coroutines.core
   - $libs.kotlinx.serialization.json
-  - $libs.camunda.client.java
+  - $libs.camunda.client.java:
+      exported: true
   - $libs.jackson.core
   - $libs.jackson.databind
   - $libs.netty.codec

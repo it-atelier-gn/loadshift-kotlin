@@ -5,8 +5,10 @@ apply:
   - ../templates/library.module-template.yaml
 
 dependencies:
-  - ../loadshift-core
-  - $libs.micrometer.core
+  - ../loadshift-core:
+      exported: true
+  - $libs.micrometer.core:
+      exported: true
 
 test-dependencies:
   - ../loadshift-local

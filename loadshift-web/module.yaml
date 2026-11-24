@@ -9,7 +9,8 @@ settings:
     serialization: enabled
 
 dependencies:
-  - ../loadshift-core
+  - ../loadshift-core:
+      exported: true
   - $libs.kotlinx.coroutines.core
   - $libs.kotlinx.serialization.json
   - $libs.kotlinx.datetime

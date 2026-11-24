@@ -5,14 +5,30 @@
 | Suite | Container image | Variable for another image | Variable for an engine that is already running |
 | --- | --- | --- | --- |
 | `CibSevenE2eTest` | `cibseven/cibseven:run-3.0.0` | `LOADSHIFT_CIB7_IMAGE` | `LOADSHIFT_CIB7_BASE=http://localhost:8080/engine-rest` |
+| `Camunda7RunE2eTest` | `camunda/camunda-bpm-platform:run-7.24.0` | `LOADSHIFT_C7_IMAGE` | `LOADSHIFT_C7_BASE=http://localhost:8080/engine-rest` |
 | `Camunda8E2eTest` | `camunda/camunda:8.9.19` with H2 secondary storage | `LOADSHIFT_C8_IMAGE` | `LOADSHIFT_C8_BASE=http://localhost:8080` |
 
 Without Docker and without the base variable, a suite is reported as skipped. The workflow `Engine versions` runs the suites against these engine releases:
 
 | Engine | Images |
 | --- | --- |
+| Camunda 7 | `camunda/camunda-bpm-platform:run-7.24.0` |
 | CIB seven | `cibseven/cibseven:run-2.2.0`, `run-3.0.0` |
 | Camunda 8 | `camunda/camunda:8.9.19` |
+
+## Consumer check
+
+[scripts/consumer](../scripts/consumer) is a Gradle project that uses the libraries the way an application does: it depends only on loadshift modules from Maven local, plus the Camunda 7 engine for the in-JVM run, and runs order and batch workflows with tasks, compensation, fan-out with `context()` and `reduce`, user tasks, messages, called workflows, dead letters and a worker handover. The workflow `Consumer check` runs it on Java 17, 21 and 25.
+
+| Command | Runs against |
+| --- | --- |
+| `./kotlin publish mavenLocal` | Publishes the libraries for the check; run it first |
+| `gradle -p scripts/consumer run --args="local"` | `LocalBackend` with SQLite, the web console, Micrometer and OpenTelemetry |
+| `gradle -p scripts/consumer run --args="embedded"` | A Camunda 7 engine in the same JVM |
+| `gradle -p scripts/consumer run --args="c7 <engine-rest url> <children>"` | Camunda 7 or CIB seven |
+| `gradle -p scripts/consumer run --args="c8 <rest url> <children> [<grpc url>]"` | Camunda 8, with job streaming when the gRPC address is given |
+
+`-PjavaVersion=21` picks the JDK the check compiles and runs with; the default is `17`. [camunda8.yaml](../scripts/consumer/camunda8.yaml) configures a `camunda/camunda` container with H2 secondary storage for the check.
 
 ## Load tests
 

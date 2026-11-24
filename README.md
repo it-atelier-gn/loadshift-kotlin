@@ -36,7 +36,7 @@ Full examples and reference: **[it-atelier-gn.github.io/loadshift-kotlin](https:
 
 | Engine | Backend | Image used by the end-to-end tests |
 | --- | --- | --- |
-| Camunda 7 | `Camunda7Backend` | not covered by the end-to-end tests |
+| Camunda 7 | `Camunda7Backend` | `camunda/camunda-bpm-platform:run-7.24.0` |
 | CIB seven | `Camunda7Backend` | `cibseven/cibseven:run-3.0.0` |
 | Camunda 7 in the same JVM | `Camunda7JavaApi(processEngine).backend()` | `camunda-engine` 7.24.0, started inside the tests |
 | CIB seven in the same JVM | `CibSevenJavaApi(processEngine).backend()` | `cibseven-engine` 3.0.0, started inside the tests |
@@ -51,7 +51,7 @@ Full examples and reference: **[it-atelier-gn.github.io/loadshift-kotlin](https:
 
 ## Add as a dependency
 
-Published to Maven Central under group `io.github.it-atelier-gn`. Replace `VERSION` with the version shown on the Maven Central badge at the top. Pick the modules you need.
+Published to Maven Central under group `io.github.it-atelier-gn`. Replace `VERSION` with the version shown on the Maven Central badge at the top. Pick the modules you need; each one brings `loadshift-core` and the libraries its API uses.
 
 <details>
 <summary>Gradle (Kotlin DSL)</summary>
@@ -167,9 +167,9 @@ dependencies {
 
 ## Requirements
 
-- JDK 25 or newer. The libraries are compiled for Java 25.
+- JDK 17 or newer. The libraries are compiled for Java 17 and checked on Java 17, 21 and 25.
 - Docker, for the end-to-end tests and the local dev engines.
-- `loadshift-sqlite` loads the native SQLite library through `sqlite-jdbc`. Start the JVM with `--enable-native-access=ALL-UNNAMED` so that JDK 25 does not print a restricted-method warning.
+- `loadshift-sqlite` loads the native SQLite library through `sqlite-jdbc`. On JDK 22 or newer, start the JVM with `--enable-native-access=ALL-UNNAMED` so that the JDK does not print a restricted-method warning.
 
 ## Build and run
 
@@ -223,7 +223,7 @@ val result = handle.await()
 | --- | --- |
 | [Workflows](docs/workflows.md) | Steps, signals, user tasks, called workflows, workflow keys |
 | [Run configuration](docs/configuration.md) | `RunConfig` options, starts and cron expressions, error handling, dead-letter store, run handle |
-| [Running on an engine](docs/engines.md) | Delivery and durability, handover, schedules, job streaming, versions and migration, authentication, tenants, process variables |
+| [Running on an engine](docs/engines.md) | Delivery and durability, handover, running in a service with several instances, schedules, job streaming, versions and migration, authentication, tenants, process variables |
 | [Web console](docs/web-console.md) | `ControlServer`, OpenID Connect, JSON API, runs of several workers |
 | [Logging, tracing and metrics](docs/observability.md) | Log entries, OpenTelemetry spans, metrics |
 | [Development](docs/development.md) | End-to-end tests, load tests, local dev engines, BPMN examples, dependency check, publishing, docs site |

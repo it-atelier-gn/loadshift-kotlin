@@ -5,9 +5,11 @@ apply:
   - ../templates/library.module-template.yaml
 
 dependencies:
-  - ../loadshift-core
+  - ../loadshift-core:
+      exported: true
   - $libs.kotlinx.coroutines.core
-  - $libs.opentelemetry.api
+  - $libs.opentelemetry.api:
+      exported: true
 
 test-dependencies:
   - $libs.kotlinx.coroutines.test

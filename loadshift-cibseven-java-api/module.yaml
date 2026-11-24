@@ -15,7 +15,8 @@ settings:
 dependencies:
   - ../loadshift-camunda-7:
       exported: true
-  - ../loadshift-core
+  - ../loadshift-core:
+      exported: true
   - $libs.kotlinx.coroutines.core
   - $libs.kotlinx.serialization.json
   - $libs.cibseven.engine:

@@ -26,6 +26,33 @@ takeover.await()
 
 `attach(workflow)` deploys the workflow, works its active process instances, including instances that appear while it runs, and finishes when none are left. It seeds nothing and does not accept `Start.Cron`.
 
+## Running in a service
+
+A service that starts items as requests or events arrive keeps one run open per instance of the service and feeds it from a channel:
+
+```kotlin
+val inbox = Channel<Order>(Channel.UNLIMITED)
+
+val fulfilment = workflow<Order>("fulfilment") {
+    input { inbox.receiveAsFlow() }
+    task("reserve") { reserve(it) }
+    awaitMessage("payment-confirmed")
+    task("ship") { ship(it) }
+}
+
+val handle = Camunda8Backend(base).run(fulfilment)
+
+suspend fun onOrderPlaced(order: Order) = inbox.send(order)
+suspend fun onPaymentConfirmed(orderId: String) = handle.send("payment-confirmed", orderId)
+suspend fun onShutdown() = handle.detach()
+```
+
+- The run stays open while the flow is open. Each item sent to the channel starts a root process instance.
+- Every instance of the service runs the same workflow with its own channel. Each worker works the jobs of all process instances of the workflow, including those another instance of the service started, so a service instance that stops with `detach()` leaves its items to the others.
+- Every instance of the service deploys the workflow when its run starts; an unchanged workflow keeps its definition version.
+- `send` reaches the waiting process instance of the item, whichever service instance started it.
+- Dead letters, counters and the run result are kept per service instance. Give every instance the same `deadLetters` store to see all dead letters in one place; `SqliteDeadLetterStore` serves one host, so implement `DeadLetterStore` on a shared database for several hosts.
+
 ## Schedules
 
 A run with `Start.Cron` deploys the process `<workflow-key>_loadshift_schedule` together with the workflow and starts one instance of it, or continues the instance that is already active. The instance repeats three steps:
