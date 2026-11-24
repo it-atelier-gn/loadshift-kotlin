@@ -218,15 +218,19 @@ class EngineRunnerTest {
     }
 
     @Test
-    fun jobWhoseCompletionKeepsFailingIsHandedBackToTheEngine() = runBlocking {
+    fun jobWhoseCompletionKeepsFailingIsReportedAsAFailedAttempt() = runBlocking {
         val wf = flow("rejected", "a")
         val (handle, driver) = launch(wf)
         eventually { driver.started.size == 1 }
         driver.rejectCompletions = true
         driver.enqueueWork(wf)
-        eventually { driver.released.isNotEmpty() }
-        assertEquals(listOf("job-pi-1"), driver.released.toList())
+        eventually { driver.failures.isNotEmpty() }
+        val failure = driver.failures.single()
+        assertEquals("job-pi-1", failure.jobId)
+        assertEquals(2, failure.retries)
+        assertEquals(30.seconds, failure.backoff)
         assertTrue(driver.completed.isEmpty())
+        assertTrue(driver.released.isEmpty())
         handle.cancel()
     }
 

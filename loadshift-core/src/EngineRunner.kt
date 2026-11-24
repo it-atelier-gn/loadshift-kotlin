@@ -469,7 +469,7 @@ class EngineRunner(
     private suspend fun process(job: EngineJob, lockedAt: TimeSource.Monotonic.ValueTimeMark) {
         val heartbeat = heartbeat(job, lockedAt)
         try {
-            val delivered = when (val outcome = run.execute(job, lookup)) {
+            val undelivered = when (val outcome = run.execute(job, lookup)) {
                 is JobOutcome.Complete -> deliver { driver.complete(job, outcome.variables) }
                 is JobOutcome.Retry -> deliver {
                     driver.fail(job, outcome.retries, outcome.backoff, outcome.message, outcome.details)
@@ -482,10 +482,10 @@ class EngineRunner(
                     val cause = outcome.cause
                     attempt { driver.fail(job, 0, Duration.ZERO, cause.message ?: cause.toString(), cause.stackTraceToString()) }
                     abort(cause)
-                    true
+                    null
                 }
             }
-            if (!delivered) attempt { driver.release(job) }
+            if (undelivered != null) undeliverable(job, undelivered)
         } finally {
             heartbeat.cancel()
         }
@@ -539,12 +539,28 @@ class EngineRunner(
         paused.first { !it }
     }
 
-    private suspend fun deliver(action: suspend () -> Unit): Boolean {
+    private suspend fun deliver(action: suspend () -> Unit): Throwable? {
+        var last: Throwable? = null
         repeat(DELIVERY_ATTEMPTS) { index ->
-            if (attempt { action() } != null) return true
+            try {
+                action()
+                return null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                last = e
+            }
             delay(DELIVERY_BACKOFF * (index + 1))
         }
-        return false
+        return last
+    }
+
+    private suspend fun undeliverable(job: EngineJob, cause: Throwable) {
+        val attempts = runCatching { run.maxAttempts(job.type) }.getOrDefault(1)
+        val remaining = (job.retries ?: attempts).coerceAtLeast(1) - 1
+        val message = "result could not be delivered: ${cause.message ?: cause}"
+        val reported = attempt { driver.fail(job, remaining, UNDELIVERED_BACKOFF, message, cause.stackTraceToString()) }
+        if (reported == null) attempt { driver.release(job) }
     }
 
     private fun finish(state: RunState): Boolean = synchronized(stateLock) {
@@ -577,5 +593,6 @@ class EngineRunner(
         const val CANCEL_ATTEMPTS = 5
         val CANCEL_BACKOFF = 200.milliseconds
         val FETCH_ERROR_BACKOFF = 1.seconds
+        val UNDELIVERED_BACKOFF = 30.seconds
     }
 }

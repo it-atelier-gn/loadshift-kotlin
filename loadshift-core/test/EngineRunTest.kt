@@ -858,11 +858,13 @@ class EngineRunTest {
         val worker = EngineRun(lineageWorkflow(seen), RunConfig())
         val pick = job(worker.type("pick"), JsonObject(mapOf(EngineNames.item(fanId) to child)), retries = 3, instance = "child-1")
 
-        repeat(9) {
+        val backoffs = List(29) {
             val retry = assertIs<JobOutcome.Retry>(worker.execute(pick))
             assertEquals(3, retry.retries)
-            assertEquals(1.seconds, retry.backoff)
+            retry.backoff
         }
+        assertEquals(listOf(1.seconds, 2.seconds, 3.seconds), backoffs.take(3))
+        assertEquals(15.seconds, backoffs.last())
         assertIs<JobOutcome.Retry>(worker.execute(pick)).let { assertEquals(2, it.retries) }
         assertTrue(seen.isEmpty())
     }

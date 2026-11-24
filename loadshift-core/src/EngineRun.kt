@@ -149,7 +149,8 @@ class EngineRun(
             val waits = parentWaits.merge(job.id, 1, Int::plus) ?: 1
             if (waits < PARENT_ATTEMPTS) {
                 val retries = (job.retries ?: policy.maxAttempts).coerceAtLeast(1)
-                return JobOutcome.Retry(retries, PARENT_BACKOFF, error.message.orEmpty(), error.stackTraceToString())
+                val backoff = (PARENT_BACKOFF * waits).coerceAtMost(PARENT_MAX_BACKOFF)
+                return JobOutcome.Retry(retries, backoff, error.message.orEmpty(), error.stackTraceToString())
             }
             parentWaits.remove(job.id)
         }
@@ -824,7 +825,8 @@ class EngineRun(
         const val REF_VARIABLE = "variable"
         const val REF_JOB = "job"
         const val PARENT_CACHE_SIZE = 64
-        const val PARENT_ATTEMPTS = 10
+        const val PARENT_ATTEMPTS = 30
         val PARENT_BACKOFF = 1.seconds
+        val PARENT_MAX_BACKOFF = 15.seconds
     }
 }

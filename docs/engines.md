@@ -2,7 +2,7 @@
 
 ## Delivery and durability
 
-- Task bodies run at least once. The engine delivers a job again when the worker stops before completing it, when the job's lock expires, or when the completion call fails five times, in which case the worker hands the job back at once. Write task bodies so that running them twice has the same effect as running them once.
+- Task bodies run at least once. The engine delivers a job again when the worker stops before completing it, when the job's lock expires, or when the completion call fails five times. In that case the worker reports a failed attempt with a 30-second backoff, and once the task's attempts are used up the engine raises an incident. Write task bodies so that running them twice has the same effect as running them once.
 - While a task body runs, the worker extends the job's lock every third of `lockDuration`.
 - A worker runs a job at most once at a time. When the engine hands the same job to that worker again while its task body is still running, the worker skips the second copy.
 - A worker that stops hands back the jobs it fetched while stopping.
@@ -138,6 +138,8 @@ The tests of both modules run against Camunda 7.24 and CIB seven 3.0 engines sta
 | `<call id>_call` | Caller | The item handed to a called workflow and returned from it |
 | `loadshiftCallItem` | Called root | The item of a called workflow, with `loadshiftKey` |
 | `loadshiftMessage_<message>` | Any | The data sent with the message until the step's block has applied it; characters other than letters, digits and `_` in the message name become `_` |
+
+On Camunda 8, the children of a fan-out reach the engine in one request when the fan-out starts. Camunda 8 accepts at most 4 MB per request by default, which with children of about 250 bytes each is roughly 15,000 children. A larger fan-out ends in an incident; raise the cluster's maximum message size, or split the work into several fan-outs.
 
 A job receives only the variables its step reads. A child process receives its item, `loadshiftKey` and `loadshiftWorkflow`, and reads its parents from the parent instances when a step needs them.
 
